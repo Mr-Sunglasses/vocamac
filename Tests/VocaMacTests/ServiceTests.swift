@@ -659,19 +659,95 @@ final class AudioEngineForceResetTests: XCTestCase {
 
 final class AudioEngineDeviceChangeTests: XCTestCase {
 
-    func testStartupConfigurationChangeWindow() {
-        let cases: [(elapsed: TimeInterval, expected: Bool)] = [
-            (0.10, true),
-            (AudioEngine.startupConfigurationChangeRecoveryWindow + 0.01, false),
-            (-0.01, false)
-        ]
+    func testInputRouteReconfigurationDecision() {
+        XCTAssertFalse(
+            AudioEngine.shouldReconfigureInputDevice(currentDeviceID: 42, targetDeviceID: 42),
+            "An AudioUnit already bound to the target device should not rebuild its graph"
+        )
+        XCTAssertTrue(
+            AudioEngine.shouldReconfigureInputDevice(currentDeviceID: 41, targetDeviceID: 42),
+            "Switching devices must rebuild the graph"
+        )
+        XCTAssertTrue(
+            AudioEngine.shouldReconfigureInputDevice(currentDeviceID: nil, targetDeviceID: 42),
+            "An unreadable current route must be treated as needing configuration"
+        )
+    }
 
-        for testCase in cases {
-            XCTAssertEqual(
-                AudioEngine.shouldTreatAsStartupConfigurationChange(elapsedSinceRecordingStart: testCase.elapsed),
-                testCase.expected
+    func testConfiguredInputRouteMustMatchTargetAfterReset() {
+        XCTAssertTrue(
+            AudioEngine.shouldAcceptConfiguredInputRoute(
+                targetDeviceID: 42,
+                deviceIDAfterReset: 42
             )
-        }
+        )
+        XCTAssertFalse(
+            AudioEngine.shouldAcceptConfiguredInputRoute(
+                targetDeviceID: 42,
+                deviceIDAfterReset: 41
+            ),
+            "A route mismatch must not silently record from a fallback device"
+        )
+        XCTAssertFalse(
+            AudioEngine.shouldAcceptConfiguredInputRoute(
+                targetDeviceID: 42,
+                deviceIDAfterReset: nil
+            ),
+            "An unreadable route must fail verification"
+        )
+    }
+
+    func testStartupConfigurationChangeIsIgnoredOnlyForStableConfiguredRoute() {
+        XCTAssertTrue(
+            AudioEngine.shouldIgnoreConfigurationChange(
+                isRecording: true,
+                engineIsRunning: true,
+                elapsedSinceRecordingStart: 0.5,
+                configuredInputDeviceID: 42,
+                currentInputDeviceID: 42
+            ),
+            "A delayed startup notification may be ignored when the configured route is still healthy"
+        )
+        XCTAssertFalse(
+            AudioEngine.shouldIgnoreConfigurationChange(
+                isRecording: true,
+                engineIsRunning: true,
+                elapsedSinceRecordingStart: 0.5,
+                configuredInputDeviceID: 42,
+                currentInputDeviceID: 41
+            ),
+            "A live route change must interrupt recording even during startup"
+        )
+        XCTAssertFalse(
+            AudioEngine.shouldIgnoreConfigurationChange(
+                isRecording: true,
+                engineIsRunning: false,
+                elapsedSinceRecordingStart: 0.5,
+                configuredInputDeviceID: 42,
+                currentInputDeviceID: 42
+            ),
+            "A stopped engine still requires route-change recovery"
+        )
+        XCTAssertFalse(
+            AudioEngine.shouldIgnoreConfigurationChange(
+                isRecording: true,
+                engineIsRunning: true,
+                elapsedSinceRecordingStart: 1.01,
+                configuredInputDeviceID: 42,
+                currentInputDeviceID: 42
+            ),
+            "Live route changes after startup must still interrupt recording"
+        )
+        XCTAssertFalse(
+            AudioEngine.shouldIgnoreConfigurationChange(
+                isRecording: true,
+                engineIsRunning: true,
+                elapsedSinceRecordingStart: 0.5,
+                configuredInputDeviceID: nil,
+                currentInputDeviceID: nil
+            ),
+            "A notification cannot be ignored when the configured route is unknown"
+        )
     }
 
     func testOnAudioDeviceChangedCallbackExists() {
