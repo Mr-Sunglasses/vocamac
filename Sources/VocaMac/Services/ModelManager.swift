@@ -490,25 +490,58 @@ final class ModelManager {
 
         let root = SherpaService.storageRoot
         try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
-        let archiveDestination = root.appendingPathComponent(spec.archiveURL.lastPathComponent)
+
+        // Download and extract through a staging directory, then move the
+        // finished model into place. `tar` writes entries as it goes, so
+        // extracting straight into the destination would leave a directory of
+        // truncated weights behind if the archive is incomplete — and those
+        // files look real enough that the app would offer to load them.
+        let staging = root.appendingPathComponent(".staging-\(spec.directoryName)", isDirectory: true)
+        let destination = SherpaService.modelDirectory(for: spec)
+
+        func discardStaging() {
+            try? fileManager.removeItem(at: staging)
+        }
+
+        discardStaging()
+        try fileManager.createDirectory(at: staging, withIntermediateDirectories: true)
+        defer { discardStaging() }
+
+        let archiveDestination = staging.appendingPathComponent(spec.archiveURL.lastPathComponent)
 
         do {
             try await FileDownloader.download(from: spec.archiveURL, to: archiveDestination) { fraction in
                 onProgress(fraction * 0.95)
             }
 
-            defer { try? fileManager.removeItem(at: archiveDestination) }
+            try Self.extractTarArchive(at: archiveDestination, into: staging)
+            try? fileManager.removeItem(at: archiveDestination)
 
-            try Self.extractTarArchive(at: archiveDestination, into: root)
-
-            guard SherpaService.modelFilesExist(for: spec) else {
+            let extracted = staging.appendingPathComponent(spec.directoryName, isDirectory: true)
+            let missing = spec.requiredFiles.filter {
+                !fileManager.fileExists(atPath: extracted.appendingPathComponent($0).path)
+            }
+            guard missing.isEmpty else {
                 throw ModelManagerError.missingModelDirectory(
-                    SherpaService.modelDirectory(for: spec).path
+                    "\(extracted.path) (missing: \(missing.joined(separator: ", ")))"
                 )
             }
 
+            if fileManager.fileExists(atPath: destination.path) {
+                try fileManager.removeItem(at: destination)
+            }
+            try fileManager.moveItem(at: extracted, to: destination)
+
+            // Written last: this marker is what makes the model count as
+            // installed, so a crash before this point leaves it re-downloadable.
+            try SherpaService.markModelComplete(for: spec)
+
+            guard SherpaService.modelFilesExist(for: spec) else {
+                throw ModelManagerError.missingModelDirectory(destination.path)
+            }
+
             onProgress(1.0)
-            VocaLogger.info(.modelManager, "ONNX model '\(size.rawValue)' extracted to: \(SherpaService.modelDirectory(for: spec).path)")
+            VocaLogger.info(.modelManager, "ONNX model '\(size.rawValue)' installed at: \(destination.path)")
         } catch {
             VocaLogger.error(.modelManager, "Download failed for '\(size.rawValue)': \(error.localizedDescription)")
             throw ModelManagerError.downloadFailed(reason: error.localizedDescription)

@@ -65,7 +65,7 @@ struct GeneralSettingsTab: View {
                     }
                 }
                 .pickerStyle(.radioGroup)
-                .onChange(of: appState.activationMode) { _ in
+                .onChange(of: appState.activationMode) {
                     appState.syncHotKeyConfiguration()
                 }
 
@@ -144,7 +144,7 @@ struct GeneralSettingsTab: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            .onChange(of: appState.selectedLanguage) { _ in
+            .onChange(of: appState.selectedLanguage) {
                 Task { @MainActor in
                     await appState.reloadModelForLanguageChangeIfNeeded()
                 }
@@ -645,7 +645,7 @@ struct AudioSettingsTab: View {
                     Text("120 seconds").tag(120)
                     Text("300 seconds (5 min)").tag(300)
                 }
-                .onChange(of: appState.maxRecordingDuration) { _ in
+                .onChange(of: appState.maxRecordingDuration) {
                     appState.syncHotKeyConfiguration()
                 }
 
@@ -703,7 +703,7 @@ struct AudioSettingsTab: View {
                         Text(device.name).tag(device.id)
                     }
                 }
-                .onChange(of: appState.selectedAudioDeviceID) { _ in
+                .onChange(of: appState.selectedAudioDeviceID) {
                     syncSelectedAudioDeviceName()
                 }
 

@@ -683,10 +683,10 @@ struct HotkeyConfigStep: View {
         .padding()
         // Keep the live listener aligned with wizard fields.
         // Completion syncs the full persisted config.
-        .onChange(of: appState.activationMode) { _ in
+        .onChange(of: appState.activationMode) {
             appState.syncHotKeyConfiguration()
         }
-        .onChange(of: appState.hotKeyCode) { _ in
+        .onChange(of: appState.hotKeyCode) {
             appState.syncHotKeyConfiguration()
         }
     }

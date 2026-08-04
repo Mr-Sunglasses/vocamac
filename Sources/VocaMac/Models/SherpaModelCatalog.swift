@@ -8,11 +8,11 @@
 import Foundation
 
 /// Describes one downloadable sherpa-onnx model.
-struct SherpaModelSpec {
+struct SherpaModelSpec: Sendable {
 
     /// Which recognizer configuration the model uses, with file names
     /// relative to the extracted model directory.
-    enum Kind {
+    enum Kind: Sendable {
         /// Moonshine v2 (encoder + merged decoder, .ort format)
         case moonshine(encoder: String, mergedDecoder: String)
         /// SenseVoice (single model file)

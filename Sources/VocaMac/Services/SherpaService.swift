@@ -64,12 +64,43 @@ final class SherpaService: @unchecked Sendable {
         storageRoot.appendingPathComponent(spec.directoryName, isDirectory: true)
     }
 
-    /// Whether every file the model needs exists on disk.
+    /// Marker written only after an archive has been fully extracted and
+    /// verified. Its absence means the directory is a partial install.
+    static let completionMarkerName = ".vocamac-complete"
+
+    /// Whether the model is fully installed and usable.
+    ///
+    /// A download that is interrupted mid-extraction leaves real files behind
+    /// — `tar` writes entries as it goes — so checking that files exist is not
+    /// enough: the app would offer to load a model whose weights are
+    /// truncated, and the load would fail with no way for the user to
+    /// recover. The marker is written last, so it is the only reliable signal
+    /// that extraction finished.
     static func modelFilesExist(for spec: SherpaModelSpec) -> Bool {
         let directory = modelDirectory(for: spec)
-        return spec.requiredFiles.allSatisfy {
-            FileManager.default.fileExists(atPath: directory.appendingPathComponent($0).path)
+        let fileManager = FileManager.default
+
+        guard fileManager.fileExists(
+            atPath: directory.appendingPathComponent(completionMarkerName).path
+        ) else {
+            return false
         }
+
+        return spec.requiredFiles.allSatisfy { file in
+            let path = directory.appendingPathComponent(file).path
+            guard let attributes = try? fileManager.attributesOfItem(atPath: path),
+                  let size = attributes[.size] as? Int64 else {
+                return false
+            }
+            return size > 0
+        }
+    }
+
+    /// Record that a model directory is complete. Called after extraction has
+    /// been verified.
+    static func markModelComplete(for spec: SherpaModelSpec) throws {
+        let marker = modelDirectory(for: spec).appendingPathComponent(completionMarkerName)
+        try Data().write(to: marker)
     }
 
     // MARK: - Properties
@@ -120,11 +151,23 @@ final class SherpaService: @unchecked Sendable {
         // the preference changes (see reloadModelForLanguageChangeIfNeeded).
         let preferredLanguage = UserDefaults.standard.string(forKey: PreferenceKey.selectedLanguage) ?? "auto"
 
-        var config = Self.recognizerConfig(for: spec, in: directory, language: preferredLanguage)
-
         let created: OpaquePointer? = await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
-                continuation.resume(returning: SherpaOnnxCreateOfflineRecognizer(&config))
+                // Build the config and hand it to sherpa-onnx inside one
+                // autorelease pool. The config's file paths are C strings
+                // pointing into autoreleased buffers, so they must not outlive
+                // the pool that created them — building the config on a
+                // different thread from this call would leave them dangling.
+                // sherpa-onnx copies the paths, so they are free after this.
+                let recognizer: OpaquePointer? = autoreleasepool {
+                    var config = Self.recognizerConfig(
+                        for: spec,
+                        in: directory,
+                        language: preferredLanguage
+                    )
+                    return SherpaOnnxCreateOfflineRecognizer(&config)
+                }
+                continuation.resume(returning: recognizer)
             }
         }
 
