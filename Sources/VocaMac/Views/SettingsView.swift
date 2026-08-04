@@ -138,8 +138,8 @@ struct GeneralSettingsTab: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
-                if let engine = appState.currentModel?.size.engine, engine.bindsLanguageAtLoadTime {
-                    Text("\(engine.displayName) models apply the language when they load, so changing it reloads the active model.")
+                if let model = appState.currentModel?.size, model.bindsLanguageAtLoadTime {
+                    Text("\(model.displayName) applies the language when it loads, so changing it reloads the model.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

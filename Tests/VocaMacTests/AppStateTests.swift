@@ -409,20 +409,39 @@ final class AppStateModelLoadingTests: XCTestCase {
     // MARK: - Language-bound model reloading
 
     @MainActor
-    func testLanguageChangeReloadsSherpaModel() async {
+    func testLanguageChangeReloadsALanguageBoundModel() async {
+        // SenseVoice takes its recognition language when the recognizer is
+        // built, so the change only lands on reload.
+        let modelManager = MockModelManager()
+        modelManager.downloadedModels = [.senseVoiceSmall]
+        let (appState, mocks) = AppState.makeTestState(modelManager: modelManager)
+
+        await appState.loadModel(.senseVoiceSmall)
+        XCTAssertEqual(appState.currentModel?.size, .senseVoiceSmall)
+        let loadsAfterInitial = mocks.whisperService.loadRequests.count
+
+        appState.selectedLanguage = "zh"
+        await appState.reloadModelForLanguageChangeIfNeeded()
+
+        XCTAssertEqual(mocks.whisperService.loadRequests.count, loadsAfterInitial + 1)
+        XCTAssertEqual(mocks.whisperService.loadRequests.last?.name, "sense-voice-small")
+    }
+
+    @MainActor
+    func testLanguageChangeDoesNotReloadAMonolingualONNXModel() async {
+        // Moonshine is English-only, so it has no language to rebind and
+        // should not pay for a reload.
         let modelManager = MockModelManager()
         modelManager.downloadedModels = [.moonshineTiny]
         let (appState, mocks) = AppState.makeTestState(modelManager: modelManager)
 
         await appState.loadModel(.moonshineTiny)
-        XCTAssertEqual(appState.currentModel?.size, .moonshineTiny)
         let loadsAfterInitial = mocks.whisperService.loadRequests.count
 
         appState.selectedLanguage = "ru"
         await appState.reloadModelForLanguageChangeIfNeeded()
 
-        XCTAssertEqual(mocks.whisperService.loadRequests.count, loadsAfterInitial + 1)
-        XCTAssertEqual(mocks.whisperService.loadRequests.last?.name, "moonshine-v2-tiny-en")
+        XCTAssertEqual(mocks.whisperService.loadRequests.count, loadsAfterInitial)
     }
 
     @MainActor

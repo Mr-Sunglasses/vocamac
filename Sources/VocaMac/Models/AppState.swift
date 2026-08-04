@@ -841,7 +841,7 @@ final class AppState: ObservableObject {
     /// Other engines take the language per transcription and need no reload.
     func reloadModelForLanguageChangeIfNeeded() async {
         guard let size = currentModel?.size,
-              size.engine.bindsLanguageAtLoadTime,
+              size.bindsLanguageAtLoadTime,
               whisperService.isModelLoaded else {
             return
         }

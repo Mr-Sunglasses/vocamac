@@ -20,7 +20,11 @@ let package = Package(
         .package(url: "https://github.com/argmaxinc/WhisperKit.git", from: "0.9.4"),
         // FluidAudio — NVIDIA Parakeet TDT models as CoreML on the Neural Engine
         // https://github.com/FluidInference/FluidAudio
-        .package(url: "https://github.com/FluidInference/FluidAudio.git", from: "0.12.4"),
+        // Held to 0.15.x: this is the version the engine is tested against, and
+        // the APIs used here (AsrManager.loadModels, throwing TdtDecoderState,
+        // the transcribe language hint) do not all exist in earlier releases.
+        // FluidAudio is pre-1.0, so minor bumps may break the build.
+        .package(url: "https://github.com/FluidInference/FluidAudio.git", .upToNextMinor(from: "0.15.5")),
         // sherpa-onnx — specialized ONNX models (Moonshine, SenseVoice,
         // GigaAM, Canary) via ONNX Runtime, CPU-only.
         // Pinned to a revision: the SPM manifest is not in a tagged release

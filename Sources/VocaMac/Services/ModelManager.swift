@@ -6,6 +6,7 @@
 // FluidAudio; Apple Speech assets are owned by the OS. All models are CoreML
 // format, downloaded from HuggingFace and cached locally.
 
+import CryptoKit
 import Foundation
 import WhisperKit
 import FluidAudio
@@ -18,6 +19,7 @@ enum ModelManagerError: LocalizedError {
     case deviceNotSupported(model: String)
     case missingModelDirectory(String)
     case tokenizerAssetsUnavailable(String)
+    case checksumMismatch(model: String, expected: String, actual: String)
 
     var errorDescription: String? {
         switch self {
@@ -31,6 +33,10 @@ enum ModelManagerError: LocalizedError {
             return "Model files are missing at: \(path)"
         case .tokenizerAssetsUnavailable(let model):
             return "Tokenizer assets are missing for model '\(model)'."
+        case .checksumMismatch(let model, let expected, let actual):
+            return "The download for '\(model)' did not match its expected contents "
+                + "(expected \(expected.prefix(12))…, got \(actual.prefix(12))…). "
+                + "It was discarded. Please try again."
         }
     }
 }
@@ -496,14 +502,18 @@ final class ModelManager {
         // extracting straight into the destination would leave a directory of
         // truncated weights behind if the archive is incomplete — and those
         // files look real enough that the app would offer to load them.
-        let staging = root.appendingPathComponent(".staging-\(spec.directoryName)", isDirectory: true)
+        // Unique per attempt so two downloads of the same model cannot
+        // overwrite each other's staging area.
+        let staging = root.appendingPathComponent(
+            ".staging-\(spec.directoryName)-\(UUID().uuidString)",
+            isDirectory: true
+        )
         let destination = SherpaService.modelDirectory(for: spec)
 
         func discardStaging() {
             try? fileManager.removeItem(at: staging)
         }
 
-        discardStaging()
         try fileManager.createDirectory(at: staging, withIntermediateDirectories: true)
         defer { discardStaging() }
 
@@ -512,6 +522,17 @@ final class ModelManager {
         do {
             try await FileDownloader.download(from: spec.archiveURL, to: archiveDestination) { fraction in
                 onProgress(fraction * 0.95)
+            }
+
+            // Check the archive against its known digest before unpacking it:
+            // everything inside is handed to native ONNX code.
+            let digest = try Self.sha256Hex(ofFileAt: archiveDestination)
+            guard digest.caseInsensitiveCompare(spec.sha256) == .orderedSame else {
+                throw ModelManagerError.checksumMismatch(
+                    model: size.rawValue,
+                    expected: spec.sha256,
+                    actual: digest
+                )
             }
 
             try Self.extractTarArchive(at: archiveDestination, into: staging)
@@ -527,10 +548,24 @@ final class ModelManager {
                 )
             }
 
-            if fileManager.fileExists(atPath: destination.path) {
-                try fileManager.removeItem(at: destination)
+            // Swap the finished model in without a window where neither copy
+            // is in place: move any existing install aside first, and only
+            // delete it once the new one has landed.
+            let displaced = fileManager.fileExists(atPath: destination.path)
+                ? staging.appendingPathComponent(".replaced", isDirectory: true)
+                : nil
+            if let displaced {
+                try fileManager.moveItem(at: destination, to: displaced)
             }
-            try fileManager.moveItem(at: extracted, to: destination)
+            do {
+                try fileManager.moveItem(at: extracted, to: destination)
+            } catch {
+                // Put the previous install back rather than leaving nothing.
+                if let displaced {
+                    try? fileManager.moveItem(at: displaced, to: destination)
+                }
+                throw error
+            }
 
             // Written last: this marker is what makes the model count as
             // installed, so a crash before this point leaves it re-downloadable.
@@ -546,6 +581,19 @@ final class ModelManager {
             VocaLogger.error(.modelManager, "Download failed for '\(size.rawValue)': \(error.localizedDescription)")
             throw ModelManagerError.downloadFailed(reason: error.localizedDescription)
         }
+    }
+
+    /// SHA-256 of a file, read in chunks so a large archive never has to be
+    /// held in memory all at once.
+    static func sha256Hex(ofFileAt url: URL) throws -> String {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+
+        var hasher = SHA256()
+        while let chunk = try handle.read(upToCount: 1 << 20), !chunk.isEmpty {
+            hasher.update(data: chunk)
+        }
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
     /// Extract a .tar.bz2 archive using the system tar.

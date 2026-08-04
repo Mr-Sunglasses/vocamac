@@ -456,7 +456,7 @@ jobs:
             echo "\`\`\`"
             echo ""
             echo "### Requirements"
-            echo "- macOS 13 (Ventura) or later"
+            echo "- macOS 14 (Sonoma) or later"
             echo "- Apple Silicon (arm64)"
           } > release-notes.md
 

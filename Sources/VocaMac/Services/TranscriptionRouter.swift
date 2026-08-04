@@ -19,6 +19,9 @@ final class TranscriptionRouter: @unchecked Sendable {
     /// Engine that owns the currently loaded model.
     private(set) var activeEngine: TranscriptionEngine = .whisperKit
 
+    /// Runs model loads one at a time.
+    private let loadSerializer = LoadSerializer()
+
     // MARK: - Engine Resolution
 
     /// Resolve which engine owns a model identifier.
@@ -59,17 +62,37 @@ final class TranscriptionRouter: @unchecked Sendable {
 
 extension TranscriptionRouter: SpeechTranscribing {
 
+    /// Load a model, waiting for any load already in flight to finish first.
+    ///
+    /// Loading suspends, so without serialization two loads — easy to trigger
+    /// by switching models or changing the language while one is still
+    /// running — can overlap. Both would then finish, the later one setting
+    /// `activeEngine`, while the other engine's model stayed resident in
+    /// memory. Running them one at a time keeps `activeEngine` and the
+    /// engine that actually holds a model in agreement.
     func _loadModel(name: String?, folder: URL?, onPhaseChange: ((String) -> Void)?) async throws {
+        try await loadSerializer.run { [self] in
+            try await performLoad(name: name, folder: folder, onPhaseChange: onPhaseChange)
+        }
+    }
+
+    private func performLoad(
+        name: String?,
+        folder: URL?,
+        onPhaseChange: ((String) -> Void)?
+    ) async throws {
         let engine = Self.engine(forModelIdentifier: name)
 
-        // Free the previous engine's memory before loading the new model.
-        // Each engine also unloads itself before loading, so only the
-        // engines that are not the target need explicit unloading here.
+        // Free the other engines before loading, so only one model is ever
+        // resident. Each engine also unloads itself before loading.
         if engine != .whisperKit {
             whisper.unloadModel()
         }
         if engine != .parakeet {
-            parakeet.unloadModel()
+            // Awaited: FluidAudio's cleanup releases shared CoreML state, and
+            // letting it run loose could tear that down after the next load
+            // has started using it.
+            await parakeet.unloadModelAndWait()
         }
         if engine != .appleSpeech {
             appleSpeech.unloadModel()
@@ -84,12 +107,18 @@ extension TranscriptionRouter: SpeechTranscribing {
         case .parakeet:
             try await parakeet.loadModel(name: name, onPhaseChange: onPhaseChange)
         case .appleSpeech:
-            try await appleSpeech.loadModel(onPhaseChange: onPhaseChange)
+            try await appleSpeech.loadModel(language: languagePreference, onPhaseChange: onPhaseChange)
         case .sherpaOnnx:
             try await sherpa.loadModel(name: name, onPhaseChange: onPhaseChange)
         }
 
         activeEngine = engine
+    }
+
+    /// The transcription language the user selected, or nil for auto-detect.
+    private var languagePreference: String? {
+        let stored = UserDefaults.standard.string(forKey: PreferenceKey.selectedLanguage) ?? "auto"
+        return stored == "auto" ? nil : stored
     }
 
     func transcribe(

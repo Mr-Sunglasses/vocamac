@@ -65,7 +65,9 @@ final class ParakeetService: @unchecked Sendable {
         name modelName: String? = nil,
         onPhaseChange: ((String) -> Void)? = nil
     ) async throws {
-        unloadModel()
+        // Wait for the previous manager to release its CoreML state before
+        // building a new one, so cleanup cannot land on the new model.
+        await unloadModelAndWait()
 
         let size = modelName.flatMap(ModelSize.init(rawValue:)) ?? .parakeetV3
         guard let version = Self.modelVersion(for: size) else {
@@ -94,14 +96,32 @@ final class ParakeetService: @unchecked Sendable {
         }
     }
 
-    /// Unload the current model and free memory
+    /// Unload the current model and free memory, waiting for FluidAudio to
+    /// release its CoreML state.
+    ///
+    /// Prefer this over `unloadModel()` when another load is about to start:
+    /// cleanup releases shared caches, and if it runs loose it can tear those
+    /// down after the next model has begun using them.
+    func unloadModelAndWait() async {
+        guard let manager = takeManager() else { return }
+        await manager.cleanup()
+        VocaLogger.info(.parakeetService, "Parakeet model unloaded")
+    }
+
+    /// Unload the current model without waiting for cleanup to finish.
+    /// Used on teardown paths where there is nothing to race with.
     func unloadModel() {
-        if let manager = asrManager {
-            asrManager = nil
-            loadedSize = nil
-            Task { await manager.cleanup() }
-            VocaLogger.info(.parakeetService, "Parakeet model unloaded")
-        }
+        guard let manager = takeManager() else { return }
+        Task { await manager.cleanup() }
+        VocaLogger.info(.parakeetService, "Parakeet model unloaded")
+    }
+
+    /// Detach the current manager so only one caller can clean it up.
+    private func takeManager() -> AsrManager? {
+        guard let manager = asrManager else { return nil }
+        asrManager = nil
+        loadedSize = nil
+        return manager
     }
 
     // MARK: - Transcription

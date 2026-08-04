@@ -182,9 +182,17 @@ final class SherpaService: @unchecked Sendable {
     }
 
     /// Take ownership of a freshly created recognizer.
+    ///
+    /// Destroys whatever was installed before rather than overwriting it:
+    /// the pointer is native memory, so dropping the reference would leak the
+    /// model. Loads are serialized upstream, but this keeps the object safe
+    /// on its own terms.
     private func adopt(recognizer created: OpaquePointer, size: ModelSize) {
         recognizerLock.lock()
         defer { recognizerLock.unlock() }
+        if let existing = recognizer {
+            SherpaOnnxDestroyOfflineRecognizer(existing)
+        }
         recognizer = created
         loadedSize = size
     }

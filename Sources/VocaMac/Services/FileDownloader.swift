@@ -26,6 +26,12 @@ final class FileDownloader: NSObject, URLSessionDownloadDelegate, @unchecked Sen
     private let destination: URL
     private let onProgress: (Double) -> Void
     private var continuation: CheckedContinuation<Void, Error>?
+    private var task: URLSessionDownloadTask?
+    private var isCancelled = false
+
+    /// Guards the continuation and task against the delegate callbacks, which
+    /// arrive on the session queue, racing cancellation from the caller.
+    private let stateLock = NSLock()
 
     private init(destination: URL, onProgress: @escaping (Double) -> Void) {
         self.destination = destination
@@ -48,10 +54,46 @@ final class FileDownloader: NSObject, URLSessionDownloadDelegate, @unchecked Sen
         )
         defer { session.finishTasksAndInvalidate() }
 
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            downloader.continuation = continuation
-            session.downloadTask(with: url).resume()
+        // Model archives run to hundreds of megabytes, so a cancelled task
+        // must stop the transfer rather than leave it running in the
+        // background burning battery and disk.
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                let task = session.downloadTask(with: url)
+                downloader.begin(task: task, continuation: continuation)
+            }
+        } onCancel: {
+            downloader.cancel()
         }
+    }
+
+    /// Store the in-flight task and continuation, or cancel immediately if
+    /// cancellation already arrived.
+    private func begin(task: URLSessionDownloadTask, continuation: CheckedContinuation<Void, Error>) {
+        stateLock.lock()
+        if isCancelled {
+            stateLock.unlock()
+            continuation.resume(throwing: CancellationError())
+            return
+        }
+        self.continuation = continuation
+        self.task = task
+        stateLock.unlock()
+        task.resume()
+    }
+
+    /// Cancel the transfer and fail the awaiting caller.
+    private func cancel() {
+        stateLock.lock()
+        isCancelled = true
+        let task = self.task
+        self.task = nil
+        let continuation = self.continuation
+        self.continuation = nil
+        stateLock.unlock()
+
+        task?.cancel()
+        continuation?.resume(throwing: CancellationError())
     }
 
     // MARK: - URLSessionDownloadDelegate
@@ -101,8 +143,15 @@ final class FileDownloader: NSObject, URLSessionDownloadDelegate, @unchecked Sen
     }
 
     private func finish(with error: Error?) {
-        guard let continuation else { return }
+        stateLock.lock()
+        guard let continuation else {
+            stateLock.unlock()
+            return
+        }
         self.continuation = nil
+        self.task = nil
+        stateLock.unlock()
+
         if let error {
             continuation.resume(throwing: error)
         } else {

@@ -85,6 +85,16 @@ enum ModelSize: String, CaseIterable, Codable, Identifiable {
         self == .appleSpeech
     }
 
+    /// Whether the transcription language is fixed when this model loads, so
+    /// changing it only takes effect after a reload.
+    ///
+    /// Whisper and Parakeet take the language per transcription. Among the
+    /// ONNX models only SenseVoice and Canary bind it, so the rest should not
+    /// pay for a reload.
+    var bindsLanguageAtLoadTime: Bool {
+        SherpaModelCatalog.spec(for: self)?.bindsLanguageAtLoadTime ?? false
+    }
+
     /// Models shown by default in the app's Mac-focused model picker.
     ///
     /// `medium` remains a legacy value for stored preferences and explicit
@@ -168,7 +178,7 @@ enum ModelSize: String, CaseIterable, Codable, Identifiable {
 
     /// Human-readable file size string
     var fileSizeDescription: String {
-        if isSystemManaged { return "Built into macOS" }
+        if isSystemManaged { return "Managed by macOS" }
         let formatter = ByteCountFormatter()
         formatter.countStyle = .file
         return formatter.string(fromByteCount: fileSizeBytes)

@@ -67,9 +67,16 @@ final class AppleSpeechService: @unchecked Sendable {
 
     // MARK: - Model Management
 
-    /// Prepare the system speech engine: resolves the user's locale and asks
-    /// the OS to install transcription assets if they are missing.
+    /// Prepare the system speech engine: resolves the locale to dictate in
+    /// and asks the OS to install transcription assets if they are missing.
+    ///
+    /// - Parameter language: ISO 639-1 code the user selected, or nil to
+    ///   follow the system locale. This must match what `transcribe` will ask
+    ///   for, otherwise load installs assets for one language and the first
+    ///   dictation downloads another — or load fails because the system
+    ///   locale is unsupported while the selected language is fine.
     func loadModel(
+        language: String? = nil,
         onPhaseChange: ((String) -> Void)? = nil
     ) async throws {
         #if compiler(>=6.2)
@@ -79,7 +86,8 @@ final class AppleSpeechService: @unchecked Sendable {
         let startTime = CFAbsoluteTimeGetCurrent()
 
         onPhaseChange?("Checking speech assets…")
-        try await AppleSpeechEngine.prepareAssets(for: Locale.current, onPhaseChange: onPhaseChange)
+        let locale = language.map { Locale(identifier: $0) } ?? Locale.current
+        try await AppleSpeechEngine.prepareAssets(for: locale, onPhaseChange: onPhaseChange)
         isPrepared = true
 
         let elapsed = CFAbsoluteTimeGetCurrent() - startTime

@@ -10,7 +10,7 @@
   
 [![Build & Test](https://github.com/jatinkrmalik/vocamac/actions/workflows/ci.yml/badge.svg)](https://github.com/jatinkrmalik/vocamac/actions/workflows/ci.yml)
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
-[![Platform: macOS](https://img.shields.io/badge/Platform-macOS%2013%2B-lightgrey.svg)](https://github.com/jatinkrmalik/vocamac)
+[![Platform: macOS](https://img.shields.io/badge/Platform-macOS%2014%2B-lightgrey.svg)](https://github.com/jatinkrmalik/vocamac)
 [![Swift 5.9+](https://img.shields.io/badge/Swift-5.9%2B-orange.svg)](https://swift.org)
 [![Release](https://img.shields.io/github/v/release/jatinkrmalik/vocamac?include_prereleases&label=Release)](https://github.com/jatinkrmalik/vocamac/releases)
 [![Nightly](https://img.shields.io/badge/Nightly-download-blueviolet)](https://github.com/jatinkrmalik/vocamac/releases/tag/nightly)

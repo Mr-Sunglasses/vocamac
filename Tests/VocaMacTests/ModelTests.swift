@@ -68,7 +68,7 @@ final class ModelSizeTests: XCTestCase {
     func testSystemManagedModelsReportNoDownloadSize() {
         for size in ModelSize.allCases where size.isSystemManaged {
             XCTAssertEqual(size.fileSizeBytes, 0)
-            XCTAssertEqual(size.fileSizeDescription, "Built into macOS")
+            XCTAssertEqual(size.fileSizeDescription, "Managed by macOS")
         }
     }
 

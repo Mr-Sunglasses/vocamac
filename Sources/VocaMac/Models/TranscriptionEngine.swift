@@ -48,7 +48,7 @@ enum TranscriptionEngine: String, CaseIterable, Codable, Identifiable {
         case .whisperKit:
             return "OpenAI's Whisper models — widest language coverage (100+ languages) and translation to English."
         case .appleSpeech:
-            return "Built into macOS — no download needed, assets are managed by the system."
+            return "Built into macOS — no model to manage, though the system may download language assets the first time you use one."
         case .sherpaOnnx:
             return "Community models for specific needs — tiny English models for low-RAM Macs, plus Chinese, Russian, and European language specialists. Runs on CPU."
         }
@@ -64,10 +64,4 @@ enum TranscriptionEngine: String, CaseIterable, Codable, Identifiable {
         self == .whisperKit
     }
 
-    /// Whether the engine fixes its recognition language when the model is
-    /// loaded rather than per transcription. Models on such engines must be
-    /// reloaded for a language change to take effect.
-    var bindsLanguageAtLoadTime: Bool {
-        self == .sherpaOnnx
-    }
 }
