@@ -871,7 +871,7 @@ struct AboutTab: View {
         .padding()
         .sheet(isPresented: $showingUpdateSheet) {
             if let info = updateInfoForSheet {
-                UpdateDetailView(info: info)
+                UpdateDetailView(info: info, isPresented: $showingUpdateSheet)
                     .environmentObject(appState)
             }
         }

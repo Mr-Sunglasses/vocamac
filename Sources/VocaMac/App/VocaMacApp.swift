@@ -56,6 +56,61 @@ final class SettingsWindowManager: ObservableObject {
     }
 }
 
+/// Manages the standalone update details window.
+/// Update details open in their own window rather than as a sheet inside the
+/// MenuBarExtra popover: sheets there detach, fight the popover for focus,
+/// and pull it down along with themselves when dismissed.
+final class UpdateWindowManager: ObservableObject {
+    private var updateWindow: NSWindow?
+
+    func open(appState: AppState, info: UpdateInfo) {
+        // If window already exists, just bring it to front
+        if let window = updateWindow, window.isVisible {
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+
+        let updateView = UpdateDetailView(info: info, isPresented: Binding(
+            get: { true },
+            set: { [weak self] stillPresented in
+                if !stillPresented { self?.updateWindow?.close() }
+            }
+        ))
+        .environmentObject(appState)
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 480, height: 420),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "VocaMac Update"
+        window.contentView = NSHostingView(rootView: updateView)
+        window.center()
+        window.isReleasedWhenClosed = false
+        window.makeKeyAndOrderFront(nil)
+
+        self.updateWindow = window
+
+        // Temporarily show in dock so the window can receive focus
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
+
+        // Watch for window close to hide from dock again
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification,
+            object: window,
+            queue: .main
+        ) { [weak self] _ in
+            self?.updateWindow = nil
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                NSApp.setActivationPolicy(.accessory)
+            }
+        }
+    }
+}
+
 /// Manages the onboarding window
 @MainActor
 final class OnboardingWindowManager: ObservableObject {
@@ -137,12 +192,13 @@ final class OnboardingWindowManager: ObservableObject {
 struct VocaMacApp: App {
     @StateObject private var appState = AppState.production()
     @StateObject private var settingsManager = SettingsWindowManager()
+    @StateObject private var updateWindowManager = UpdateWindowManager()
     @StateObject private var onboardingManager = OnboardingWindowManager()
 
     var body: some Scene {
         // Menu bar presence — the primary UI for VocaMac
         MenuBarExtra {
-            MenuBarView(settingsManager: settingsManager)
+            MenuBarView(settingsManager: settingsManager, updateWindowManager: updateWindowManager)
                 .environmentObject(appState)
         } label: {
             MenuBarIcon(appStatus: appState.appStatus, audioLevel: appState.audioLevel)
