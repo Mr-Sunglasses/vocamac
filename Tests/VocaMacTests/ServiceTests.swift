@@ -417,6 +417,38 @@ final class AudioEngineTests: XCTestCase {
             "Audio buffer should contain samples after recording")
     }
 
+    func testStopKeepsEngineWarmUntilIdleRelease() throws {
+        let engine = AudioEngine()
+
+        let didStart = engine.startRecording(
+            silenceThreshold: 0.01,
+            silenceDuration: 999.0,
+            maxDuration: 60.0
+        )
+
+        try XCTSkipIf(!didStart, "No microphone available or Core Audio input could not start")
+        XCTAssertTrue(engine.isEngineAllocatedForTesting)
+
+        _ = engine.stopRecording()
+
+        XCTAssertFalse(engine.isCurrentlyRecording)
+        XCTAssertTrue(
+            engine.isEngineAllocatedForTesting,
+            "Stopped engine should stay warm briefly for rapid push-to-talk restarts"
+        )
+
+        let expectation = XCTestExpectation(description: "Idle engine release")
+        DispatchQueue.main.asyncAfter(deadline: .now() + AudioEngine.idleEngineReleaseDelay + 0.5) {
+            expectation.fulfill()
+        }
+        wait(for: [expectation], timeout: AudioEngine.idleEngineReleaseDelay + 2.0)
+
+        XCTAssertFalse(
+            engine.isEngineAllocatedForTesting,
+            "Engine should release after the idle window so the input route is not held indefinitely"
+        )
+    }
+
     func testAudioBufferPreservedWhenSilenceDetected() {
         // The key bug fix: audio should be buffered BEFORE silence detection fires,
         // so we don't lose the audio frames that triggered the silence condition
@@ -482,6 +514,30 @@ final class AudioEngineTests: XCTestCase {
                 "Audio buffer should NOT be empty when max duration is reached — " +
                 "frames must be appended before the max duration check")
         }
+    }
+}
+
+final class AudioEngineStartFailureTests: XCTestCase {
+
+    func testFourCharacterCodeDecodesHardwareNotRunningError() {
+        XCTAssertEqual(AudioEngine.fourCharacterCode(forOSStatusCode: 1937010544), "stop")
+    }
+
+    func testStartRetryOnlyAppliesToFirstHardwareNotRunningFailure() {
+        let hardwareNotRunning = NSError(domain: "com.apple.coreaudio.avfaudio", code: 1937010544)
+        let otherError = NSError(domain: "com.apple.coreaudio.avfaudio", code: -1)
+
+        XCTAssertTrue(AudioEngine.shouldRetryStart(after: hardwareNotRunning, attempt: 1))
+        XCTAssertFalse(AudioEngine.shouldRetryStart(after: hardwareNotRunning, attempt: 2))
+        XCTAssertFalse(AudioEngine.shouldRetryStart(after: otherError, attempt: 1))
+    }
+
+    func testCoreAudioErrorDescriptionIncludesFourCharacterCode() {
+        let error = NSError(domain: "com.apple.coreaudio.avfaudio", code: 1937010544)
+        let description = AudioEngine.describeCoreAudioError(error)
+
+        XCTAssertTrue(description.contains("code=1937010544"))
+        XCTAssertTrue(description.contains("'stop'"))
     }
 }
 
@@ -568,17 +624,19 @@ final class AudioEngineForceResetTests: XCTestCase {
             "Engine should be idle after multiple force resets")
     }
 
-    func testIsCurrentlyRecordingReflectsState() {
+    func testIsCurrentlyRecordingReflectsState() throws {
         let engine = AudioEngine()
 
         XCTAssertFalse(engine.isCurrentlyRecording,
             "Engine should not be recording initially")
 
-        engine.startRecording(
+        let didStart = engine.startRecording(
             silenceThreshold: 0.01,
             silenceDuration: 999.0,
             maxDuration: 60.0
         )
+
+        try XCTSkipIf(!didStart, "No microphone available or Core Audio input could not start")
 
         // Allow engine to start
         let startExpectation = XCTestExpectation(description: "Recording started")
@@ -600,6 +658,97 @@ final class AudioEngineForceResetTests: XCTestCase {
 // MARK: - AudioEngine Device Change Tests
 
 final class AudioEngineDeviceChangeTests: XCTestCase {
+
+    func testInputRouteReconfigurationDecision() {
+        XCTAssertFalse(
+            AudioEngine.shouldReconfigureInputDevice(currentDeviceID: 42, targetDeviceID: 42),
+            "An AudioUnit already bound to the target device should not rebuild its graph"
+        )
+        XCTAssertTrue(
+            AudioEngine.shouldReconfigureInputDevice(currentDeviceID: 41, targetDeviceID: 42),
+            "Switching devices must rebuild the graph"
+        )
+        XCTAssertTrue(
+            AudioEngine.shouldReconfigureInputDevice(currentDeviceID: nil, targetDeviceID: 42),
+            "An unreadable current route must be treated as needing configuration"
+        )
+    }
+
+    func testConfiguredInputRouteMustMatchTargetAfterReset() {
+        XCTAssertTrue(
+            AudioEngine.shouldAcceptConfiguredInputRoute(
+                targetDeviceID: 42,
+                deviceIDAfterReset: 42
+            )
+        )
+        XCTAssertFalse(
+            AudioEngine.shouldAcceptConfiguredInputRoute(
+                targetDeviceID: 42,
+                deviceIDAfterReset: 41
+            ),
+            "A route mismatch must not silently record from a fallback device"
+        )
+        XCTAssertFalse(
+            AudioEngine.shouldAcceptConfiguredInputRoute(
+                targetDeviceID: 42,
+                deviceIDAfterReset: nil
+            ),
+            "An unreadable route must fail verification"
+        )
+    }
+
+    func testStartupConfigurationChangeIsIgnoredOnlyForStableConfiguredRoute() {
+        XCTAssertTrue(
+            AudioEngine.shouldIgnoreConfigurationChange(
+                isRecording: true,
+                engineIsRunning: true,
+                elapsedSinceRecordingStart: 0.5,
+                configuredInputDeviceID: 42,
+                currentInputDeviceID: 42
+            ),
+            "A delayed startup notification may be ignored when the configured route is still healthy"
+        )
+        XCTAssertFalse(
+            AudioEngine.shouldIgnoreConfigurationChange(
+                isRecording: true,
+                engineIsRunning: true,
+                elapsedSinceRecordingStart: 0.5,
+                configuredInputDeviceID: 42,
+                currentInputDeviceID: 41
+            ),
+            "A live route change must interrupt recording even during startup"
+        )
+        XCTAssertFalse(
+            AudioEngine.shouldIgnoreConfigurationChange(
+                isRecording: true,
+                engineIsRunning: false,
+                elapsedSinceRecordingStart: 0.5,
+                configuredInputDeviceID: 42,
+                currentInputDeviceID: 42
+            ),
+            "A stopped engine still requires route-change recovery"
+        )
+        XCTAssertFalse(
+            AudioEngine.shouldIgnoreConfigurationChange(
+                isRecording: true,
+                engineIsRunning: true,
+                elapsedSinceRecordingStart: 1.01,
+                configuredInputDeviceID: 42,
+                currentInputDeviceID: 42
+            ),
+            "Live route changes after startup must still interrupt recording"
+        )
+        XCTAssertFalse(
+            AudioEngine.shouldIgnoreConfigurationChange(
+                isRecording: true,
+                engineIsRunning: true,
+                elapsedSinceRecordingStart: 0.5,
+                configuredInputDeviceID: nil,
+                currentInputDeviceID: nil
+            ),
+            "A notification cannot be ignored when the configured route is unknown"
+        )
+    }
 
     func testOnAudioDeviceChangedCallbackExists() {
         // Verify the callback property can be set

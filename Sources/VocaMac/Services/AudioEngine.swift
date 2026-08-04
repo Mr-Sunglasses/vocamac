@@ -6,25 +6,37 @@
 
 import Foundation
 import AVFoundation
+import AudioToolbox
+import CoreAudio
 import VocaMacObjC
 
 final class AudioEngine {
 
     // MARK: - Properties
 
-    /// AVAudioEngine is created lazily when recording starts and torn down when
-    /// recording stops. Keeping it alive while idle holds an input route on the
-    /// system mic, which on Bluetooth devices like AirPods forces the headset
-    /// (HFP/SCO) profile and breaks remote media controls (e.g. tap-to-pause)
-    /// for any other app playing audio.
+    /// AVAudioEngine is created lazily when recording starts and torn down soon
+    /// after recording stops. Keeping it alive indefinitely while idle holds an
+    /// input route on the system mic, which on Bluetooth devices like AirPods
+    /// forces the headset (HFP/SCO) profile and breaks remote media controls
+    /// (e.g. tap-to-pause) for any other app playing audio.
     private var engine: AVAudioEngine?
+    private var pendingEngineRelease: DispatchWorkItem?
     private var audioBuffer: [Float] = []
     private var _isCurrentlyRecording = false
+    private var configuredInputDeviceID: AudioDeviceID?
     private let bufferQueue = DispatchQueue(label: "com.vocamac.audio-buffer", qos: .userInteractive)
     private let lifecycleQueue = DispatchQueue(label: "com.vocamac.audio-engine.lifecycle", qos: .userInitiated)
 
+    static let inputRouteConfigurationTimeout: TimeInterval = 0.25
+    static let startupConfigurationChangeRecoveryWindow: TimeInterval = 1.0
+    static let idleEngineReleaseDelay: TimeInterval = 3.0
+
     var isCurrentlyRecording: Bool {
         lifecycleQueue.sync { _isCurrentlyRecording }
+    }
+
+    var isEngineAllocatedForTesting: Bool {
+        lifecycleQueue.sync { engine != nil }
     }
 
     // Silence detection
@@ -70,10 +82,11 @@ final class AudioEngine {
         // engine's input node to materialise and claim the system input route,
         // which on Bluetooth headsets forces the HFP profile. The observer is
         // attached as part of `acquireEngine()` instead, and torn down by
-        // `releaseEngine()` when recording stops.
+        // `releaseEngine()` once the stopped engine has been idle briefly.
     }
 
     deinit {
+        pendingEngineRelease?.cancel()
         // Make sure any active engine and its observer are released. This is a
         // safety net — under normal flows `stopRecording`/`forceReset` will
         // already have torn things down.
@@ -87,6 +100,9 @@ final class AudioEngine {
     /// Lazily create the AVAudioEngine and start observing configuration changes.
     /// Must be called on `lifecycleQueue`.
     private func acquireEngine() -> AVAudioEngine {
+        pendingEngineRelease?.cancel()
+        pendingEngineRelease = nil
+
         if let engine { return engine }
         let newEngine = AVAudioEngine()
         engine = newEngine
@@ -105,10 +121,30 @@ final class AudioEngine {
     /// aren't affected while we're idle.
     /// Must be called on `lifecycleQueue`.
     private func releaseEngine() {
+        pendingEngineRelease?.cancel()
+        pendingEngineRelease = nil
+
+        configuredInputDeviceID = nil
         guard let engine else { return }
         NotificationCenter.default.removeObserver(self, name: .AVAudioEngineConfigurationChange, object: engine)
         self.engine = nil
         VocaLogger.debug(.audioEngine, "AVAudioEngine instance released")
+    }
+
+    /// Release the engine after a short idle window so rapid push-to-talk
+    /// recordings can reuse a warm input route.
+    /// Must be called on `lifecycleQueue`.
+    private func scheduleEngineRelease() {
+        pendingEngineRelease?.cancel()
+
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self, !self._isCurrentlyRecording else { return }
+            self.releaseEngine()
+        }
+        pendingEngineRelease = workItem
+
+        lifecycleQueue.asyncAfter(deadline: .now() + Self.idleEngineReleaseDelay, execute: workItem)
+        VocaLogger.debug(.audioEngine, "AVAudioEngine instance scheduled for idle release")
     }
 
     // MARK: - Audio Configuration Change
@@ -126,6 +162,20 @@ final class AudioEngine {
             VocaLogger.info(.audioEngine, "Audio configuration changed (device plug/unplug or route change)")
 
             let wasRecording = self._isCurrentlyRecording
+            let elapsedSinceRecordingStart = Date().timeIntervalSince(self.recordingStartTime)
+            let currentInputDeviceID = self.engine?.inputNode.audioUnit.flatMap {
+                Self.currentInputDeviceID(for: $0)
+            }
+            if Self.shouldIgnoreConfigurationChange(
+                isRecording: wasRecording,
+                engineIsRunning: self.engine?.isRunning == true,
+                elapsedSinceRecordingStart: elapsedSinceRecordingStart,
+                configuredInputDeviceID: self.configuredInputDeviceID,
+                currentInputDeviceID: currentInputDeviceID
+            ) {
+                VocaLogger.info(.audioEngine, "Configuration change did not disrupt the configured recording route")
+                return
+            }
 
             if wasRecording {
                 VocaLogger.warning(.audioEngine, "Configuration changed while recording — forcing stop and reset")
@@ -188,7 +238,8 @@ final class AudioEngine {
     func startRecording(
         silenceThreshold: Float = 0.01,
         silenceDuration: Double = 2.0,
-        maxDuration: TimeInterval = 60.0
+        maxDuration: TimeInterval = 60.0,
+        preferredInputDeviceID: String? = nil
     ) -> Bool {
         lifecycleQueue.sync {
             guard !self._isCurrentlyRecording else { return true }
@@ -198,53 +249,86 @@ final class AudioEngine {
             self.maxDuration = maxDuration
 
             resetRecordingState()
-            _isCurrentlyRecording = true
 
-            let engine = acquireEngine()
-            let inputNode = engine.inputNode
-            let inputFormat = inputNode.outputFormat(forBus: 0)
+            for attempt in 1...2 {
+                let engine = acquireEngine()
+                let inputNode = engine.inputNode
+                guard let configuredInputDeviceID = configureInputRoute(
+                    preferredInputDeviceID: preferredInputDeviceID,
+                    engine: engine,
+                    inputNode: inputNode
+                ) else {
+                    recoverFromStartFailure(notifyAppState: false)
+                    return false
+                }
+                self.configuredInputDeviceID = configuredInputDeviceID
+                let inputFormat = inputNode.outputFormat(forBus: 0)
 
-            guard isValidInputFormat(inputFormat) else {
-                VocaLogger.error(
-                    .audioEngine,
-                    "Invalid input format before recording start: sampleRate=\(inputFormat.sampleRate), channels=\(inputFormat.channelCount)"
-                )
-                recoverFromStartFailure(notifyAppState: true)
-                return false
-            }
-
-            // A previous failed start can leave a tap installed even when our
-            // recording flag is false. Remove any stale tap before installing a
-            // fresh one; otherwise AVAudioEngine raises an uncaught NSException.
-            removeInputTap(reason: "pre-start cleanup")
-
-            var startError: Error?
-            let exception = VocaObjCExceptionCatcher.catchException { [weak self] in
-                guard let self = self else { return }
-
-                inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, _ in
-                    self?.processAudioBuffer(buffer, inputFormat: inputFormat)
+                guard isValidInputFormat(inputFormat) else {
+                    VocaLogger.error(
+                        .audioEngine,
+                        "Invalid input format before recording start: sampleRate=\(inputFormat.sampleRate), channels=\(inputFormat.channelCount)"
+                    )
+                    recoverFromStartFailure(notifyAppState: false)
+                    return false
                 }
 
-                do {
-                    try engine.start()
-                } catch {
-                    startError = error
+                // A previous failed start can leave a tap installed even when our
+                // recording flag is false. Remove any stale tap before installing a
+                // fresh one; otherwise AVAudioEngine raises an uncaught NSException.
+                removeInputTap(reason: "pre-start cleanup")
+
+                var startError: Error?
+                let exception = VocaObjCExceptionCatcher.catchException { [weak self] in
+                    guard let self = self else { return }
+
+                    inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, _ in
+                        self?.processAudioBuffer(buffer, inputFormat: inputFormat)
+                    }
+
+                    engine.prepare()
+
+                    do {
+                        try engine.start()
+                    } catch {
+                        startError = error
+                    }
                 }
+
+                if let exception {
+                    VocaLogger.error(.audioEngine, "AVAudioEngine exception while starting recording: \(exception.localizedDescription)")
+                    recoverFromStartFailure(notifyAppState: false)
+                    return false
+                }
+
+                if let startError {
+                    VocaLogger.error(
+                        .audioEngine,
+                        "Failed to start audio engine (attempt \(attempt)): \(Self.describeCoreAudioError(startError))"
+                    )
+                    recoverFromStartFailure(notifyAppState: false)
+
+                    if Self.shouldRetryStart(after: startError, attempt: attempt) {
+                        VocaLogger.warning(.audioEngine, "Retrying audio engine start after hardware-not-running error")
+                        continue
+                    }
+                    return false
+                }
+
+                guard engine.isRunning else {
+                    VocaLogger.warning(.audioEngine, "Audio engine stopped during route configuration (attempt \(attempt))")
+                    recoverFromStartFailure(notifyAppState: false)
+                    if attempt == 1 {
+                        continue
+                    }
+                    return false
+                }
+
+                _isCurrentlyRecording = true
+                return true
             }
 
-            if let exception {
-                VocaLogger.error(.audioEngine, "AVAudioEngine exception while starting recording: \(exception.localizedDescription)")
-                recoverFromStartFailure(notifyAppState: true)
-                return false
-            }
-
-            if let startError {
-                VocaLogger.error(.audioEngine, "Failed to start audio engine: \(startError.localizedDescription)")
-                recoverFromStartFailure(notifyAppState: true)
-                return false
-            }
-            return true
+            return false
         }
     }
 
@@ -260,9 +344,10 @@ final class AudioEngine {
 
             let samples = capturedSamplesAndResetBuffer()
 
-            // Release the engine so we don't keep holding the system input
-            // route (and forcing AirPods into HFP) while idle.
-            releaseEngine()
+            // Keep the stopped engine briefly so rapid push-to-talk recordings
+            // don't cold-reacquire a silent input route, then release it so we
+            // don't keep forcing Bluetooth headsets into HFP while idle.
+            scheduleEngineRelease()
 
             return samples
         }
@@ -360,6 +445,54 @@ final class AudioEngine {
                 self?.onAudioDeviceChanged?()
             }
         }
+    }
+
+    static func shouldRetryStart(after error: Error, attempt: Int) -> Bool {
+        guard attempt == 1 else { return false }
+        return OSStatus(truncatingIfNeeded: (error as NSError).code) == kAudioHardwareNotRunningError
+    }
+
+    static func shouldIgnoreConfigurationChange(
+        isRecording: Bool,
+        engineIsRunning: Bool,
+        elapsedSinceRecordingStart: TimeInterval,
+        configuredInputDeviceID: AudioDeviceID?,
+        currentInputDeviceID: AudioDeviceID?,
+        recoveryWindow: TimeInterval = startupConfigurationChangeRecoveryWindow
+    ) -> Bool {
+        isRecording
+            && engineIsRunning
+            && elapsedSinceRecordingStart >= 0
+            && elapsedSinceRecordingStart <= recoveryWindow
+            && configuredInputDeviceID != nil
+            && currentInputDeviceID == configuredInputDeviceID
+    }
+
+    static func describeCoreAudioError(_ error: Error) -> String {
+        let nsError = error as NSError
+        var parts = [nsError.localizedDescription, "domain=\(nsError.domain)", "code=\(nsError.code)"]
+
+        if let fourCC = fourCharacterCode(forOSStatusCode: nsError.code) {
+            parts.append("'\(fourCC)'")
+        }
+
+        return parts.joined(separator: " ")
+    }
+
+    static func fourCharacterCode(forOSStatusCode code: Int) -> String? {
+        let value = UInt32(bitPattern: Int32(truncatingIfNeeded: code))
+        let bytes = [
+            UInt8((value >> 24) & 0xff),
+            UInt8((value >> 16) & 0xff),
+            UInt8((value >> 8) & 0xff),
+            UInt8(value & 0xff),
+        ]
+
+        guard bytes.allSatisfy({ $0 >= 32 && $0 <= 126 }) else {
+            return nil
+        }
+
+        return String(bytes: bytes, encoding: .ascii)
     }
 
     // MARK: - Audio Processing
@@ -490,22 +623,272 @@ final class AudioEngine {
 
     // MARK: - Audio Device Enumeration
 
-    /// List available audio input devices
+    /// List available audio input devices.
     static func availableInputDevices() -> [AudioDevice] {
-        let devices = AVCaptureDevice.DiscoverySession(
-            deviceTypes: [.builtInMicrophone, .externalUnknown],
-            mediaType: .audio,
-            position: .unspecified
-        ).devices
+        let defaultDeviceID = defaultInputAudioDeviceID()
 
-        let defaultDevice = AVCaptureDevice.default(for: .audio)
+        return inputAudioDeviceIDs().compactMap { deviceID in
+            guard let uid = audioDeviceUID(for: deviceID),
+                  let name = audioDeviceName(for: deviceID) else {
+                return nil
+            }
 
-        return devices.map { device in
-            AudioDevice(
-                id: device.uniqueID,
-                name: device.localizedName,
-                isDefault: device.uniqueID == defaultDevice?.uniqueID
+            return AudioDevice(
+                id: uid,
+                name: name,
+                isDefault: deviceID == defaultDeviceID,
+                sampleRate: audioDeviceSampleRate(for: deviceID),
+                channelCount: inputChannelCount(for: deviceID)
             )
+        }
+        .sorted { lhs, rhs in
+            if lhs.isDefault != rhs.isDefault { return lhs.isDefault }
+            return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+        }
+    }
+
+    /// Configure this engine's input unit before building the recording graph.
+    /// Setting CurrentDevice can asynchronously invalidate AVAudioEngine's formats,
+    /// so a real route change is allowed to settle and the graph is reset before
+    /// the tap's format is queried.
+    private func configureInputRoute(
+        preferredInputDeviceID: String?,
+        engine: AVAudioEngine,
+        inputNode: AVAudioInputNode
+    ) -> AudioDeviceID? {
+        let requestedUID = preferredInputDeviceID?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let requestedDeviceID = requestedUID.flatMap(Self.inputAudioDeviceID(forUID:))
+        let defaultDeviceID = Self.defaultInputAudioDeviceID()
+
+        if let requestedUID, !requestedUID.isEmpty, requestedDeviceID == nil {
+            VocaLogger.warning(.audioEngine, "Preferred input device unavailable, falling back to system default: \(requestedUID)")
+        }
+
+        guard let targetDeviceID = requestedDeviceID ?? defaultDeviceID else {
+            VocaLogger.warning(.audioEngine, "No input device is available")
+            return nil
+        }
+
+        guard let audioUnit = inputNode.audioUnit else {
+            VocaLogger.warning(.audioEngine, "Input node has no AudioUnit; unable to verify the requested input route")
+            return nil
+        }
+
+        let currentDeviceID = Self.currentInputDeviceID(for: audioUnit)
+        guard Self.shouldReconfigureInputDevice(
+            currentDeviceID: currentDeviceID,
+            targetDeviceID: targetDeviceID
+        ) else {
+            let deviceName = Self.audioDeviceName(for: targetDeviceID) ?? requestedUID ?? "system default"
+            VocaLogger.debug(.audioEngine, "Input device already configured: \(deviceName)")
+            return targetDeviceID
+        }
+
+        // Observe directly on Core Audio's posting queue. startRecording holds
+        // lifecycleQueue, so waiting for the normal handler would deadlock.
+        let routeChangeSignal = DispatchSemaphore(value: 0)
+        let observer = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange,
+            object: engine,
+            queue: nil
+        ) { _ in
+            routeChangeSignal.signal()
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+
+        var mutableDeviceID = targetDeviceID
+        let status = AudioUnitSetProperty(
+            audioUnit,
+            kAudioOutputUnitProperty_CurrentDevice,
+            kAudioUnitScope_Global,
+            0,
+            &mutableDeviceID,
+            UInt32(MemoryLayout<AudioDeviceID>.size)
+        )
+
+        guard status == noErr else {
+            VocaLogger.warning(.audioEngine, "Failed to set input device: OSStatus \(status)")
+            return nil
+        }
+
+        let deviceIDImmediatelyAfterSet = Self.currentInputDeviceID(for: audioUnit)
+        if deviceIDImmediatelyAfterSet != targetDeviceID {
+            VocaLogger.debug(.audioEngine, "Input route change is still pending after AudioUnitSetProperty")
+        }
+
+        let waitResult = routeChangeSignal.wait(timeout: .now() + Self.inputRouteConfigurationTimeout)
+        if waitResult == .timedOut {
+            VocaLogger.debug(.audioEngine, "No configuration notification received after input route change; rebuilding graph after timeout")
+        }
+
+        // Apple documents that configuration changes stop and uninitialize the
+        // engine while leaving connections with their previous formats. There is
+        // no tap yet, so reset now and query the new hardware format afterwards.
+        engine.stop()
+        engine.reset()
+
+        let deviceIDAfterReset = Self.currentInputDeviceID(for: audioUnit)
+        guard Self.shouldAcceptConfiguredInputRoute(
+            targetDeviceID: targetDeviceID,
+            deviceIDAfterReset: deviceIDAfterReset
+        ) else {
+            VocaLogger.warning(.audioEngine, "Core Audio did not apply the requested input device after rebuilding the graph")
+            return nil
+        }
+
+        let deviceName = Self.audioDeviceName(for: targetDeviceID) ?? requestedUID ?? "system default"
+        VocaLogger.info(.audioEngine, "Using input device: \(deviceName)")
+        return targetDeviceID
+    }
+
+    static func shouldReconfigureInputDevice(
+        currentDeviceID: AudioDeviceID?,
+        targetDeviceID: AudioDeviceID
+    ) -> Bool {
+        currentDeviceID != targetDeviceID
+    }
+
+    static func shouldAcceptConfiguredInputRoute(
+        targetDeviceID: AudioDeviceID,
+        deviceIDAfterReset: AudioDeviceID?
+    ) -> Bool {
+        deviceIDAfterReset == targetDeviceID
+    }
+
+    private static func currentInputDeviceID(for audioUnit: AudioUnit) -> AudioDeviceID? {
+        var deviceID = AudioDeviceID(kAudioObjectUnknown)
+        var dataSize = UInt32(MemoryLayout<AudioDeviceID>.size)
+        let status = AudioUnitGetProperty(
+            audioUnit,
+            kAudioOutputUnitProperty_CurrentDevice,
+            kAudioUnitScope_Global,
+            0,
+            &deviceID,
+            &dataSize
+        )
+
+        guard status == noErr, deviceID != AudioDeviceID(kAudioObjectUnknown) else {
+            return nil
+        }
+        return deviceID
+    }
+
+    private static func inputAudioDeviceID(forUID uid: String) -> AudioDeviceID? {
+        inputAudioDeviceIDs().first { audioDeviceUID(for: $0) == uid }
+    }
+
+    private static func inputAudioDeviceIDs() -> [AudioDeviceID] {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var dataSize: UInt32 = 0
+        let systemObjectID = AudioObjectID(kAudioObjectSystemObject)
+
+        guard AudioObjectGetPropertyDataSize(systemObjectID, &address, 0, nil, &dataSize) == noErr else {
+            VocaLogger.warning(.audioEngine, "Failed to read Core Audio device list size")
+            return []
+        }
+
+        let deviceCount = Int(dataSize) / MemoryLayout<AudioDeviceID>.size
+        guard deviceCount > 0 else { return [] }
+
+        var deviceIDs = [AudioDeviceID](repeating: AudioDeviceID(kAudioObjectUnknown), count: deviceCount)
+        let status = AudioObjectGetPropertyData(systemObjectID, &address, 0, nil, &dataSize, &deviceIDs)
+        guard status == noErr else {
+            VocaLogger.warning(.audioEngine, "Failed to read Core Audio device list: OSStatus \(status)")
+            return []
+        }
+
+        return deviceIDs.filter { inputChannelCount(for: $0) > 0 }
+    }
+
+    private static func defaultInputAudioDeviceID() -> AudioDeviceID? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultInputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var deviceID = AudioDeviceID(kAudioObjectUnknown)
+        var dataSize = UInt32(MemoryLayout<AudioDeviceID>.size)
+        let status = AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject),
+            &address,
+            0,
+            nil,
+            &dataSize,
+            &deviceID
+        )
+
+        guard status == noErr, deviceID != AudioDeviceID(kAudioObjectUnknown) else {
+            return nil
+        }
+        return deviceID
+    }
+
+    private static func audioDeviceUID(for deviceID: AudioDeviceID) -> String? {
+        stringProperty(kAudioDevicePropertyDeviceUID, for: deviceID)
+    }
+
+    private static func audioDeviceName(for deviceID: AudioDeviceID) -> String? {
+        stringProperty(kAudioObjectPropertyName, for: deviceID)
+    }
+
+    private static func stringProperty(_ selector: AudioObjectPropertySelector, for deviceID: AudioDeviceID) -> String? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: selector,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var value: Unmanaged<CFString>?
+        var dataSize = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+        let status = AudioObjectGetPropertyData(deviceID, &address, 0, nil, &dataSize, &value)
+
+        guard status == noErr, let value else { return nil }
+        return value.takeRetainedValue() as String
+    }
+
+    private static func audioDeviceSampleRate(for deviceID: AudioDeviceID) -> Double {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyNominalSampleRate,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var sampleRate = Float64(0)
+        var dataSize = UInt32(MemoryLayout<Float64>.size)
+        let status = AudioObjectGetPropertyData(deviceID, &address, 0, nil, &dataSize, &sampleRate)
+
+        guard status == noErr else { return 0 }
+        return sampleRate
+    }
+
+    private static func inputChannelCount(for deviceID: AudioDeviceID) -> Int {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyStreamConfiguration,
+            mScope: kAudioObjectPropertyScopeInput,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var dataSize: UInt32 = 0
+
+        guard AudioObjectGetPropertyDataSize(deviceID, &address, 0, nil, &dataSize) == noErr,
+              dataSize > 0 else {
+            return 0
+        }
+
+        let rawPointer = UnsafeMutableRawPointer.allocate(
+            byteCount: Int(dataSize),
+            alignment: MemoryLayout<AudioBufferList>.alignment
+        )
+        defer { rawPointer.deallocate() }
+
+        let bufferList = rawPointer.bindMemory(to: AudioBufferList.self, capacity: 1)
+        let status = AudioObjectGetPropertyData(deviceID, &address, 0, nil, &dataSize, bufferList)
+        guard status == noErr else { return 0 }
+
+        return UnsafeMutableAudioBufferListPointer(bufferList).reduce(0) { total, buffer in
+            total + Int(buffer.mNumberChannels)
         }
     }
 }
@@ -517,6 +900,8 @@ struct AudioDevice: Identifiable, Hashable {
     let id: String
     let name: String
     let isDefault: Bool
+    let sampleRate: Double
+    let channelCount: Int
 }
 
 // MARK: - AudioRecording Conformance

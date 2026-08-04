@@ -28,6 +28,11 @@ struct SettingsView: View {
                     Label("Models", systemImage: "brain")
                 }
 
+            StatsSettingsTab()
+                .tabItem {
+                    Label("Stats", systemImage: "chart.xyaxis.line")
+                }
+
             AudioSettingsTab()
                 .tabItem {
                     Label("Audio", systemImage: "waveform")
@@ -43,7 +48,7 @@ struct SettingsView: View {
                     Label("About", systemImage: "info.circle")
                 }
         }
-        .frame(width: 560, height: 520)
+        .frame(minWidth: 560, minHeight: 520)
     }
 }
 
@@ -149,6 +154,34 @@ struct GeneralSettingsTab: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+
+            // Custom Vocabulary
+            Section("Custom Vocabulary") {
+                TextEditor(text: $appState.customVocabulary)
+                    .font(.body)
+                    .frame(minHeight: 90)
+                    .overlay(alignment: .topLeading) {
+                        if appState.customVocabulary.isEmpty {
+                            Text("kubectl, PostgreSQL, nginx, Grafana")
+                                .foregroundStyle(.tertiary)
+                                .padding(.top, 8)
+                                .padding(.leading, 5)
+                                .allowsHitTesting(false)
+                        }
+                    }
+
+                let count = WhisperService.vocabularyTerms(from: appState.customVocabulary).count
+                Text(count == 0
+                    ? "Add names, jargon, or proper nouns (one per line, or comma-separated) that get mis-transcribed. VocaMac hints these to the model so it spells them right."
+                    : "\(count) term\(count == 1 ? "" : "s"). Keep the list short, since the model can only use the first 50 to 100 words as a hint.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Text("For best results, enter terms in the language you dictate and set a matching Transcription Language above. In Auto-detect, the terms can also nudge which language VocaMac picks.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("Behavior") {
                 Toggle("Launch at Login", isOn: Binding(
                     get: { appState.launchAtLogin },
@@ -491,6 +524,30 @@ struct ModelSettingsTab: View {
                     }
                 }
 
+                if appState.appStatus == .error, let errorMessage = appState.errorMessage {
+                    GroupBox {
+                        HStack(alignment: .top, spacing: 8) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.orange)
+                            Text(errorMessage)
+                                .font(.caption)
+                                .foregroundStyle(.primary)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Spacer()
+                            Button {
+                                appState.errorMessage = nil
+                                appState.appStatus = .idle
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(.secondary)
+                            .help("Dismiss")
+                        }
+                        .padding(4)
+                    }
+                }
+
                 // Model list
                 GroupBox {
                     VStack(alignment: .leading, spacing: 0) {
@@ -502,7 +559,7 @@ struct ModelSettingsTab: View {
                         ForEach(appState.availableModels) { model in
                             ModelRow(model: model, appState: appState)
 
-                            if model.size != ModelSize.allCases.last {
+                            if model.id != appState.availableModels.last?.id {
                                 Divider()
                                     .padding(.horizontal, 4)
                             }
@@ -521,10 +578,7 @@ struct ModelSettingsTab: View {
                 }
 
                 if let recommended = appState.deviceRecommendedModel,
-                   let recommendedSize = ModelSize.allCases.first(where: { size in
-                       let prefix = "openai_whisper-\(size.rawValue)"
-                       return recommended == prefix || recommended.hasPrefix(prefix + "-")
-                   }) {
+                   let recommendedSize = appState.modelManager.modelSize(from: recommended) {
                     HStack {
                         Image(systemName: "sparkles")
                             .foregroundStyle(.blue)
@@ -595,10 +649,7 @@ struct ModelRow: View {
 
                     if model.isSupported,
                        let recommended = appState.deviceRecommendedModel {
-                        // Use exact prefix boundary matching to avoid cross-model
-                        // false positives (e.g. "large-v3" matching "large-v3_turbo")
-                        let prefix = "openai_whisper-\(model.size.rawValue)"
-                        if recommended == prefix || recommended.hasPrefix(prefix + "-") {
+                        if appState.modelManager.modelSize(from: recommended) == model.size {
                             Text("Recommended")
                                 .font(.caption2)
                                 .padding(.horizontal, 6)
@@ -617,7 +668,7 @@ struct ModelRow: View {
                             .background(.orange.opacity(0.2))
                             .foregroundStyle(.orange)
                             .cornerRadius(4)
-                            .help("WhisperKit hasn't verified this model on your chip family. Your hardware can likely run it — use Load Anyway to try.")
+                            .help("WhisperKit hasn't verified this model on your chip family. It may fail to load, or it may run slower than tuned models.")
                     }
                 }
 
@@ -714,7 +765,7 @@ struct ModelRow: View {
                 }
             }
         } message: {
-            Text("WhisperKit hasn't verified this model on your chip family. It will likely work but may be slower than tuned models.")
+            Text("WhisperKit hasn't verified this model on your chip family. It may fail to load, or it may run slower than tuned models.")
         }
     }
 }
@@ -784,6 +835,19 @@ struct AudioSettingsTab: View {
             }
 
             Section("Input Device") {
+                Picker("Microphone", selection: $appState.selectedAudioDeviceID) {
+                    Text("System Default").tag("")
+                    if selectedAudioDeviceIsUnavailable {
+                        Text("\(selectedAudioDeviceDisplayName) (Unavailable)").tag(appState.selectedAudioDeviceID)
+                    }
+                    ForEach(audioDevices) { device in
+                        Text(device.name).tag(device.id)
+                    }
+                }
+                .onChange(of: appState.selectedAudioDeviceID) { _ in
+                    syncSelectedAudioDeviceName()
+                }
+
                 if audioDevices.isEmpty {
                     HStack {
                         Image(systemName: "exclamationmark.triangle")
@@ -791,42 +855,74 @@ struct AudioSettingsTab: View {
                         Text("No audio input devices found")
                             .foregroundStyle(.secondary)
                     }
-                } else {
-                    ForEach(audioDevices) { device in
-                        HStack {
-                            Image(systemName: device.isDefault ? "mic.circle.fill" : "mic.circle")
-                                .foregroundStyle(device.isDefault ? .blue : .secondary)
-                            VStack(alignment: .leading) {
-                                Text(device.name)
-                                    .font(.callout)
-                                if device.isDefault {
-                                    Text("System Default")
-                                        .font(.caption2)
-                                        .foregroundStyle(.blue)
-                                }
-                            }
-                            Spacer()
-                            if device.isDefault {
-                                Image(systemName: "checkmark")
-                                    .foregroundStyle(.blue)
-                            }
-                        }
+                } else if selectedAudioDeviceIsUnavailable {
+                    HStack(alignment: .top) {
+                        Image(systemName: "exclamationmark.triangle")
+                            .foregroundStyle(.orange)
+                        Text("\(selectedAudioDeviceDisplayName) is unavailable. VocaMac will use System Default until it reconnects.")
+                            .foregroundStyle(.secondary)
                     }
+                } else if let selectedAudioDevice {
+                    HStack {
+                        Image(systemName: "mic.circle.fill")
+                            .foregroundStyle(.blue)
+                        Text("VocaMac will record from \(selectedAudioDevice.name) without changing macOS' system default input.")
+                            .foregroundStyle(.secondary)
+                    }
+                } else {
+                    Text(systemDefaultInputDescription)
+                        .foregroundStyle(.secondary)
                 }
 
                 Button("Refresh Devices") {
-                    audioDevices = AudioEngine.availableInputDevices()
+                    refreshAudioDevices()
                 }
                 .controlSize(.small)
 
-                Text("VocaMac uses your system default input device. Change it in System Settings → Sound → Input.")
+                Text("Choose System Default to follow macOS, or pin VocaMac to a specific microphone.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
         .onAppear {
-            audioDevices = AudioEngine.availableInputDevices()
+            refreshAudioDevices()
+        }
+    }
+
+    private var selectedAudioDevice: AudioDevice? {
+        guard !appState.selectedAudioDeviceID.isEmpty else { return nil }
+        return audioDevices.first { $0.id == appState.selectedAudioDeviceID }
+    }
+
+    private var selectedAudioDeviceIsUnavailable: Bool {
+        !appState.selectedAudioDeviceID.isEmpty && selectedAudioDevice == nil
+    }
+
+    private var selectedAudioDeviceDisplayName: String {
+        appState.selectedAudioDeviceName.isEmpty ? "Selected microphone" : appState.selectedAudioDeviceName
+    }
+
+    private var systemDefaultInputDescription: String {
+        if let defaultDevice = audioDevices.first(where: { $0.isDefault }) {
+            return "VocaMac will follow macOS' system default input: \(defaultDevice.name)."
+        }
+        return "VocaMac will follow macOS' system default input."
+    }
+
+    private func refreshAudioDevices() {
+        audioDevices = AudioEngine.availableInputDevices()
+        syncSelectedAudioDeviceName()
+    }
+
+    private func syncSelectedAudioDeviceName() {
+        guard !appState.selectedAudioDeviceID.isEmpty else {
+            appState.selectedAudioDeviceName = ""
+            return
+        }
+
+        if let selectedAudioDevice {
+            appState.selectedAudioDeviceName = selectedAudioDevice.name
         }
     }
 
@@ -871,9 +967,12 @@ struct AboutTab: View {
             Button {
                 Task { @MainActor in
                     await appState.updateChecker.checkForUpdates()
-                    if case .updateAvailable(let info) = appState.updateChecker.updateState {
+                    switch appState.updateChecker.updateState {
+                    case .updateAvailable(let info), .updateAvailableViaHomebrew(let info, _):
                         updateInfoForSheet = info
                         showingUpdateSheet = true
+                    default:
+                        break
                     }
                 }
             } label: {
@@ -981,6 +1080,8 @@ struct AboutTab: View {
             return "You are on the latest version."
         case .updateAvailable(let info):
             return "Update available: \(info.tagName)"
+        case .updateAvailableViaHomebrew(_, let install):
+            return "Update available via Homebrew. Run: \(install.upgradeCommand)"
         case .error(let message):
             return message
         case .downloading(let progress, _, _, _):

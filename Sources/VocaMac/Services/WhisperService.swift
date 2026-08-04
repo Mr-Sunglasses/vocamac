@@ -136,11 +136,14 @@ final class WhisperService: @unchecked Sendable {
     ///   - audioData: Array of Float32 PCM samples at 16kHz mono
     ///   - language: ISO 639-1 language code (e.g., "en"), or nil for auto-detection
     ///   - translate: Whether to translate to English (if true) or transcribe as-is (if false)
+    ///   - vocabulary: Custom terms (newline/comma separated) to bias transcription toward,
+    ///     e.g. proper nouns and jargon like names. Empty string disables it.
     /// - Returns: VocaTranscription with the transcribed text and metadata
     func transcribe(
         audioData: [Float],
         language: String? = nil,
-        translate: Bool = false
+        translate: Bool = false,
+        vocabulary: String = ""
     ) async throws -> VocaTranscription {
         guard let kit = whisperKit else {
             throw WhisperError.modelNotLoaded
@@ -155,32 +158,55 @@ final class WhisperService: @unchecked Sendable {
 
         let startTime = CFAbsoluteTimeGetCurrent()
 
+        // Encode the user's custom vocabulary into conditioning tokens so the
+        // model biases toward their proper nouns / jargon (e.g. names like
+        // "Namrata"). WhisperKit only applies promptTokens when usePrefillPrompt
+        // is true, so we force it on whenever vocabulary is present — otherwise
+        // the terms would be silently ignored in auto-detect mode.
+        let promptTokens = Self.promptTokens(for: vocabulary, tokenizer: kit.tokenizer)
+
         // Configure decoding options — optimized for low latency dictation
-        let options = DecodingOptions(
+        var options = DecodingOptions(
             task: translate ? .translate : .transcribe,
             language: language,
             temperature: 0.0,
             temperatureFallbackCount: 0,  // No fallback for speed
-            usePrefillPrompt: language != nil,
+            usePrefillPrompt: language != nil || promptTokens != nil,
             detectLanguage: language == nil,
             wordTimestamps: false,
+            promptTokens: promptTokens,
             chunkingStrategy: nil  // No chunking for short dictation clips
         )
 
         do {
-            let results = try await kit.transcribe(
+            var results = try await kit.transcribe(
                 audioArray: audioData,
                 decodeOptions: options
             )
 
-            let elapsed = CFAbsoluteTimeGetCurrent() - startTime
-
             // Concatenate all segment texts
-            let rawText = results.map { $0.text }.joined(separator: " ")
+            var rawText = results.map { $0.text }.joined(separator: " ")
 
             // Filter out WhisperKit hallucination tokens that should not be
             // exposed to the user (e.g. "[BLANK_AUDIO]", "(blank audio)", etc.)
-            let fullText = Self.filterHallucinationTokens(rawText)
+            var fullText = Self.filterHallucinationTokens(rawText)
+
+            // WhisperKit can exit during prompt prefill and return no text for
+            // some models. Preserve vocabulary bias normally, but recover the
+            // dictation by retrying once without custom prompt tokens.
+            if Self.shouldRetryWithoutVocabulary(rawText: rawText, promptTokens: promptTokens) {
+                VocaLogger.warning(
+                    .whisperService,
+                    "Prompted transcription was empty for \(loadedModelName ?? "unknown model"); retrying without custom vocabulary"
+                )
+                options.promptTokens = nil
+                options.usePrefillPrompt = language != nil
+                results = try await kit.transcribe(audioArray: audioData, decodeOptions: options)
+                rawText = results.map { $0.text }.joined(separator: " ")
+                fullText = Self.filterHallucinationTokens(rawText)
+            }
+
+            let elapsed = CFAbsoluteTimeGetCurrent() - startTime
 
             // Get detected language from first result
             let detectedLanguage = results.first?.language ?? language ?? "en"
@@ -252,9 +278,42 @@ final class WhisperService: @unchecked Sendable {
         return cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    // MARK: - Custom Vocabulary
+
+    /// Parse a raw vocabulary string into individual terms. Terms are separated
+    /// by newlines or commas; surrounding whitespace and blank entries are dropped.
+    static func vocabularyTerms(from vocabulary: String) -> [String] {
+        vocabulary
+            .split(whereSeparator: { $0 == "\n" || $0 == "," })
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+    }
+
+    static func shouldRetryWithoutVocabulary(rawText: String, promptTokens: [Int]?) -> Bool {
+        promptTokens != nil && rawText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// Encode custom vocabulary into WhisperKit conditioning tokens.
+    /// Returns nil when there are no terms or the tokenizer isn't ready yet.
+    /// Framed as a "Glossary:" prompt, which nudges Whisper to treat the terms
+    /// as domain vocabulary without confusing it about the audio. WhisperKit
+    /// trims to its own token budget and strips special tokens internally.
+    private static func promptTokens(for vocabulary: String, tokenizer: WhisperTokenizer?) -> [Int]? {
+        guard let tokenizer else { return nil }
+        let terms = vocabularyTerms(from: vocabulary)
+        guard !terms.isEmpty else { return nil }
+        let tokens = tokenizer.encode(text: "Glossary: " + terms.joined(separator: ", "))
+        return tokens.isEmpty ? nil : tokens
+    }
+
     /// Map a model name string to our ModelSize enum
     private func modelSizeFromName(_ name: String) -> ModelSize {
         let lowered = name.lowercased()
+        if lowered.contains("v20240930") && lowered.contains("turbo") { return .largeV3LatestTurbo }
+        if lowered.contains("v20240930") { return .largeV3Latest }
+        if lowered.contains("distil") && lowered.contains("turbo") { return .distilLargeV3TurboCompact }
+        if lowered.contains("distil") { return .distilLargeV3Compact }
+        if lowered.contains("large") && lowered.contains("turbo") { return .largeV3Turbo }
         if lowered.contains("large") { return .largeV3 }
         if lowered.contains("medium") { return .medium }
         if lowered.contains("small") { return .small }

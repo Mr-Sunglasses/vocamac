@@ -34,6 +34,44 @@ final class AppStateRecordingTests: XCTestCase {
                      "Error message should mention microphone")
     }
 
+    func testStartRecordingDoesNotBlockMainActorDuringAudioStart() async throws {
+        let (appState, mocks) = AppState.makeTestState()
+        mocks.audioEngine.startRecordingDelay = 0.3
+
+        let start = Date()
+        let task = Task {
+            await appState.startRecording()
+        }
+
+        await Task.yield()
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        XCTAssertLessThan(Date().timeIntervalSince(start), 0.3,
+                          "Core Audio startup should not block the main actor")
+
+        await task.value
+        XCTAssertEqual(appState.appStatus, .recording)
+    }
+
+    func testStartSoundIsNotPlayedIfRecordingStopsDuringAudioStart() async throws {
+        let (appState, mocks) = AppState.makeTestState()
+        mocks.audioEngine.startRecordingDelay = 0.3
+
+        let task = Task {
+            await appState.startRecording()
+        }
+
+        await Task.yield()
+        try await Task.sleep(nanoseconds: 50_000_000)
+        await appState.stopRecordingAndTranscribe()
+        await task.value
+
+        XCTAssertEqual(mocks.soundManager.startSoundCallCount, 0)
+        XCTAssertEqual(mocks.soundManager.stopSoundCallCount, 1)
+        XCTAssertEqual(appState.appStatus, .idle)
+        XCTAssertEqual(mocks.audioEngine.forceResetCallCount, 0)
+    }
+
     func testStartRecordingInProcessingStateForceRecovers() async {
         let (appState, _) = AppState.makeTestState()
         appState.appStatus = .processing
@@ -71,14 +109,34 @@ final class AppStateRecordingTests: XCTestCase {
     }
 
     func testStopRecordingWithEmptyAudioReturnsToIdle() async {
-        let (appState, _) = AppState.makeTestState()
+        let (appState, mocks) = AppState.makeTestState()
         appState.isRecording = true
         appState.appStatus = .recording
 
         await appState.stopRecordingAndTranscribe()
 
-        XCTAssertEqual(appState.appStatus, .idle,
-                      "Should return to idle when audio data is empty")
+        XCTAssertEqual(appState.appStatus, .idle)
+        XCTAssertNil(appState.errorMessage)
+        XCTAssertNil(mocks.whisperService.lastTranscribedAudioData)
+        XCTAssertEqual(mocks.textInjector.injectCallCount, 0)
+        XCTAssertEqual(mocks.audioEngine.forceResetCallCount, 0,
+                       "Cancelling before the first buffer should not be reported as a broken route")
+    }
+
+    func testStopRecordingWithSilentAudioShowsInputError() async {
+        let (appState, mocks) = AppState.makeTestState()
+        mocks.audioEngine.stopRecordingResult = Array(repeating: 0, count: 16_000)
+        appState.isRecording = true
+        appState.appStatus = .recording
+
+        await appState.stopRecordingAndTranscribe()
+
+        XCTAssertEqual(appState.appStatus, .error)
+        XCTAssertTrue(appState.errorMessage?.contains("selected microphone") == true)
+        XCTAssertNil(mocks.whisperService.lastTranscribedAudioData)
+        XCTAssertEqual(mocks.textInjector.injectCallCount, 0)
+        XCTAssertEqual(mocks.audioEngine.forceResetCallCount, 1,
+                       "Silent capture should force-reset the engine so a dead route is not kept warm")
     }
 
     func testSelectedModelSizeDefault() {
@@ -121,6 +179,15 @@ final class AppStateRecordingTests: XCTestCase {
 
         XCTAssertEqual(appState.selectedLanguage, "auto",
                       "Default language should be 'auto'")
+    }
+
+    func testSelectedAudioDeviceDefaultsToSystemDefault() {
+        let (appState, _) = AppState.makeTestState()
+
+        XCTAssertEqual(appState.selectedAudioDeviceID, "",
+                      "Default audio input should follow the system default")
+        XCTAssertEqual(appState.selectedAudioDeviceName, "",
+                      "No device name should be persisted for system default")
     }
 
     func testActivationModeDefault() {
@@ -189,6 +256,26 @@ final class AppStateRecordingTests: XCTestCase {
         appState.triggerStartupIfNeeded()
         appState.triggerStartupIfNeeded()
         appState.triggerStartupIfNeeded()
+    }
+
+    func testStartRecordingPassesNilDeviceForSystemDefault() async {
+        let (appState, mocks) = AppState.makeTestState()
+        appState.selectedAudioDeviceID = ""
+
+        await appState.startRecording()
+
+        XCTAssertNil(mocks.audioEngine.lastPreferredInputDeviceID,
+                     "System Default should not pass a preferred input device")
+    }
+
+    func testStartRecordingPassesSelectedAudioDeviceID() async {
+        let (appState, mocks) = AppState.makeTestState()
+        appState.selectedAudioDeviceID = "coreaudio-device-uid"
+
+        await appState.startRecording()
+
+        XCTAssertEqual(mocks.audioEngine.lastPreferredInputDeviceID, "coreaudio-device-uid",
+                       "Selected audio device ID should be forwarded to AudioEngine")
     }
 }
 

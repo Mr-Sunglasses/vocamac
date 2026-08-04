@@ -292,6 +292,7 @@ struct UserSettings {
     var silenceDuration: Double = 2.0           // seconds of silence to auto-stop
     var maxRecordingDuration: Int = 60          // seconds
     var selectedAudioDeviceID: String?          // nil = system default
+    var selectedAudioDeviceName: String?        // last known display name for unavailable-device messaging
 
     // Model
     var selectedModelSize: ModelSize = .tiny
@@ -397,8 +398,10 @@ enum UpdateState: Equatable {
     case idle
     case checking
     case updateAvailable(UpdateInfo)
+    case updateAvailableViaHomebrew(info: UpdateInfo, install: HomebrewInstall)
     case upToDate
-    case downloading(progress: Double)
+    case downloading(progress: Double, bytesDownloaded: Int64, totalBytes: Int64, estimatedSecondsRemaining: Double)
+    case verifying
     case readyToInstall(dmgPath: URL)
     case error(String)
 }

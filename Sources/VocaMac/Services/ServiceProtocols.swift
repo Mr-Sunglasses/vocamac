@@ -17,7 +17,12 @@ protocol AudioRecording: AnyObject {
     var onAudioDeviceChanged: (() -> Void)? { get set }
 
     @discardableResult
-    func startRecording(silenceThreshold: Float, silenceDuration: Double, maxDuration: TimeInterval) -> Bool
+    func startRecording(
+        silenceThreshold: Float,
+        silenceDuration: Double,
+        maxDuration: TimeInterval,
+        preferredInputDeviceID: String?
+    ) -> Bool
     @discardableResult func stopRecording() -> [Float]
     func forceReset()
     func checkPermissionStatus() -> PermissionStatus
@@ -124,7 +129,7 @@ extension ModelManaging {
 protocol SpeechTranscribing: AnyObject {
     var loadedModelName: String? { get }
     var isModelLoaded: Bool { get }
-    func transcribe(audioData: [Float], language: String?, translate: Bool) async throws -> VocaTranscription
+    func transcribe(audioData: [Float], language: String?, translate: Bool, vocabulary: String) async throws -> VocaTranscription
     func _loadModel(name: String?, folder: URL?, onPhaseChange: ((String) -> Void)?) async throws
 }
 
@@ -144,4 +149,14 @@ protocol TextInjecting: AnyObject {
 
 protocol SnippetExpanding: AnyObject {
     func expand(in text: String, using snippets: [Snippet]) -> String
+}
+
+// MARK: - StatsManaging
+
+@MainActor
+protocol StatsManaging: AnyObject {
+    var stats: UserStats { get }
+    var objectWillChangePublisher: AnyPublisher<Void, Never> { get }
+    func recordTranscription(_ transcription: VocaTranscription)
+    func resetStats()
 }

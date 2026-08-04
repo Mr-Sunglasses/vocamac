@@ -1,5 +1,7 @@
 # VocaMac Homebrew Distribution Guide
 
+> **🍺 Homebrew is the recommended way to install VocaMac.** See the [README](../README.md#-quick-start) for the full installation options.
+
 ## Overview
 
 VocaMac is distributed via Homebrew as a **cask**, not a formula. This distinction matters:
@@ -7,13 +9,14 @@ VocaMac is distributed via Homebrew as a **cask**, not a formula. This distincti
 - **Formula** — for command-line tools and libraries built from source
 - **Cask** — for pre-built macOS applications distributed as binaries (`.app`, `.dmg`)
 
-Since VocaMac is a native macOS `.app` distributed as a signed and notarized DMG via GitHub Releases, a cask is the correct packaging format. Users get the exact same binary as the manual download, installed with a single command.
+Since VocaMac is a native macOS `.app` primarily distributed via Homebrew (with DMG downloads also available via GitHub Releases), a cask is the correct packaging format.
 
 ## Quick Start (For Users)
 
 ```bash
 # Install
 brew tap jatinkrmalik/vocamac
+brew trust jatinkrmalik/vocamac
 brew install --cask vocamac
 
 # Upgrade to latest version
@@ -26,11 +29,15 @@ brew untap jatinkrmalik/vocamac
 
 After installation, VocaMac appears in `/Applications/VocaMac.app`. Launch it from Spotlight or the Applications folder.
 
+`brew trust jatinkrmalik/vocamac` trusts the whole VocaMac tap. This is intentional: the stable and nightly casks conflict with each other, so Homebrew may load both cask definitions while resolving an install.
+
 ## Nightly Builds
 
 A nightly cask is also available, built daily from the latest `main` branch:
 
 ```bash
+brew tap jatinkrmalik/vocamac
+brew trust jatinkrmalik/vocamac
 brew install --cask vocamac-nightly
 ```
 
@@ -40,6 +47,7 @@ The nightly cask uses `version :latest` and `sha256 :no_check` because the DMG c
 
 ```bash
 brew uninstall --cask vocamac
+brew trust jatinkrmalik/vocamac
 brew install --cask vocamac-nightly
 ```
 
@@ -75,17 +83,26 @@ The cask lives in a custom tap repository: `jatinkrmalik/homebrew-vocamac`.
    git push origin main
    ```
 
-Users can then install with `brew tap jatinkrmalik/vocamac && brew install --cask vocamac`.
+Users can then install with:
+
+```bash
+brew tap jatinkrmalik/vocamac
+brew trust jatinkrmalik/vocamac
+brew install --cask vocamac
+```
 
 ## Testing Locally
 
-Before pushing a cask update to the tap, test it locally against a real DMG:
+Before pushing a cask update to the tap, test it from a tap checkout against a real DMG. Homebrew 6 rejects loose cask files outside a tap, so copy the cask into a local tap checkout first:
 
 ```bash
-brew install --cask ./homebrew/Casks/vocamac.rb
+brew tap jatinkrmalik/vocamac
+cp homebrew/Casks/vocamac.rb "$(brew --repository jatinkrmalik/vocamac)/Casks/vocamac.rb"
+brew trust jatinkrmalik/vocamac
+brew install --cask vocamac
 ```
 
-This installs the cask directly from the file path, bypassing the tap. It requires a real DMG to exist at the URL specified in the cask (i.e., a published GitHub Release).
+This installs the cask from the local tap checkout. It requires a real DMG to exist at the URL specified in the cask (i.e., a published GitHub Release).
 
 To verify the installation:
 
@@ -99,6 +116,8 @@ To uninstall after testing:
 ```bash
 brew uninstall --cask vocamac
 ```
+
+Then restore or commit the tap checkout changes, depending on whether the test was for a local-only change or a real tap update.
 
 ## Manual Cask Update
 
@@ -190,6 +209,27 @@ zap trash: [
 
 This is useful for a clean reinstall or when troubleshooting. A plain `brew uninstall --cask vocamac` only removes the `.app` bundle and leaves user data intact.
 
+## In-App Update Behavior
+
+When VocaMac is installed via Homebrew Cask, the built-in update checker detects the Homebrew installation and disables in-app DMG downloads. Instead of showing a **"Download & Install"** button, the update banner and About tab display a Homebrew-specific message:
+
+> Updates are managed by Homebrew. Run: `brew upgrade --cask vocamac`
+
+Nightly users see the nightly token instead:
+
+> Updates are managed by Homebrew. Run: `brew upgrade --cask vocamac-nightly`
+
+### How Detection Works
+
+Homebrew moves the launched app into the configured app directory, usually `/Applications/VocaMac.app`, and keeps cask metadata under the Homebrew prefix. VocaMac checks standard Apple Silicon and Intel Caskroom roots for the supported cask tokens (`vocamac` and `vocamac-nightly`), requires a Homebrew install receipt, and verifies that the cask's staged `VocaMac.app` entry resolves back to the running app bundle.
+
+| Installation Method | Update Behavior |
+|---|---|
+| **DMG (manual)** | In-app download, SHA-256 verification, open DMG |
+| **Homebrew Cask** | Shows the matching Homebrew upgrade command; no in-app download |
+
+This prevents conflicts between Homebrew's version management and the app's own update mechanism. Always use `brew upgrade --cask vocamac` or `brew upgrade --cask vocamac-nightly` to update a Homebrew-installed copy of VocaMac.
+
 ## Troubleshooting
 
 ### Cask install fails with "SHA256 mismatch"
@@ -205,6 +245,18 @@ A previous installation exists at `/Applications/VocaMac.app`.
 **Fix:** Remove the existing app first:
 ```bash
 rm -rf /Applications/VocaMac.app
+brew trust jatinkrmalik/vocamac
+brew install --cask vocamac
+```
+
+### Homebrew refuses to load the cask from an untrusted tap
+
+Homebrew 6 requires explicit trust for casks from third-party taps. Trust the VocaMac tap rather than only one cask, because the stable and nightly casks declare `conflicts_with` and Homebrew may load the other cask while resolving an install.
+
+**Fix:** Trust the VocaMac tap, then install again:
+
+```bash
+brew trust jatinkrmalik/vocamac
 brew install --cask vocamac
 ```
 
