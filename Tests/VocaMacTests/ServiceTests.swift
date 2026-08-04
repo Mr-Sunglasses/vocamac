@@ -584,7 +584,7 @@ final class AudioEngineForceResetTests: XCTestCase {
             "stopRecording after forceReset should return empty (buffer was cleared)")
     }
 
-    func testForceResetAllowsNewRecording() {
+    func testForceResetAllowsNewRecording() throws {
         let engine = AudioEngine()
 
         engine.startRecording(
@@ -609,6 +609,15 @@ final class AudioEngineForceResetTests: XCTestCase {
         wait(for: [expectation], timeout: 2.0)
 
         let samples = engine.stopRecording()
+
+        // Same caveat as testAudioBufferNotEmptyAfterRecording: a virtual
+        // audio device can report isCurrentlyRecording = true and still
+        // produce no samples, so the check above is not enough on its own.
+        try XCTSkipIf(
+            samples.isEmpty && ProcessInfo.processInfo.environment["CI"] != nil,
+            "Virtual audio device started but produced no samples (expected on some CI runners)"
+        )
+
         XCTAssertFalse(samples.isEmpty,
             "Should be able to record new audio after force reset")
     }
