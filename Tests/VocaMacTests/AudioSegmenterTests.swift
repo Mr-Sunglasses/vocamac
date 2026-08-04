@@ -70,6 +70,24 @@ final class AudioSegmenterTests: XCTestCase {
         XCTAssertLessThan(firstLength, 7.6, "cut after the pause would clip the next phrase")
     }
 
+    func testPrefersALongPauseOverABrieferDip() {
+        // A stop consonant gives a frame or two of near-silence; a gap
+        // between phrases runs much longer. Cutting on the short dip would
+        // split a word, so the longer pause wins even though the dip sits
+        // closer to the limit. Both are inside the search window, which
+        // reaches back 4s from the 8s limit.
+        let audio = tone(seconds: 5.0)
+            + silence(seconds: 0.5)     // real pause at 5.0s
+            + tone(seconds: 1.4)
+            + silence(seconds: 0.04)    // brief dip at 6.9s
+            + tone(seconds: 10)
+        let segments = AudioSegmenter.segment(audio, maxSeconds: 8)
+
+        let firstLength = Double(segments[0].count) / Double(sampleRate)
+        XCTAssertGreaterThan(firstLength, 4.9, "cut before the pause clips speech")
+        XCTAssertLessThan(firstLength, 5.6, "cut should land in the long pause, not the brief dip")
+    }
+
     func testContinuousSpeechStillTerminates() {
         // No pause anywhere: the segmenter must still make progress rather
         // than loop or emit empty ranges.
