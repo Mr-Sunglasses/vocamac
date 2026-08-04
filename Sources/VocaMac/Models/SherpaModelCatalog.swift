@@ -38,6 +38,23 @@ struct SherpaModelSpec: Sendable {
     /// Token table file, relative to the model directory
     let tokensFile = "tokens.txt"
 
+    /// Longest audio, in seconds, that a single decode should be given.
+    ///
+    /// These are offline models that consume an utterance in one pass, and
+    /// they degrade past a certain length rather than chunking internally the
+    /// way Whisper and Parakeet do. Measured on Apple Silicon: Moonshine
+    /// returns nothing at all beyond ~8s, and SenseVoice starts dropping
+    /// characters, while the NeMo models hold up much longer. sherpa-onnx's
+    /// own examples segment audio before decoding for the same reason.
+    var maxSegmentSeconds: Double {
+        switch kind {
+        case .moonshine:  return 8
+        case .senseVoice: return 8
+        case .nemoCtc:    return 20
+        case .canary:     return 20
+        }
+    }
+
     /// All files that must exist for the model to count as downloaded,
     /// relative to the model directory.
     var requiredFiles: [String] {
@@ -88,9 +105,14 @@ enum SherpaModelCatalog {
                 mergedDecoder: "decoder_model_merged.ort"
             )
         ),
+        // Pinned to the 2024-07-17 build. The newer 2025-09-09 export decodes
+        // to mangled text against the sherpa-onnx runtime pinned in
+        // Package.swift ("ODAY WNT TO REVIEW" for "today I want to review"),
+        // dropping characters at every length. Revisit when the runtime pin
+        // moves; verify transcription before switching builds.
         spec(
             .senseVoiceSmall,
-            directory: "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09",
+            directory: "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17",
             kind: .senseVoice(model: "model.int8.onnx")
         ),
         spec(

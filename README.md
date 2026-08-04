@@ -290,9 +290,11 @@ Community models via [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx). These
 |-------|------|----------|
 | **Moonshine v2 Tiny** | ~60 MB | Very low-RAM Macs, English |
 | **Moonshine v2 Base** | ~190 MB | Low-RAM Macs, English |
-| **SenseVoice** | ~250 MB | Chinese, Japanese, Korean, Cantonese, English |
+| **SenseVoice** | ~240 MB | Chinese, Japanese, Korean, Cantonese, English |
 | **GigaAM v3** | ~270 MB | Russian, with punctuation |
 | **Canary 180M Flash** | ~320 MB | English, Spanish, German, French |
+
+Recordings longer than a model's single-pass limit are split at natural pauses and decoded segment by segment, since these models — unlike Whisper and Parakeet — do not chunk internally.
 
 Models download automatically on first use and are cached locally — Whisper and Parakeet from [HuggingFace](https://huggingface.co/argmaxinc/whisperkit-coreml), the specialized models from sherpa-onnx's model releases.
 

@@ -225,9 +225,39 @@ final class SherpaService: @unchecked Sendable {
 
         let startTime = CFAbsoluteTimeGetCurrent()
 
+        // These models decode an utterance in one pass and degrade past a
+        // certain length — Moonshine returns nothing at all — so anything
+        // longer is split at pauses and decoded segment by segment.
+        let maxSeconds = SherpaModelCatalog.spec(for: size)?.maxSegmentSeconds
+        let segments: [[Float]]
+        if let maxSeconds, audioLengthSeconds > maxSeconds {
+            segments = AudioSegmenter.segment(audioData, maxSeconds: maxSeconds)
+            VocaLogger.info(
+                .sherpaService,
+                "Audio exceeds \(String(format: "%.0f", maxSeconds))s for \(size.rawValue) — split into \(segments.count) segments"
+            )
+        } else {
+            segments = [audioData]
+        }
+
         let decoded: (text: String, lang: String)? = await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-                continuation.resume(returning: self?.decodeLocked(samples: audioData))
+                guard let self else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                var pieces: [String] = []
+                var detected = ""
+                for segment in segments {
+                    guard let result = self.decodeLocked(samples: segment) else {
+                        continuation.resume(returning: nil)
+                        return
+                    }
+                    let piece = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !piece.isEmpty { pieces.append(piece) }
+                    if detected.isEmpty { detected = result.lang }
+                }
+                continuation.resume(returning: (pieces.joined(separator: " "), detected))
             }
         }
 

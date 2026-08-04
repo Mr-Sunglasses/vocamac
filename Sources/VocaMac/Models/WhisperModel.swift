@@ -160,7 +160,7 @@ enum ModelSize: String, CaseIterable, Codable, Identifiable {
         case .appleSpeech:               return 0
         case .moonshineTiny:             return 60_000_000
         case .moonshineBase:             return 190_000_000
-        case .senseVoiceSmall:           return 250_000_000
+        case .senseVoiceSmall:           return 240_000_000
         case .gigaamV3:                  return 270_000_000
         case .canary180mFlash:           return 320_000_000
         }
