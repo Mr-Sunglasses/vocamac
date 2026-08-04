@@ -216,8 +216,18 @@ final class AppStateRecordingTests: XCTestCase {
 
         XCTAssertFalse(appState.availableModels.isEmpty,
                       "Available models should be populated on init")
-        XCTAssertEqual(appState.availableModels.count, ModelSize.allCases.count,
-                      "Should have one entry per ModelSize")
+
+        // The catalog leaves out models whose engine cannot run here at all,
+        // so the expected count depends on the machine: Apple Speech needs
+        // macOS 26, and Parakeet needs Apple Silicon.
+        let runnable = ModelSize.allCases.filter { $0.isAvailableOnThisSystem }
+        XCTAssertEqual(appState.availableModels.count, runnable.count,
+                      "Should have one entry per model this system can run")
+
+        for model in appState.availableModels {
+            XCTAssertTrue(model.size.isAvailableOnThisSystem,
+                         "\(model.size.rawValue) cannot run on this system and should not be offered")
+        }
     }
 
     func testSystemCapabilitiesDetected() {
