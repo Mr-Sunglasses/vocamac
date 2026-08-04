@@ -60,8 +60,15 @@ final class SystemInfoTests: XCTestCase {
 final class ModelSizeTests: XCTestCase {
 
     func testModelSizesHavePositiveFileSizes() {
-        for size in ModelSize.allCases {
+        for size in ModelSize.allCases where !size.isSystemManaged {
             XCTAssertGreaterThan(size.fileSizeBytes, 0)
+        }
+    }
+
+    func testSystemManagedModelsReportNoDownloadSize() {
+        for size in ModelSize.allCases where size.isSystemManaged {
+            XCTAssertEqual(size.fileSizeBytes, 0)
+            XCTAssertEqual(size.fileSizeDescription, "Built into macOS")
         }
     }
 
@@ -96,7 +103,7 @@ final class ModelSizeTests: XCTestCase {
     }
 
     func testAllCasesCount() {
-        XCTAssertEqual(ModelSize.allCases.count, 12)
+        XCTAssertEqual(ModelSize.allCases.count, 20)
     }
 
     func testRawValues() {
@@ -112,11 +119,109 @@ final class ModelSizeTests: XCTestCase {
         XCTAssertEqual(ModelSize.largeV3.rawValue, "large-v3")
         XCTAssertEqual(ModelSize.largeV3Turbo.rawValue, "large-v3_turbo")
         XCTAssertEqual(ModelSize.medium.rawValue, "medium")
+        XCTAssertEqual(ModelSize.parakeetV3.rawValue, "parakeet-tdt-0.6b-v3")
+        XCTAssertEqual(ModelSize.parakeetV2.rawValue, "parakeet-tdt-0.6b-v2")
+        XCTAssertEqual(ModelSize.appleSpeech.rawValue, "apple-speech")
+        XCTAssertEqual(ModelSize.moonshineTiny.rawValue, "moonshine-v2-tiny-en")
+        XCTAssertEqual(ModelSize.moonshineBase.rawValue, "moonshine-v2-base-en")
+        XCTAssertEqual(ModelSize.senseVoiceSmall.rawValue, "sense-voice-small")
+        XCTAssertEqual(ModelSize.gigaamV3.rawValue, "gigaam-v3-russian")
+        XCTAssertEqual(ModelSize.canary180mFlash.rawValue, "canary-180m-flash")
     }
 
     func testStandardCatalogExcludesLegacyMedium() {
         XCTAssertFalse(ModelSize.standardCatalog.contains(.medium))
         XCTAssertTrue(ModelSize.medium.isLegacy)
+    }
+
+    func testStandardCatalogIncludesNewEngines() {
+        XCTAssertTrue(ModelSize.standardCatalog.contains(.parakeetV3))
+        XCTAssertTrue(ModelSize.standardCatalog.contains(.parakeetV2))
+        XCTAssertTrue(ModelSize.standardCatalog.contains(.appleSpeech))
+        XCTAssertTrue(ModelSize.standardCatalog.contains(.moonshineTiny))
+        XCTAssertTrue(ModelSize.standardCatalog.contains(.senseVoiceSmall))
+        XCTAssertTrue(ModelSize.standardCatalog.contains(.gigaamV3))
+        XCTAssertTrue(ModelSize.standardCatalog.contains(.canary180mFlash))
+    }
+
+    func testEngineAssignment() {
+        XCTAssertEqual(ModelSize.parakeetV3.engine, .parakeet)
+        XCTAssertEqual(ModelSize.parakeetV2.engine, .parakeet)
+        XCTAssertEqual(ModelSize.appleSpeech.engine, .appleSpeech)
+        XCTAssertEqual(ModelSize.moonshineTiny.engine, .sherpaOnnx)
+        XCTAssertEqual(ModelSize.moonshineBase.engine, .sherpaOnnx)
+        XCTAssertEqual(ModelSize.senseVoiceSmall.engine, .sherpaOnnx)
+        XCTAssertEqual(ModelSize.gigaamV3.engine, .sherpaOnnx)
+        XCTAssertEqual(ModelSize.canary180mFlash.engine, .sherpaOnnx)
+
+        // Everything else is a WhisperKit model.
+        let whisperCases = ModelSize.allCases.filter { $0.engine == .whisperKit }
+        XCTAssertEqual(whisperCases.count, 12)
+    }
+
+    func testEngineCapabilities() {
+        XCTAssertTrue(TranscriptionEngine.whisperKit.supportsTranslation)
+        XCTAssertTrue(TranscriptionEngine.whisperKit.supportsCustomVocabulary)
+        XCTAssertFalse(TranscriptionEngine.parakeet.supportsTranslation)
+        XCTAssertFalse(TranscriptionEngine.appleSpeech.supportsTranslation)
+    }
+}
+
+// MARK: - TranscriptionRouter Tests
+
+final class TranscriptionRouterTests: XCTestCase {
+
+    func testEngineResolutionFromIdentifier() {
+        XCTAssertEqual(TranscriptionRouter.engine(forModelIdentifier: nil), .whisperKit)
+        XCTAssertEqual(TranscriptionRouter.engine(forModelIdentifier: "openai_whisper-tiny"), .whisperKit)
+        XCTAssertEqual(TranscriptionRouter.engine(forModelIdentifier: "tiny"), .whisperKit)
+        XCTAssertEqual(TranscriptionRouter.engine(forModelIdentifier: "parakeet-tdt-0.6b-v3"), .parakeet)
+        XCTAssertEqual(TranscriptionRouter.engine(forModelIdentifier: "parakeet-tdt-0.6b-v2"), .parakeet)
+        XCTAssertEqual(TranscriptionRouter.engine(forModelIdentifier: "apple-speech"), .appleSpeech)
+        XCTAssertEqual(TranscriptionRouter.engine(forModelIdentifier: "unknown-model"), .whisperKit)
+    }
+
+    func testRouterStartsWithWhisperKitEngine() {
+        let router = TranscriptionRouter()
+        XCTAssertEqual(router.activeEngine, .whisperKit)
+        XCTAssertFalse(router.isModelLoaded)
+        XCTAssertNil(router.loadedModelName)
+    }
+
+    func testEngineResolutionForSherpaModels() {
+        XCTAssertEqual(TranscriptionRouter.engine(forModelIdentifier: "moonshine-v2-tiny-en"), .sherpaOnnx)
+        XCTAssertEqual(TranscriptionRouter.engine(forModelIdentifier: "moonshine-v2-base-en"), .sherpaOnnx)
+        XCTAssertEqual(TranscriptionRouter.engine(forModelIdentifier: "sense-voice-small"), .sherpaOnnx)
+        XCTAssertEqual(TranscriptionRouter.engine(forModelIdentifier: "gigaam-v3-russian"), .sherpaOnnx)
+        XCTAssertEqual(TranscriptionRouter.engine(forModelIdentifier: "canary-180m-flash"), .sherpaOnnx)
+    }
+}
+
+// MARK: - SherpaModelCatalog Tests
+
+final class SherpaModelCatalogTests: XCTestCase {
+
+    func testEverySherpaModelHasASpec() {
+        for size in ModelSize.allCases where size.engine == .sherpaOnnx {
+            XCTAssertNotNil(SherpaModelCatalog.spec(for: size), "\(size.rawValue) is missing a catalog spec")
+        }
+    }
+
+    func testNonSherpaModelsHaveNoSpec() {
+        for size in ModelSize.allCases where size.engine != .sherpaOnnx {
+            XCTAssertNil(SherpaModelCatalog.spec(for: size))
+        }
+    }
+
+    func testSpecsAreWellFormed() {
+        for spec in SherpaModelCatalog.specs {
+            XCTAssertEqual(spec.size.engine, .sherpaOnnx)
+            XCTAssertEqual(spec.archiveURL.host, "github.com")
+            XCTAssertTrue(spec.archiveURL.lastPathComponent.hasSuffix(".tar.bz2"))
+            XCTAssertEqual(spec.archiveURL.lastPathComponent, spec.directoryName + ".tar.bz2")
+            XCTAssertFalse(spec.requiredFiles.isEmpty)
+            XCTAssertTrue(spec.requiredFiles.contains(spec.tokensFile))
+        }
     }
 }
 
@@ -147,6 +252,26 @@ final class ModelManagerTests: XCTestCase {
         XCTAssertEqual(manager.modelSize(from: "openai_whisper-large-v3"), .largeV3)
         XCTAssertEqual(manager.modelSize(from: "openai_whisper-large-v3_turbo"), .largeV3Turbo)
         XCTAssertNil(manager.modelSize(from: "openai_whisper-large-v3-v20240930_extra"))
+    }
+
+    func testModelIdentifiersForNonWhisperEngines() {
+        let manager = ModelManager()
+        XCTAssertEqual(manager.modelIdentifier(for: .parakeetV3), "parakeet-tdt-0.6b-v3")
+        XCTAssertEqual(manager.modelIdentifier(for: .parakeetV2), "parakeet-tdt-0.6b-v2")
+        XCTAssertEqual(manager.modelIdentifier(for: .appleSpeech), "apple-speech")
+        XCTAssertEqual(manager.modelIdentifier(for: .tiny), "openai_whisper-tiny")
+
+        XCTAssertEqual(manager.modelSize(from: "parakeet-tdt-0.6b-v3"), .parakeetV3)
+        XCTAssertEqual(manager.modelSize(from: "parakeet-tdt-0.6b-v2"), .parakeetV2)
+        XCTAssertEqual(manager.modelSize(from: "apple-speech"), .appleSpeech)
+    }
+
+    func testAppleSpeechIsSystemManaged() {
+        let manager = ModelManager()
+        // System-managed assets always report as downloaded and have no
+        // local folder for the app to manage.
+        XCTAssertTrue(manager.isModelDownloaded(.appleSpeech))
+        XCTAssertNil(manager.modelFolder(for: .appleSpeech))
     }
 
     func testUsableCoreMLComponentRequiresWeights() throws {
@@ -184,6 +309,28 @@ final class ModelManagerTests: XCTestCase {
     func testTotalDiskUsageNonNegative() {
         let manager = ModelManager()
         XCTAssertGreaterThanOrEqual(manager.totalDiskUsage(), 0)
+    }
+
+    func testDiskUsageIsCachedBetweenReads() {
+        let manager = ModelManager()
+
+        // Warm the cache, then confirm repeated reads agree. The settings UI
+        // calls this from a view body, so the cached path must be stable.
+        let first = manager.totalDiskUsage()
+        for _ in 0..<50 {
+            XCTAssertEqual(manager.totalDiskUsage(), first)
+        }
+    }
+
+    func testInvalidatingDiskUsageCacheStillReportsUsage() {
+        let manager = ModelManager()
+        let measured = manager.totalDiskUsage()
+
+        manager.invalidateDiskUsageCache()
+
+        // Nothing changed on disk, so a fresh measurement must agree with the
+        // cached one — this guards the cache against reporting a stale zero.
+        XCTAssertEqual(manager.totalDiskUsage(), measured)
     }
 }
 

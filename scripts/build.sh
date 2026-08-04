@@ -186,7 +186,7 @@ ICONJSON
         xcrun actool "$XCASSETS_DIR" \
             --compile "${APP_DIR}/Contents/Resources" \
             --platform macosx \
-            --minimum-deployment-target 13.0 \
+            --minimum-deployment-target 14.0 \
             --app-icon AppIcon \
             --output-partial-info-plist /tmp/vocamac-icon-partial.plist 2>/dev/null && \
             echo "📎 App icon compiled (Assets.car)" || \
@@ -219,7 +219,7 @@ cat > "${APP_DIR}/Contents/Info.plist" << EOF
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>LSMinimumSystemVersion</key>
-    <string>13.0</string>
+    <string>14.0</string>
     <key>LSUIElement</key>
     <true/>
     <key>CFBundleIconFile</key>

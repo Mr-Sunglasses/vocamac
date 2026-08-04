@@ -1,11 +1,14 @@
 // ModelManager.swift
 // VocaMac
 //
-// Manages whisper model lifecycle using WhisperKit's built-in model management.
-// Models are CoreML format, downloaded from HuggingFace and cached locally.
+// Manages model lifecycle across engines. WhisperKit models use WhisperKit's
+// built-in model management; Parakeet models are downloaded and cached by
+// FluidAudio; Apple Speech assets are owned by the OS. All models are CoreML
+// format, downloaded from HuggingFace and cached locally.
 
 import Foundation
 import WhisperKit
+import FluidAudio
 
 // MARK: - ModelManagerError
 
@@ -49,6 +52,14 @@ final class ModelManager {
     ]
 
     private var fileManager: FileManager { .default }
+
+    /// Cached result of `totalDiskUsage()`, with the time it was measured.
+    private var cachedDiskUsage: (bytes: Int64, measuredAt: CFAbsoluteTime)?
+    private let diskUsageCacheLock = NSLock()
+
+    /// How long a disk usage measurement stays valid without explicit
+    /// invalidation. Covers model files changed outside the app.
+    private static let diskUsageCacheTTL: CFAbsoluteTime = 5.0
 
     private var bundledModelsBase: URL? {
         Bundle.main.resourceURL?.appendingPathComponent(bundledModelsDirectory, isDirectory: true)
@@ -156,6 +167,7 @@ final class ModelManager {
         let modelName = whisperKitModelName(for: size)
         try createParentDirectoryIfNeeded(for: destinationDirectory)
         try replaceDirectory(at: destinationDirectory, with: sourceDirectory)
+        invalidateDiskUsageCache()
         try validateModelDirectory(destinationDirectory, for: size)
         VocaLogger.info(.modelManager, "Installed bundled model: \(modelName)")
     }
@@ -229,6 +241,28 @@ final class ModelManager {
         )
     }
 
+    /// FluidAudio's model version for a Parakeet catalog entry.
+    private func parakeetVersion(for size: ModelSize) -> AsrModelVersion? {
+        ParakeetService.modelVersion(for: size)
+    }
+
+    /// Directory where FluidAudio caches a Parakeet model's files.
+    private func parakeetDirectory(for version: AsrModelVersion) -> URL {
+        AsrModels.defaultCacheDirectory(for: version)
+    }
+
+    /// Map a ModelSize enum to the identifier its engine understands.
+    /// WhisperKit uses its own variant names; other engines use the
+    /// ModelSize raw value directly.
+    func modelIdentifier(for size: ModelSize) -> String {
+        switch size.engine {
+        case .whisperKit:
+            return whisperKitModelName(for: size)
+        case .parakeet, .appleSpeech, .sherpaOnnx:
+            return size.rawValue
+        }
+    }
+
     /// Map a ModelSize enum to WhisperKit model variant name
     func whisperKitModelName(for size: ModelSize) -> String {
         switch size {
@@ -256,22 +290,51 @@ final class ModelManager {
             return "openai_whisper-large-v3_turbo"
         case .medium:
             return "openai_whisper-medium"
+        case .parakeetV3, .parakeetV2, .appleSpeech,
+             .moonshineTiny, .moonshineBase, .senseVoiceSmall, .gigaamV3, .canary180mFlash:
+            // Not WhisperKit models — identified by their raw value.
+            return size.rawValue
         }
     }
 
     /// Check if a model is downloaded locally
     func isModelDownloaded(_ size: ModelSize) -> Bool {
-        guard let modelDir = modelFolder(for: size) else { return false }
-        return hasRequiredModelAssets(at: modelDir)
+        switch size.engine {
+        case .whisperKit:
+            guard let modelDir = modelFolder(for: size) else { return false }
+            return hasRequiredModelAssets(at: modelDir)
+        case .parakeet:
+            guard let version = parakeetVersion(for: size) else { return false }
+            return AsrModels.modelsExist(at: parakeetDirectory(for: version), version: version)
+        case .appleSpeech:
+            // Assets are system-managed; installation happens at load time.
+            return true
+        case .sherpaOnnx:
+            guard let spec = SherpaModelCatalog.spec(for: size) else { return false }
+            return SherpaService.modelFilesExist(for: spec)
+        }
     }
 
     /// Get the local folder path for a downloaded or installed model
     func modelFolder(for size: ModelSize) -> URL? {
-        let modelDir = installedModelDirectory(for: size)
-        if fileManager.fileExists(atPath: modelDir.path), hasRequiredModelAssets(at: modelDir) {
-            return modelDir
+        switch size.engine {
+        case .whisperKit:
+            let modelDir = installedModelDirectory(for: size)
+            if fileManager.fileExists(atPath: modelDir.path), hasRequiredModelAssets(at: modelDir) {
+                return modelDir
+            }
+            return nil
+        case .parakeet:
+            guard let version = parakeetVersion(for: size),
+                  isModelDownloaded(size) else { return nil }
+            return parakeetDirectory(for: version)
+        case .appleSpeech:
+            return nil
+        case .sherpaOnnx:
+            guard let spec = SherpaModelCatalog.spec(for: size),
+                  SherpaService.modelFilesExist(for: spec) else { return nil }
+            return SherpaService.modelDirectory(for: spec)
         }
-        return nil
     }
 
     /// List all downloaded models
@@ -281,21 +344,27 @@ final class ModelManager {
 
     /// Check if a model size is supported on this device.
     ///
-    /// Uses exact model matching so distinct WhisperKit variants remain distinct.
+    /// WhisperKit models use exact variant matching against WhisperKit's
+    /// per-device recommendation; other engines gate on system capability.
     func isModelSupported(_ size: ModelSize) -> Bool {
-        let rec = WhisperKit.recommendedModels()
-        let modelName = whisperKitModelName(for: size)
+        switch size.engine {
+        case .whisperKit:
+            let rec = WhisperKit.recommendedModels()
+            let modelName = whisperKitModelName(for: size)
 
-        if rec.disabled.contains(modelName) {
-            return false
+            if rec.disabled.contains(modelName) {
+                return false
+            }
+
+            return rec.supported.contains(modelName)
+        case .parakeet, .appleSpeech, .sherpaOnnx:
+            return size.isAvailableOnThisSystem
         }
-
-        return rec.supported.contains(modelName)
     }
 
-    /// Map a WhisperKit model name back to a ModelSize, if it matches one of our known sizes.
-    func modelSize(from whisperKitName: String) -> ModelSize? {
-        ModelSize.allCases.first { whisperKitModelName(for: $0) == whisperKitName }
+    /// Map an engine model identifier back to a ModelSize, if it matches one of our known sizes.
+    func modelSize(from identifier: String) -> ModelSize? {
+        ModelSize.allCases.first { modelIdentifier(for: $0) == identifier }
     }
 
     // MARK: - Model Download
@@ -380,12 +449,118 @@ final class ModelManager {
         return candidates
     }
 
-    /// Download a model using WhisperKit's built-in download mechanism
+    /// Download a model using its engine's built-in download mechanism.
     /// The model will be downloaded from HuggingFace and cached locally.
     /// - Parameters:
     ///   - size: The model size to download
     ///   - onProgress: Progress callback (0.0 to 1.0)
     func downloadModel(
+        size: ModelSize,
+        onProgress: @escaping (Double) -> Void
+    ) async throws {
+        // New files on disk in every branch that can succeed.
+        defer { invalidateDiskUsageCache() }
+
+        switch size.engine {
+        case .whisperKit:
+            try await downloadWhisperKitModel(size: size, onProgress: onProgress)
+        case .parakeet:
+            try await downloadParakeetModel(size: size, onProgress: onProgress)
+        case .appleSpeech:
+            // System-managed — nothing to download here. Asset installation
+            // happens in AppleSpeechService.loadModel via AssetInventory.
+            onProgress(1.0)
+        case .sherpaOnnx:
+            try await downloadSherpaModel(size: size, onProgress: onProgress)
+        }
+    }
+
+    /// Download a sherpa-onnx model archive and extract it into the sherpa
+    /// storage directory. The archive download reports real progress; the
+    /// final extraction step is mapped to the last 5%.
+    private func downloadSherpaModel(
+        size: ModelSize,
+        onProgress: @escaping (Double) -> Void
+    ) async throws {
+        guard let spec = SherpaModelCatalog.spec(for: size) else {
+            throw ModelManagerError.modelNotAvailable(size.rawValue)
+        }
+
+        VocaLogger.info(.modelManager, "Downloading ONNX model: \(size.rawValue)")
+
+        let root = SherpaService.storageRoot
+        try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
+        let archiveDestination = root.appendingPathComponent(spec.archiveURL.lastPathComponent)
+
+        do {
+            try await FileDownloader.download(from: spec.archiveURL, to: archiveDestination) { fraction in
+                onProgress(fraction * 0.95)
+            }
+
+            defer { try? fileManager.removeItem(at: archiveDestination) }
+
+            try Self.extractTarArchive(at: archiveDestination, into: root)
+
+            guard SherpaService.modelFilesExist(for: spec) else {
+                throw ModelManagerError.missingModelDirectory(
+                    SherpaService.modelDirectory(for: spec).path
+                )
+            }
+
+            onProgress(1.0)
+            VocaLogger.info(.modelManager, "ONNX model '\(size.rawValue)' extracted to: \(SherpaService.modelDirectory(for: spec).path)")
+        } catch {
+            VocaLogger.error(.modelManager, "Download failed for '\(size.rawValue)': \(error.localizedDescription)")
+            throw ModelManagerError.downloadFailed(reason: error.localizedDescription)
+        }
+    }
+
+    /// Extract a .tar.bz2 archive using the system tar.
+    static func extractTarArchive(at archive: URL, into directory: URL) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/tar")
+        process.arguments = ["xjf", archive.path, "-C", directory.path]
+        try process.run()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            throw ModelManagerError.downloadFailed(
+                reason: "Archive extraction failed (tar exited with \(process.terminationStatus))"
+            )
+        }
+    }
+
+    /// Download a Parakeet model through FluidAudio, which reports real
+    /// download progress (unlike the WhisperKit path below).
+    private func downloadParakeetModel(
+        size: ModelSize,
+        onProgress: @escaping (Double) -> Void
+    ) async throws {
+        guard let version = parakeetVersion(for: size) else {
+            throw ModelManagerError.modelNotAvailable(size.rawValue)
+        }
+
+        VocaLogger.info(.modelManager, "Downloading Parakeet model: \(size.rawValue)")
+
+        do {
+            try await AsrModels.download(version: version) { progress in
+                onProgress(progress.fractionCompleted)
+            }
+
+            let directory = parakeetDirectory(for: version)
+            guard AsrModels.modelsExist(at: directory, version: version) else {
+                throw ModelManagerError.missingModelDirectory(directory.path)
+            }
+
+            onProgress(1.0)
+            VocaLogger.info(.modelManager, "Parakeet model '\(size.rawValue)' downloaded to: \(directory.path)")
+        } catch {
+            VocaLogger.error(.modelManager, "Download failed for '\(size.rawValue)': \(error.localizedDescription)")
+            throw ModelManagerError.downloadFailed(reason: error.localizedDescription)
+        }
+    }
+
+    /// Download a WhisperKit model using WhisperKit's built-in mechanism.
+    private func downloadWhisperKitModel(
         size: ModelSize,
         onProgress: @escaping (Double) -> Void
     ) async throws {
@@ -465,32 +640,82 @@ final class ModelManager {
 
     /// Delete a downloaded model's local files
     func deleteModel(_ size: ModelSize) throws {
-        let modelName = whisperKitModelName(for: size)
-        let modelDir = modelStorageBase.appendingPathComponent(modelName)
+        let modelDir: URL
+        switch size.engine {
+        case .whisperKit:
+            modelDir = modelStorageBase.appendingPathComponent(whisperKitModelName(for: size))
+        case .parakeet:
+            guard let version = parakeetVersion(for: size) else { return }
+            modelDir = parakeetDirectory(for: version)
+        case .appleSpeech:
+            // System-managed assets cannot be deleted by the app.
+            return
+        case .sherpaOnnx:
+            guard let spec = SherpaModelCatalog.spec(for: size) else { return }
+            modelDir = SherpaService.modelDirectory(for: spec)
+        }
 
         if FileManager.default.fileExists(atPath: modelDir.path) {
             try FileManager.default.removeItem(at: modelDir)
-            VocaLogger.info(.modelManager, "Deleted model: \(modelName)")
+            invalidateDiskUsageCache()
+            VocaLogger.info(.modelManager, "Deleted model: \(modelIdentifier(for: size))")
         }
     }
 
     // MARK: - Utilities
 
-    /// Get total disk space used by downloaded models
-    func totalDiskUsage() -> Int64 {
-        let fm = FileManager.default
-        guard fm.fileExists(atPath: modelStorageBase.path) else { return 0 }
+    /// Directories that hold downloaded model files, across all engines.
+    private var modelStorageDirectories: [URL] {
+        [
+            modelStorageBase,
+            parakeetDirectory(for: .v3),
+            parakeetDirectory(for: .v2),
+            SherpaService.storageRoot,
+        ]
+    }
 
+    /// Get total disk space used by downloaded models across all engines.
+    ///
+    /// Walking every model file costs a few milliseconds, and the settings UI
+    /// asks for this from a SwiftUI view body — which re-renders far more
+    /// often than model files change. The result is cached and invalidated
+    /// whenever this manager downloads or deletes a model; the TTL is a
+    /// backstop for files changed outside the app.
+    func totalDiskUsage() -> Int64 {
+        diskUsageCacheLock.lock()
+        if let cached = cachedDiskUsage,
+           CFAbsoluteTimeGetCurrent() - cached.measuredAt < Self.diskUsageCacheTTL {
+            diskUsageCacheLock.unlock()
+            return cached.bytes
+        }
+        diskUsageCacheLock.unlock()
+
+        let fm = FileManager.default
         var totalSize: Int64 = 0
-        if let enumerator = fm.enumerator(at: modelStorageBase, includingPropertiesForKeys: [.fileSizeKey]) {
-            for case let fileURL as URL in enumerator {
-                if let attrs = try? fileURL.resourceValues(forKeys: [.fileSizeKey]),
-                   let size = attrs.fileSize {
-                    totalSize += Int64(size)
+        for directory in modelStorageDirectories {
+            guard fm.fileExists(atPath: directory.path) else { continue }
+            if let enumerator = fm.enumerator(at: directory, includingPropertiesForKeys: [.fileSizeKey]) {
+                for case let fileURL as URL in enumerator {
+                    if let attrs = try? fileURL.resourceValues(forKeys: [.fileSizeKey]),
+                       let size = attrs.fileSize {
+                        totalSize += Int64(size)
+                    }
                 }
             }
         }
+
+        diskUsageCacheLock.lock()
+        cachedDiskUsage = (bytes: totalSize, measuredAt: CFAbsoluteTimeGetCurrent())
+        diskUsageCacheLock.unlock()
+
         return totalSize
+    }
+
+    /// Drop the cached disk usage so the next read re-measures.
+    func invalidateDiskUsageCache() {
+        diskUsageCacheLock.lock()
+        cachedDiskUsage = nil
+        diskUsageCacheLock.unlock()
     }
 
     /// Human-readable disk usage string

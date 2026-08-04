@@ -264,13 +264,18 @@ final class AppStateOnboardingTests: XCTestCase {
 
 final class AppStateModelLoadingTests: XCTestCase {
 
+    private static let ownedDefaultsKeys = [
+        "vocamac.selectedModelSize",
+        "vocamac.selectedLanguage",
+    ]
+
     override func setUp() {
         super.setUp()
-        UserDefaults.standard.removeObject(forKey: "vocamac.selectedModelSize")
+        Self.ownedDefaultsKeys.forEach { UserDefaults.standard.removeObject(forKey: $0) }
     }
 
     override func tearDown() {
-        UserDefaults.standard.removeObject(forKey: "vocamac.selectedModelSize")
+        Self.ownedDefaultsKeys.forEach { UserDefaults.standard.removeObject(forKey: $0) }
         super.tearDown()
     }
 
@@ -369,5 +374,70 @@ final class AppStateModelLoadingTests: XCTestCase {
         XCTAssertEqual(mocks.whisperService.loadRequests.first?.name, "openai_whisper-small")
         XCTAssertEqual(appState.selectedModelSize, ModelSize.small.rawValue)
         XCTAssertEqual(appState.currentModel?.size, .small)
+    }
+
+    @MainActor
+    func testStartupFallbackStaysOnTheSameEngine() async {
+        UserDefaults.standard.set(ModelSize.medium.rawValue, forKey: "vocamac.selectedModelSize")
+
+        // Apple Speech is supported and always counts as downloaded, and it
+        // sits after the Whisper models in the catalog. A Whisper user whose
+        // preference became unsupported should still land on Whisper.
+        let modelManager = MockModelManager()
+        modelManager.supportedModelNames = [
+            "openai_whisper-tiny",
+            "openai_whisper-small",
+            "apple-speech",
+        ]
+        modelManager.downloadedModels = [.tiny, .small, .medium, .appleSpeech]
+
+        let whisperService = MockWhisperService()
+        whisperService.loadedModelName = nil
+        whisperService.isModelLoaded = false
+
+        let (appState, mocks) = AppState.makeTestState(
+            modelManager: modelManager,
+            whisperService: whisperService
+        )
+
+        await appState.performStartup()
+
+        XCTAssertEqual(appState.currentModel?.size, .small)
+        XCTAssertEqual(mocks.whisperService.loadRequests.first?.name, "openai_whisper-small")
+    }
+
+    // MARK: - Language-bound model reloading
+
+    @MainActor
+    func testLanguageChangeReloadsSherpaModel() async {
+        let modelManager = MockModelManager()
+        modelManager.downloadedModels = [.moonshineTiny]
+        let (appState, mocks) = AppState.makeTestState(modelManager: modelManager)
+
+        await appState.loadModel(.moonshineTiny)
+        XCTAssertEqual(appState.currentModel?.size, .moonshineTiny)
+        let loadsAfterInitial = mocks.whisperService.loadRequests.count
+
+        appState.selectedLanguage = "ru"
+        await appState.reloadModelForLanguageChangeIfNeeded()
+
+        XCTAssertEqual(mocks.whisperService.loadRequests.count, loadsAfterInitial + 1)
+        XCTAssertEqual(mocks.whisperService.loadRequests.last?.name, "moonshine-v2-tiny-en")
+    }
+
+    @MainActor
+    func testLanguageChangeDoesNotReloadWhisperModel() async {
+        let modelManager = MockModelManager()
+        modelManager.downloadedModels = [.tiny]
+        let (appState, mocks) = AppState.makeTestState(modelManager: modelManager)
+
+        await appState.loadModel(.tiny)
+        let loadsAfterInitial = mocks.whisperService.loadRequests.count
+
+        appState.selectedLanguage = "ru"
+        await appState.reloadModelForLanguageChangeIfNeeded()
+
+        // Whisper takes the language per transcription — no reload needed.
+        XCTAssertEqual(mocks.whisperService.loadRequests.count, loadsAfterInitial)
     }
 }

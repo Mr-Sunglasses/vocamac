@@ -101,8 +101,8 @@ protocol ModelManaging: AnyObject {
     func ensureTokenizerAssets(for size: ModelSize) throws -> URL
     func isModelDownloaded(_ size: ModelSize) -> Bool
     func isModelSupported(_ size: ModelSize) -> Bool
-    func whisperKitModelName(for size: ModelSize) -> String
-    func modelSize(from whisperKitName: String) -> ModelSize?
+    func modelIdentifier(for size: ModelSize) -> String
+    func modelSize(from identifier: String) -> ModelSize?
     func downloadModel(size: ModelSize, onProgress: @escaping (Double) -> Void) async throws
     func diskUsageDescription() -> String
 }

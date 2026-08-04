@@ -105,7 +105,7 @@ Same accuracy, dramatically better Apple platform integration.
 
 ## 📋 Requirements
 
-- **macOS 13 (Ventura)** or later
+- **macOS 14 (Sonoma)** or later
 - **Apple Silicon Mac** (M1/M2/M3/M4) — **Intel Macs are not supported.** VocaMac is built for `arm64` only.
 - **Xcode 15+** or Swift 5.9+ (only for building from source)
 
@@ -253,9 +253,22 @@ Switch between modes in **Settings → General → Activation**.
 
 ---
 
-## 🧠 Whisper Models
+## 🧠 Models
 
-VocaMac uses OpenAI Whisper models via WhisperKit's CoreML format. The app auto-detects your hardware and recommends the best model:
+VocaMac runs four on-device speech engines and picks between them in **Settings → Models**, where models are grouped by engine. Everything runs locally.
+
+### Parakeet — fastest, recommended for dictation
+
+NVIDIA Parakeet TDT models running as CoreML on the Apple Neural Engine (via [FluidAudio](https://github.com/FluidInference/FluidAudio)).
+
+| Model | Size | Speed | Languages |
+|-------|------|-------|-----------|
+| **Parakeet v3** | ~0.7 GB | ⚡⚡⚡⚡⚡ | 25 European languages + Japanese, auto-detected |
+| **Parakeet v2** | ~1.2 GB | ⚡⚡⚡⚡⚡ | English only, highest recall |
+
+### Whisper — widest language coverage
+
+OpenAI Whisper models via WhisperKit's CoreML format. The only engine that supports **translation to English** and **custom vocabulary**. The app auto-detects your hardware and recommends a variant.
 
 | Model | Parameters | Size | Speed | Quality | Best For |
 |-------|-----------|------|-------|---------|----------|
@@ -265,7 +278,25 @@ VocaMac uses OpenAI Whisper models via WhisperKit's CoreML format. The app auto-
 | **Medium** | 769M | ~2.5 GB | ⚡⚡ | Excellent | 24GB+ for high accuracy |
 | **Large v3** | 1550M | ~4.8 GB | ⚡ | Best | Maximum accuracy |
 
-Models are downloaded automatically from [HuggingFace](https://huggingface.co/argmaxinc/whisperkit-coreml) on first use and cached locally. Download additional models from **Settings → Models**.
+### Apple Speech — no download (macOS 26+)
+
+Apple's on-device SpeechAnalyzer engine. Assets are managed by macOS, so there is nothing to download and nothing stored in VocaMac's model folder. Covers roughly 30 locales.
+
+### Specialized (ONNX) — niche needs
+
+Community models via [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx). These run on the **CPU**, so on Apple Silicon prefer Parakeet unless you need one of these specifically.
+
+| Model | Size | Best For |
+|-------|------|----------|
+| **Moonshine v2 Tiny** | ~60 MB | Very low-RAM Macs, English |
+| **Moonshine v2 Base** | ~190 MB | Low-RAM Macs, English |
+| **SenseVoice** | ~250 MB | Chinese, Japanese, Korean, Cantonese, English |
+| **GigaAM v3** | ~270 MB | Russian, with punctuation |
+| **Canary 180M Flash** | ~320 MB | English, Spanish, German, French |
+
+Models download automatically on first use and are cached locally — Whisper and Parakeet from [HuggingFace](https://huggingface.co/argmaxinc/whisperkit-coreml), the specialized models from sherpa-onnx's model releases.
+
+> **Note:** SenseVoice and Canary fix their language when the model loads, so changing the transcription language reloads the active model. Whisper and Parakeet take the language per transcription.
 
 ---
 
@@ -321,13 +352,13 @@ For detailed documentation, see:
 ### Prerequisites
 
 - **Xcode 15+** or Swift 5.9+ toolchain
-- **macOS 13+**
+- **macOS 14+**
 
 ### Project Structure
 
 ```
 VocaMac/
-├── Package.swift                   # SPM config (WhisperKit dependency)
+├── Package.swift                   # SPM config (WhisperKit, FluidAudio, sherpa-onnx)
 ├── Sources/
 │   └── VocaMac/
 │       ├── App/
@@ -451,7 +482,7 @@ Each platform uses native technologies for the best possible integration, while 
 ## ⚠️ Known Limitations
 
 - **Larger models require a one-time download**: VocaMac ships with the Whisper Tiny model bundled — you can dictate immediately with no internet connection. Switching to a larger model (Small, Medium, Large) requires a one-time download; all subsequent launches work fully offline.
-- **macOS only**: Requires macOS 13 (Ventura) or later.
+- **macOS only**: Requires macOS 14 (Sonoma) or later.
 - **Permissions reset on rebuild (build-from-source only)**: When building from source without a Developer ID certificate, macOS resets Accessibility and Input Monitoring permissions on every rebuild due to ad-hoc signing. Release builds are Developer ID signed so permissions persist across updates.
 
 ### Permissions and Code Signing

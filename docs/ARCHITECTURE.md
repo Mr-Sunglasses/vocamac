@@ -65,10 +65,13 @@ VocaMac is a native macOS menu bar application built with Swift and SwiftUI. It 
 | Audio | AVAudioEngine | macOS 13+ | Real-time microphone capture |
 | Hotkeys | CGEventTap (Quartz) | macOS 13+ | System-wide key event interception |
 | Text Injection | NSPasteboard + CGEvent | macOS 13+ | Clipboard-based text insertion |
-| STT Engine | WhisperKit | 0.9.4+ | CoreML-based on-device speech-to-text |
+| STT Engine | WhisperKit | 0.9.4+ | CoreML-based on-device speech-to-text (Whisper) |
+| STT Engine | FluidAudio | 0.12.4+ | NVIDIA Parakeet TDT as CoreML on the Neural Engine |
+| STT Engine | Apple Speech | macOS 26+ | SpeechAnalyzer/SpeechTranscriber system engine |
+| STT Engine | sherpa-onnx | 1.13.4 | Specialized ONNX models (Moonshine, SenseVoice, GigaAM, Canary), CPU-only |
 | Acceleration | Metal | macOS 13+ | GPU-accelerated inference on Apple Silicon |
 | Build | Swift Package Manager | 5.9+ | Dependency management and build |
-| Min OS | macOS 13 Ventura | - | Minimum supported macOS version |
+| Min OS | macOS 14 Sonoma | - | Minimum supported macOS version |
 | Update Checks | GitHub Releases API | v3 | In-app release detection and DMG download |
 
 ---
