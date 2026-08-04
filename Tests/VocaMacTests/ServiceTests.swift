@@ -316,6 +316,24 @@ final class SoundManagerTests: XCTestCase {
 
 // MARK: - AudioEngine Tests
 
+/// Shared guard for tests that need a real audio capture session.
+extension XCTestCase {
+
+    /// Skip when there is no real microphone to record from.
+    ///
+    /// CI runners have no audio input. `AudioEngine.startRecording()` there
+    /// may return false, may start and yield no samples, or may block
+    /// indefinitely — the last of which hangs the whole job until it times
+    /// out rather than reporting a failure. None of these exercise the
+    /// behaviour the test is after, so the test is skipped instead.
+    func skipWithoutRealAudioInput() throws {
+        try XCTSkipIf(
+            ProcessInfo.processInfo.environment["CI"] != nil,
+            "Needs a real audio input device; CI runners have none"
+        )
+    }
+}
+
 final class AudioEngineTests: XCTestCase {
 
     func testStopRecordingWithoutStartReturnsEmpty() {
@@ -324,7 +342,8 @@ final class AudioEngineTests: XCTestCase {
         XCTAssertTrue(samples.isEmpty)
     }
 
-    func testSilenceCallbackFiresOnlyOnce() {
+    func testSilenceCallbackFiresOnlyOnce() throws {
+        try skipWithoutRealAudioInput()
         // Verify that the silence detection callback doesn't fire repeatedly
         // by simulating the scenario where multiple silent buffers arrive
         let engine = AudioEngine()
@@ -355,7 +374,8 @@ final class AudioEngineTests: XCTestCase {
             "Silence callback should fire at most once, but fired \(silenceCallCount) times")
     }
 
-    func testMaxDurationCallbackFiresOnlyOnce() {
+    func testMaxDurationCallbackFiresOnlyOnce() throws {
+        try skipWithoutRealAudioInput()
         let engine = AudioEngine()
         var maxDurationCallCount = 0
 
@@ -385,6 +405,7 @@ final class AudioEngineTests: XCTestCase {
     }
 
     func testAudioBufferNotEmptyAfterRecording() throws {
+        try skipWithoutRealAudioInput()
         let engine = AudioEngine()
 
         engine.startRecording(
@@ -418,6 +439,7 @@ final class AudioEngineTests: XCTestCase {
     }
 
     func testStopKeepsEngineWarmUntilIdleRelease() throws {
+        try skipWithoutRealAudioInput()
         let engine = AudioEngine()
 
         let didStart = engine.startRecording(
@@ -449,7 +471,8 @@ final class AudioEngineTests: XCTestCase {
         )
     }
 
-    func testAudioBufferPreservedWhenSilenceDetected() {
+    func testAudioBufferPreservedWhenSilenceDetected() throws {
+        try skipWithoutRealAudioInput()
         // The key bug fix: audio should be buffered BEFORE silence detection fires,
         // so we don't lose the audio frames that triggered the silence condition
         let engine = AudioEngine()
@@ -484,7 +507,8 @@ final class AudioEngineTests: XCTestCase {
         }
     }
 
-    func testAudioBufferPreservedWhenMaxDurationReached() {
+    func testAudioBufferPreservedWhenMaxDurationReached() throws {
+        try skipWithoutRealAudioInput()
         // Audio should be buffered even when max duration is reached
         let engine = AudioEngine()
         var maxDurationReached = false
@@ -556,7 +580,8 @@ final class AudioEngineForceResetTests: XCTestCase {
             "Engine should not be recording after force reset")
     }
 
-    func testForceResetDuringRecording() {
+    func testForceResetDuringRecording() throws {
+        try skipWithoutRealAudioInput()
         let engine = AudioEngine()
 
         engine.startRecording(
@@ -585,6 +610,7 @@ final class AudioEngineForceResetTests: XCTestCase {
     }
 
     func testForceResetAllowsNewRecording() throws {
+        try skipWithoutRealAudioInput()
         let engine = AudioEngine()
 
         engine.startRecording(
@@ -634,6 +660,7 @@ final class AudioEngineForceResetTests: XCTestCase {
     }
 
     func testIsCurrentlyRecordingReflectsState() throws {
+        try skipWithoutRealAudioInput()
         let engine = AudioEngine()
 
         XCTAssertFalse(engine.isCurrentlyRecording,
@@ -773,7 +800,8 @@ final class AudioEngineDeviceChangeTests: XCTestCase {
         XCTAssertFalse(callbackInvoked)
     }
 
-    func testForceResetSimulatesDeviceChangeRecovery() {
+    func testForceResetSimulatesDeviceChangeRecovery() throws {
+        try skipWithoutRealAudioInput()
         let engine = AudioEngine()
 
         engine.startRecording(
