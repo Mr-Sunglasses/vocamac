@@ -7,12 +7,12 @@ import SwiftUI
 
 struct UpdateBannerView: View {
     let info: UpdateInfo
+    @ObservedObject var updateWindowManager: UpdateWindowManager
     @EnvironmentObject var appState: AppState
-    @State private var showingDetails = false
 
     var body: some View {
         Button {
-            showingDetails = true
+            updateWindowManager.open(appState: appState, info: info)
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: "arrow.down.circle.fill")
@@ -34,17 +34,15 @@ struct UpdateBannerView: View {
             )
         }
         .buttonStyle(.plain)
-        .sheet(isPresented: $showingDetails) {
-            UpdateDetailView(info: info)
-                .environmentObject(appState)
-        }
     }
 }
 
 struct UpdateDetailView: View {
     let info: UpdateInfo
+    // Closes via the presenting binding rather than @Environment(\.dismiss):
+    // inside a MenuBarExtra window, dismiss closes the whole status bar panel.
+    @Binding var isPresented: Bool
     @EnvironmentObject var appState: AppState
-    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -60,10 +58,17 @@ struct UpdateDetailView: View {
                 Spacer()
                 Button("Later (24h)") {
                     appState.updateChecker.dismiss()
-                    dismiss()
+                    isPresented = false
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
+                .buttonStyle(.bordered)
+                .help("Hide this update for 24 hours")
+
+                Button("Close") {
+                    isPresented = false
+                }
+                .buttonStyle(.bordered)
+                .keyboardShortcut(.cancelAction)
+                .help("Close without snoozing")
             }
             .padding(.horizontal, 20)
             .padding(.top, 20)
@@ -95,7 +100,7 @@ struct UpdateDetailView: View {
             HStack {
                 Button("Skip This Version") {
                     appState.updateChecker.skipVersion(info.version)
-                    dismiss()
+                    isPresented = false
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
@@ -169,7 +174,7 @@ struct UpdateDetailView: View {
                     .foregroundStyle(.secondary)
                 Button("Open DMG") {
                     appState.updateChecker.openDMG(at: dmgPath)
-                    dismiss()
+                    isPresented = false
                 }
                 .buttonStyle(.borderedProminent)
             }

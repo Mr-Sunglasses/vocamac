@@ -7,8 +7,10 @@
 import SwiftUI
 
 /// Manages the settings window for menu-bar-only apps
+@MainActor
 final class SettingsWindowManager: ObservableObject {
     private var settingsWindow: NSWindow?
+    private var closeObserver: NSObjectProtocol?
 
     func open(appState: AppState) {
         // If window already exists, just bring it to front
@@ -37,22 +39,104 @@ final class SettingsWindowManager: ObservableObject {
 
         self.settingsWindow = window
 
-        // Temporarily show in dock so the window can receive focus
-        NSApp.setActivationPolicy(.regular)
+        // Show in the Dock so the window can take focus.
+        DockVisibilityCoordinator.shared.windowDidOpen()
         NSApp.activate(ignoringOtherApps: true)
 
-        // Watch for window close to hide from dock again
-        NotificationCenter.default.addObserver(
+        // Held so it can be removed on close — a block-based observer lives
+        // until its token is released, so opening repeatedly would otherwise
+        // stack up observers.
+        closeObserver = NotificationCenter.default.addObserver(
             forName: NSWindow.willCloseNotification,
             object: window,
             queue: .main
         ) { [weak self] _ in
-            self?.settingsWindow = nil
-            // Hide from dock again when settings closes
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                NSApp.setActivationPolicy(.accessory)
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.settingsWindow = nil
+                if let observer = self.closeObserver {
+                    NotificationCenter.default.removeObserver(observer)
+                    self.closeObserver = nil
+                }
+                DockVisibilityCoordinator.shared.windowDidClose()
             }
         }
+    }
+}
+
+/// Manages the standalone update details window.
+/// Update details open in their own window rather than as a sheet inside the
+/// MenuBarExtra popover: sheets there detach, fight the popover for focus,
+/// and pull it down along with themselves when dismissed.
+@MainActor
+final class UpdateWindowManager: ObservableObject {
+    private var updateWindow: NSWindow?
+    private var closeObserver: NSObjectProtocol?
+
+    /// The release currently on screen, so a newer one can replace it.
+    private var presentedInfo: UpdateInfo?
+
+    func open(appState: AppState, info: UpdateInfo) {
+        if let window = updateWindow, window.isVisible {
+            // Already showing this release — just bring it forward. If a
+            // newer one arrived while the window was open, swap the contents
+            // rather than leaving the stale release on screen.
+            if presentedInfo != info {
+                window.contentView = NSHostingView(rootView: detailView(appState: appState, info: info))
+                presentedInfo = info
+            }
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+
+        let updateView = detailView(appState: appState, info: info)
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 480, height: 420),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "VocaMac Update"
+        window.contentView = NSHostingView(rootView: updateView)
+        window.center()
+        window.isReleasedWhenClosed = false
+        window.makeKeyAndOrderFront(nil)
+
+        self.updateWindow = window
+        self.presentedInfo = info
+
+        // Show in the Dock so the window can take focus.
+        DockVisibilityCoordinator.shared.windowDidOpen()
+        NSApp.activate(ignoringOtherApps: true)
+
+        closeObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification,
+            object: window,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.updateWindow = nil
+                self.presentedInfo = nil
+                if let observer = self.closeObserver {
+                    NotificationCenter.default.removeObserver(observer)
+                    self.closeObserver = nil
+                }
+                DockVisibilityCoordinator.shared.windowDidClose()
+            }
+        }
+    }
+
+    private func detailView(appState: AppState, info: UpdateInfo) -> some View {
+        UpdateDetailView(info: info, isPresented: Binding(
+            get: { true },
+            set: { [weak self] stillPresented in
+                if !stillPresented { self?.updateWindow?.close() }
+            }
+        ))
+        .environmentObject(appState)
     }
 }
 
@@ -60,6 +144,7 @@ final class SettingsWindowManager: ObservableObject {
 @MainActor
 final class OnboardingWindowManager: ObservableObject {
     private var onboardingWindow: NSWindow?
+    private var closeObserver: NSObjectProtocol?
     var onCompletion: (() -> Void)?
 
     func open(appState: AppState, force: Bool = false) {
@@ -95,21 +180,23 @@ final class OnboardingWindowManager: ObservableObject {
 
         self.onboardingWindow = window
 
-        // Show in dock
-        NSApp.setActivationPolicy(.regular)
+        // Show in the Dock so the window can take focus.
+        DockVisibilityCoordinator.shared.windowDidOpen()
         NSApp.activate(ignoringOtherApps: true)
 
-        // Watch for window close
-        NotificationCenter.default.addObserver(
+        closeObserver = NotificationCenter.default.addObserver(
             forName: NSWindow.willCloseNotification,
             object: window,
             queue: .main
         ) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.onboardingWindow = nil
-                // Hide from dock when onboarding closes
-                try? await Task.sleep(nanoseconds: 500_000_000)
-                NSApp.setActivationPolicy(.accessory)
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.onboardingWindow = nil
+                if let observer = self.closeObserver {
+                    NotificationCenter.default.removeObserver(observer)
+                    self.closeObserver = nil
+                }
+                DockVisibilityCoordinator.shared.windowDidClose()
             }
         }
 
@@ -137,12 +224,13 @@ final class OnboardingWindowManager: ObservableObject {
 struct VocaMacApp: App {
     @StateObject private var appState = AppState.production()
     @StateObject private var settingsManager = SettingsWindowManager()
+    @StateObject private var updateWindowManager = UpdateWindowManager()
     @StateObject private var onboardingManager = OnboardingWindowManager()
 
     var body: some Scene {
         // Menu bar presence — the primary UI for VocaMac
         MenuBarExtra {
-            MenuBarView(settingsManager: settingsManager)
+            MenuBarView(settingsManager: settingsManager, updateWindowManager: updateWindowManager)
                 .environmentObject(appState)
         } label: {
             MenuBarIcon(appStatus: appState.appStatus, audioLevel: appState.audioLevel)

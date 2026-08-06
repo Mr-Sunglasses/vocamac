@@ -78,12 +78,13 @@ final class ProcessMonitor: ObservableObject {
 struct MenuBarView: View {
     @EnvironmentObject var appState: AppState
     @ObservedObject var settingsManager: SettingsWindowManager
+    @ObservedObject var updateWindowManager: UpdateWindowManager
     @StateObject private var processMonitor = ProcessMonitor()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             if let info = appState.updateChecker.activeUpdateInfo {
-                UpdateBannerView(info: info)
+                UpdateBannerView(info: info, updateWindowManager: updateWindowManager)
                 Divider()
             }
 
