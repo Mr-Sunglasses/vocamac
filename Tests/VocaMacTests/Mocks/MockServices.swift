@@ -255,7 +255,7 @@ final class MockModelManager: ModelManaging {
     func deviceRecommendation() -> (defaultModel: String, supported: [String], disabled: [String]) {
         (
             defaultModel: defaultModel,
-            supported: supportedModelNames ?? supportedModels.map(whisperKitModelName(for:)),
+            supported: supportedModelNames ?? supportedModels.map(modelIdentifier(for:)),
             disabled: disabledModelNames
         )
     }
@@ -289,13 +289,13 @@ final class MockModelManager: ModelManaging {
 
     func isModelSupported(_ size: ModelSize) -> Bool {
         if let supportedModelNames {
-            return supportedModelNames.contains(whisperKitModelName(for: size))
-                && !disabledModelNames.contains(whisperKitModelName(for: size))
+            return supportedModelNames.contains(modelIdentifier(for: size))
+                && !disabledModelNames.contains(modelIdentifier(for: size))
         }
         return supportedModels.contains(size)
     }
 
-    func whisperKitModelName(for size: ModelSize) -> String {
+    func modelIdentifier(for size: ModelSize) -> String {
         switch size {
         case .tiny:
             return "openai_whisper-tiny"
@@ -321,11 +321,14 @@ final class MockModelManager: ModelManaging {
             return "openai_whisper-large-v3_turbo"
         case .medium:
             return "openai_whisper-medium"
+        case .parakeetV3, .parakeetV2, .appleSpeech,
+             .moonshineTiny, .moonshineBase, .senseVoiceSmall, .gigaamV3, .canary180mFlash:
+            return size.rawValue
         }
     }
 
-    func modelSize(from whisperKitName: String) -> ModelSize? {
-        ModelSize.allCases.first { whisperKitModelName(for: $0) == whisperKitName }
+    func modelSize(from identifier: String) -> ModelSize? {
+        ModelSize.allCases.first { modelIdentifier(for: $0) == identifier }
     }
 
     func downloadModel(size: ModelSize, onProgress: @escaping (Double) -> Void) async throws {

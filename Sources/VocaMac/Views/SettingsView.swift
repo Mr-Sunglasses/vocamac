@@ -65,7 +65,7 @@ struct GeneralSettingsTab: View {
                     }
                 }
                 .pickerStyle(.radioGroup)
-                .onChange(of: appState.activationMode) { _ in
+                .onChange(of: appState.activationMode) {
                     appState.syncHotKeyConfiguration()
                 }
 
@@ -137,6 +137,17 @@ struct GeneralSettingsTab: View {
                 Text("Auto-detect works well for most cases. Set a specific language for better accuracy.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+
+                if let model = appState.currentModel?.size, model.bindsLanguageAtLoadTime {
+                    Text("\(model.displayName) applies the language when it loads, so changing it reloads the model.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .onChange(of: appState.selectedLanguage) {
+                Task { @MainActor in
+                    await appState.reloadModelForLanguageChangeIfNeeded()
+                }
             }
 
             // Translation
@@ -148,6 +159,12 @@ struct GeneralSettingsTab: View {
                     : "Speech will be transcribed as-is in the spoken language. The language setting is used as a recognition hint only.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+
+                if let engine = appState.currentModel?.size.engine, !engine.supportsTranslation {
+                    Text("Translation is only available with Whisper models. The active model (\(engine.displayName)) transcribes without translating.")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
             }
 
             // Custom Vocabulary
@@ -175,6 +192,12 @@ struct GeneralSettingsTab: View {
                 Text("For best results, enter terms in the language you dictate and set a matching Transcription Language above. In Auto-detect, the terms can also nudge which language VocaMac picks.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+
+                if let engine = appState.currentModel?.size.engine, !engine.supportsCustomVocabulary {
+                    Text("Custom vocabulary is only applied by Whisper models. The active model (\(engine.displayName)) ignores these terms.")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
             }
 
             Section("Behavior") {
@@ -252,6 +275,24 @@ struct PermissionRow: View {
 struct ModelSettingsTab: View {
     @EnvironmentObject var appState: AppState
     @StateObject private var processMonitor = ProcessMonitor()
+
+    /// Catalog entries grouped by engine, preserving catalog order within
+    /// each group. Engines with no available models are omitted.
+    private var modelsByEngine: [(engine: TranscriptionEngine, models: [WhisperModelInfo])] {
+        TranscriptionEngine.allCases.compactMap { engine in
+            let models = appState.availableModels.filter { $0.size.engine == engine }
+            return models.isEmpty ? nil : (engine: engine, models: models)
+        }
+    }
+
+    private func engineIconName(_ engine: TranscriptionEngine) -> String {
+        switch engine {
+        case .parakeet:    return "bolt.fill"
+        case .whisperKit:  return "globe"
+        case .appleSpeech: return "apple.logo"
+        case .sherpaOnnx:  return "puzzlepiece.extension"
+        }
+    }
 
     var body: some View {
         ScrollView {
@@ -359,31 +400,38 @@ struct ModelSettingsTab: View {
                     }
                 }
 
-                // Model list
-                GroupBox {
-                    VStack(alignment: .leading, spacing: 0) {
-                        Label("Available Models", systemImage: "list.bullet")
-                            .font(.headline)
+                // Model list, grouped by engine
+                ForEach(modelsByEngine, id: \.engine) { group in
+                    GroupBox {
+                        VStack(alignment: .leading, spacing: 0) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Label(group.engine.displayName, systemImage: engineIconName(group.engine))
+                                    .font(.headline)
+                                Text(group.engine.summary)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
                             .padding(.bottom, 8)
                             .padding(.horizontal, 4)
 
-                        ForEach(appState.availableModels) { model in
-                            ModelRow(model: model, appState: appState)
+                            ForEach(group.models) { model in
+                                ModelRow(model: model, appState: appState)
 
-                            if model.id != appState.availableModels.last?.id {
-                                Divider()
-                                    .padding(.horizontal, 4)
+                                if model.id != group.models.last?.id {
+                                    Divider()
+                                        .padding(.horizontal, 4)
+                                }
                             }
                         }
+                        .padding(4)
                     }
-                    .padding(4)
                 }
 
                 // Info text
                 HStack {
                     Image(systemName: "info.circle")
                         .foregroundStyle(.secondary)
-                    Text("Models are downloaded from HuggingFace and cached locally. Larger models produce better results but are slower and use more memory.")
+                    Text("Models are downloaded from HuggingFace and cached locally. Larger models produce better results but are slower and use more memory. Apple Speech uses assets built into macOS.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -597,7 +645,7 @@ struct AudioSettingsTab: View {
                     Text("120 seconds").tag(120)
                     Text("300 seconds (5 min)").tag(300)
                 }
-                .onChange(of: appState.maxRecordingDuration) { _ in
+                .onChange(of: appState.maxRecordingDuration) {
                     appState.syncHotKeyConfiguration()
                 }
 
@@ -655,7 +703,7 @@ struct AudioSettingsTab: View {
                         Text(device.name).tag(device.id)
                     }
                 }
-                .onChange(of: appState.selectedAudioDeviceID) { _ in
+                .onChange(of: appState.selectedAudioDeviceID) {
                     syncSelectedAudioDeviceName()
                 }
 

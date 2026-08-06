@@ -230,7 +230,7 @@ jobs:
             > macOS will open it without any security warnings.
 
             ### Requirements
-            - macOS 13 (Ventura) or later
+            - macOS 14 (Sonoma) or later
             - Apple Silicon (arm64)
 
             ### Checksums (SHA-256)

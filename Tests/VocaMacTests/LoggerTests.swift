@@ -12,9 +12,9 @@ final class LogCategoryTests: XCTestCase {
 
     func testAllCategoriesHaveRawValues() {
         let categories: [LogCategory] = [
-            .appState, .audioEngine, .whisperService, .hotKeyManager,
-            .modelManager, .soundManager, .textInjector, .cursorOverlay,
-            .onboarding, .general
+            .appState, .audioEngine, .whisperService, .parakeetService,
+            .appleSpeechService, .sherpaService, .hotKeyManager, .modelManager,
+            .soundManager, .textInjector, .cursorOverlay, .onboarding, .general
         ]
 
         for category in categories {
@@ -26,9 +26,9 @@ final class LogCategoryTests: XCTestCase {
     func testCategoryRawValuesAreCapitalized() {
         // Convention: category raw values should start with an uppercase letter
         let categories: [LogCategory] = [
-            .appState, .audioEngine, .whisperService, .hotKeyManager,
-            .modelManager, .soundManager, .textInjector, .cursorOverlay,
-            .onboarding, .general
+            .appState, .audioEngine, .whisperService, .parakeetService,
+            .appleSpeechService, .sherpaService, .hotKeyManager, .modelManager,
+            .soundManager, .textInjector, .cursorOverlay, .onboarding, .general
         ]
 
         for category in categories {
@@ -40,11 +40,11 @@ final class LogCategoryTests: XCTestCase {
 
     func testCategoryCount() {
         // Ensure we're testing all categories — update this if new ones are added
-        let expectedCount = 10
+        let expectedCount = 13
         let categories: [LogCategory] = [
-            .appState, .audioEngine, .whisperService, .hotKeyManager,
-            .modelManager, .soundManager, .textInjector, .cursorOverlay,
-            .onboarding, .general
+            .appState, .audioEngine, .whisperService, .parakeetService,
+            .appleSpeechService, .sherpaService, .hotKeyManager, .modelManager,
+            .soundManager, .textInjector, .cursorOverlay, .onboarding, .general
         ]
         XCTAssertEqual(categories.count, expectedCount)
     }

@@ -7,8 +7,11 @@ import Foundation
 
 // MARK: - ModelSize
 
-/// Whisper model size variants with their properties
+/// Model variants across all supported engines with their properties.
+///
+/// Raw values are persisted in user preferences, so they must remain stable.
 enum ModelSize: String, CaseIterable, Codable, Identifiable {
+    // Whisper (WhisperKit)
     case tiny                         = "tiny"
     case base                         = "base"
     case small                        = "small"
@@ -22,7 +25,75 @@ enum ModelSize: String, CaseIterable, Codable, Identifiable {
     case largeV3Turbo                 = "large-v3_turbo"
     case medium                       = "medium"
 
+    // Parakeet (FluidAudio)
+    case parakeetV3                   = "parakeet-tdt-0.6b-v3"
+    case parakeetV2                   = "parakeet-tdt-0.6b-v2"
+
+    // Apple Speech (macOS 26+ system engine)
+    case appleSpeech                  = "apple-speech"
+
+    // Specialized ONNX models (sherpa-onnx, CPU-only)
+    case moonshineTiny                = "moonshine-v2-tiny-en"
+    case moonshineBase                = "moonshine-v2-base-en"
+    case senseVoiceSmall              = "sense-voice-small"
+    case gigaamV3                     = "gigaam-v3-russian"
+    case canary180mFlash              = "canary-180m-flash"
+
     var id: String { rawValue }
+
+    /// Which engine runs this model.
+    var engine: TranscriptionEngine {
+        switch self {
+        case .parakeetV3, .parakeetV2:
+            return .parakeet
+        case .appleSpeech:
+            return .appleSpeech
+        case .moonshineTiny, .moonshineBase, .senseVoiceSmall, .gigaamV3, .canary180mFlash:
+            return .sherpaOnnx
+        default:
+            return .whisperKit
+        }
+    }
+
+    /// Whether this model's engine can run on the current system at all
+    /// (independent of per-device model recommendations).
+    var isAvailableOnThisSystem: Bool {
+        switch engine {
+        case .whisperKit:
+            return true
+        case .parakeet:
+            // FluidAudio's Parakeet CoreML models require Apple Silicon.
+            #if arch(arm64)
+            return true
+            #else
+            return false
+            #endif
+        case .appleSpeech:
+            if #available(macOS 26.0, *) {
+                return AppleSpeechService.isRuntimeSupported
+            }
+            return false
+        case .sherpaOnnx:
+            // ONNX Runtime ships universal binaries; runs on any Mac.
+            return true
+        }
+    }
+
+    /// Whether the model's assets are owned by the OS rather than downloaded
+    /// and stored by VocaMac.
+    var isSystemManaged: Bool {
+        self == .appleSpeech
+    }
+
+    /// Whether the transcription language is fixed when this model loads, so
+    /// changing it only takes effect after a reload.
+    ///
+    /// Whisper and Parakeet take the language per transcription. Among the
+    /// ONNX models only SenseVoice and Canary bind it, so the rest should not
+    /// pay for a reload.
+    var bindsLanguageAtLoadTime: Bool {
+        SherpaModelCatalog.spec(for: self)?.bindsLanguageAtLoadTime ?? false
+    }
 
     /// Models shown by default in the app's Mac-focused model picker.
     ///
@@ -30,6 +101,8 @@ enum ModelSize: String, CaseIterable, Codable, Identifiable {
     /// support from WhisperKit, but is not part of the normal Apple Silicon
     /// catalog because WhisperKit does not list it for M-series Macs.
     static let standardCatalog: [ModelSize] = [
+        .parakeetV3,
+        .parakeetV2,
         .tiny,
         .base,
         .small,
@@ -38,6 +111,12 @@ enum ModelSize: String, CaseIterable, Codable, Identifiable {
         .distilLargeV3TurboCompact,
         .largeV3LatestCompact,
         .largeV3Latest,
+        .appleSpeech,
+        .moonshineTiny,
+        .moonshineBase,
+        .senseVoiceSmall,
+        .gigaamV3,
+        .canary180mFlash,
     ]
 
     /// Whether this model is kept only for compatibility or explicit support.
@@ -60,6 +139,14 @@ enum ModelSize: String, CaseIterable, Codable, Identifiable {
         case .largeV3:                   return "Large v3"
         case .largeV3Turbo:              return "Large v3 Turbo"
         case .medium:                    return "Medium (Legacy)"
+        case .parakeetV3:                return "Parakeet v3 (Multilingual)"
+        case .parakeetV2:                return "Parakeet v2 (English)"
+        case .appleSpeech:               return "Apple Speech (System)"
+        case .moonshineTiny:             return "Moonshine v2 Tiny (English)"
+        case .moonshineBase:             return "Moonshine v2 Base (English)"
+        case .senseVoiceSmall:           return "SenseVoice (Chinese +4)"
+        case .gigaamV3:                  return "GigaAM v3 (Russian)"
+        case .canary180mFlash:           return "Canary 180M (EN/ES/DE/FR)"
         }
     }
 
@@ -78,11 +165,20 @@ enum ModelSize: String, CaseIterable, Codable, Identifiable {
         case .largeV3:                   return 3_100_000_000
         case .largeV3Turbo:              return 954_000_000
         case .medium:                    return 1_500_000_000
+        case .parakeetV3:                return 700_000_000
+        case .parakeetV2:                return 1_200_000_000
+        case .appleSpeech:               return 0
+        case .moonshineTiny:             return 60_000_000
+        case .moonshineBase:             return 190_000_000
+        case .senseVoiceSmall:           return 240_000_000
+        case .gigaamV3:                  return 270_000_000
+        case .canary180mFlash:           return 320_000_000
         }
     }
 
     /// Human-readable file size string
     var fileSizeDescription: String {
+        if isSystemManaged { return "Managed by macOS" }
         let formatter = ByteCountFormatter()
         formatter.countStyle = .file
         return formatter.string(fromByteCount: fileSizeBytes)
@@ -103,6 +199,14 @@ enum ModelSize: String, CaseIterable, Codable, Identifiable {
         case .largeV3:                   return 10.0
         case .largeV3Turbo:              return 6.0
         case .medium:                    return 5.0
+        case .parakeetV3:                return 2.0
+        case .parakeetV2:                return 2.5
+        case .appleSpeech:               return 1.0
+        case .moonshineTiny:             return 0.5
+        case .moonshineBase:             return 1.0
+        case .senseVoiceSmall:           return 1.5
+        case .gigaamV3:                  return 1.5
+        case .canary180mFlash:           return 1.5
         }
     }
 
@@ -121,6 +225,14 @@ enum ModelSize: String, CaseIterable, Codable, Identifiable {
         case .largeV3:                   return 16
         case .largeV3Turbo:              return 10
         case .medium:                    return 8
+        case .parakeetV3:                return 1
+        case .parakeetV2:                return 1
+        case .appleSpeech:               return 2
+        case .moonshineTiny:             return 2
+        case .moonshineBase:             return 3
+        case .senseVoiceSmall:           return 3
+        case .gigaamV3:                  return 3
+        case .canary180mFlash:           return 4
         }
     }
 
@@ -139,6 +251,14 @@ enum ModelSize: String, CaseIterable, Codable, Identifiable {
         case .largeV3:                   return "Best"
         case .largeV3Turbo:              return "Best"
         case .medium:                    return "Legacy"
+        case .parakeetV3:                return "Excellent"
+        case .parakeetV2:                return "Excellent"
+        case .appleSpeech:               return "Excellent"
+        case .moonshineTiny:             return "Good"
+        case .moonshineBase:             return "Better"
+        case .senseVoiceSmall:           return "Great"
+        case .gigaamV3:                  return "Great"
+        case .canary180mFlash:           return "Great"
         }
     }
 }

@@ -34,7 +34,7 @@ struct HotKeySelectionControl: View {
                     }
                 }
                 .disabled(isRecording)
-                .onChange(of: appState.hotKeyCode) { _ in
+                .onChange(of: appState.hotKeyCode) {
                     guard !isRecording else { return }
                     appState.syncHotKeyConfiguration()
                 }

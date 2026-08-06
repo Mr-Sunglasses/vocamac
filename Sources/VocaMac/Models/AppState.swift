@@ -102,7 +102,7 @@ final class AppState: ObservableObject {
     @AppStorage("vocamac.selectedAudioDeviceID") var selectedAudioDeviceID: String = ""
     @AppStorage("vocamac.selectedAudioDeviceName") var selectedAudioDeviceName: String = ""
     @AppStorage("vocamac.selectedModelSize") var selectedModelSize: String = ModelSize.tiny.rawValue
-    @AppStorage("vocamac.selectedLanguage") var selectedLanguage: String = "auto"
+    @AppStorage(PreferenceKey.selectedLanguage) var selectedLanguage: String = "auto"
     @AppStorage("vocamac.launchAtLogin") var launchAtLogin: Bool = false
     @AppStorage("vocamac.preserveClipboard") var preserveClipboard: Bool = true
     @AppStorage("vocamac.soundEffectsEnabled") var soundEffectsEnabled: Bool = true
@@ -173,7 +173,7 @@ final class AppState: ObservableObject {
 
     init(
         audioEngine: AudioRecording = AudioEngine(),
-        whisperService: SpeechTranscribing = WhisperService(),
+        whisperService: SpeechTranscribing = TranscriptionRouter(),
         textInjector: TextInjecting = TextInjector(),
         hotKeyManager: HotKeyMonitoring = HotKeyManager(),
         modelManager: ModelManaging = ModelManager(),
@@ -318,9 +318,11 @@ final class AppState: ObservableObject {
             } ?? false
 
             if !isRecommendedSupported {
-                // Fall back to the largest supported model
-                if let bestSupported = availableModels.last(where: { $0.isSupported }) {
-                    deviceRecommendedModel = modelManager.whisperKitModelName(for: bestSupported.size)
+                // Fall back to the largest supported WhisperKit model — the
+                // recommendation badge reflects WhisperKit's per-device tuning,
+                // so other engines are not candidates here.
+                if let bestSupported = availableModels.last(where: { $0.isSupported && $0.size.engine == .whisperKit }) {
+                    deviceRecommendedModel = modelManager.modelIdentifier(for: bestSupported.size)
                 } else {
                     // No models are supported — clear the recommendation
                     deviceRecommendedModel = nil
@@ -415,10 +417,13 @@ final class AppState: ObservableObject {
     ///
     /// The base catalog is curated for M-series Macs, then extended with any
     /// exact variants WhisperKit marks supported for the current device.
+    /// Models whose engine cannot run on this system at all (e.g. Apple
+    /// Speech before macOS 26, Parakeet on Intel) are excluded entirely.
     private func modelCatalog() -> [ModelSize] {
-        var catalog = ModelSize.standardCatalog
+        var catalog = ModelSize.standardCatalog.filter { $0.isAvailableOnThisSystem }
 
-        for size in ModelSize.allCases where modelManager.isModelSupported(size) {
+        for size in ModelSize.allCases
+        where size.isAvailableOnThisSystem && modelManager.isModelSupported(size) {
             if !catalog.contains(size) {
                 catalog.append(size)
             }
@@ -459,6 +464,16 @@ final class AppState: ObservableObject {
     private func startupFallbackModel(for preferred: ModelSize) -> ModelSize {
         guard !modelManager.isModelSupported(preferred) else {
             return preferred
+        }
+
+        // Stay on the engine the user was already using where possible.
+        // Without this, the catalog order alone decides the fallback, and a
+        // Whisper user could land on a different engine — notably Apple
+        // Speech, which always counts as downloaded because macOS owns it.
+        if let sameEngine = availableModels.last(where: {
+            $0.size.engine == preferred.engine && $0.isSupported && $0.isDownloaded
+        })?.size {
+            return sameEngine
         }
 
         if let downloadedSupported = availableModels.last(where: { $0.isSupported && $0.isDownloaded })?.size {
@@ -706,7 +721,7 @@ final class AppState: ObservableObject {
 
         let modelName: String?
         if let size = size {
-            modelName = modelManager.whisperKitModelName(for: size)
+            modelName = modelManager.modelIdentifier(for: size)
         } else {
             modelName = nil  // Let WhisperKit auto-select
         }
@@ -821,6 +836,20 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// Reload the active model when the transcription language changes and
+    /// the engine bakes that language into the loaded model (sherpa-onnx).
+    /// Other engines take the language per transcription and need no reload.
+    func reloadModelForLanguageChangeIfNeeded() async {
+        guard let size = currentModel?.size,
+              size.bindsLanguageAtLoadTime,
+              whisperService.isModelLoaded else {
+            return
+        }
+
+        VocaLogger.info(.appState, "Language changed to \(selectedLanguage) — reloading \(size.displayName)")
+        await loadModel(size)
+    }
+
     /// Surface a short-lived error state for settings and menu UI.
     private func showTemporaryError(_ message: String) {
         errorMessage = message
@@ -854,7 +883,7 @@ final class AppState: ObservableObject {
             let folderURL = modelManager.isModelDownloaded(previousSize)
                 ? modelManager.modelFolder(for: previousSize)
                 : nil
-            let restoreName = previousName ?? modelManager.whisperKitModelName(for: previousSize)
+            let restoreName = previousName ?? modelManager.modelIdentifier(for: previousSize)
             try await whisperService.loadModel(name: restoreName, folder: folderURL)
             markModelActive(previousSize)
             VocaLogger.info(.appState, "Restored previous model: \(previousSize.displayName)")

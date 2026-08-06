@@ -2,10 +2,10 @@
 
 ## Project Overview
 
-VocaMac is a **native macOS menu bar application** for local voice-to-text dictation, built with **Swift 5.9+** and **SwiftUI**. It uses **WhisperKit** (CoreML-based) for on-device speech recognition. The project also includes a **static marketing website** (`web/`) deployed to GitHub Pages at [vocamac.com](https://vocamac.com).
+VocaMac is a **native macOS menu bar application** for local voice-to-text dictation, built with **Swift 5.9+** and **SwiftUI**. It supports four on-device speech engines: **WhisperKit** (OpenAI Whisper, CoreML), **FluidAudio** (NVIDIA Parakeet TDT, CoreML on the Neural Engine), **Apple Speech** (SpeechAnalyzer, macOS 26+), and **sherpa-onnx** (specialized ONNX models: Moonshine, SenseVoice, GigaAM, Canary; CPU-only). `TranscriptionRouter` dispatches to the engine that owns the selected model. The project also includes a **static marketing website** (`web/`) deployed to GitHub Pages at [vocamac.com](https://vocamac.com).
 
 - **License:** AGPL-3.0
-- **Minimum target:** macOS 13 (Ventura)
+- **Minimum target:** macOS 14 (Sonoma)
 - **Build system:** Swift Package Manager
 - **CI:** GitHub Actions (`.github/workflows/ci.yml`)
 - **Website deployment:** GitHub Pages via release trigger (`.github/workflows/deploy-website.yml`)
@@ -43,7 +43,9 @@ VocaMac/
 │   ├── App/              # App entry point, MenuBarExtra, MenuBarIcon
 │   ├── Models/           # AppState, TranscriptionResult, WhisperModel
 │   ├── Services/         # AudioEngine, HotKeyManager, ModelManager,
-│   │                     #   SystemInfo, TextInjector, WhisperService
+│   │                     #   SystemInfo, TextInjector, TranscriptionRouter,
+│   │                     #   WhisperService, ParakeetService, AppleSpeechService,
+│   │                     #   SherpaService (+ Vendor/SherpaOnnxConfigBuilders)
 │   ├── Views/            # MenuBarView, SettingsView
 │   └── Resources/        # Bundled resources (.gitkeep placeholder)
 ├── Tests/VocaMacTests/   # Unit tests
