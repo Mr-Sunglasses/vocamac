@@ -114,6 +114,24 @@ final class CLITests: XCTestCase {
         }
     }
 
+    func testSherpaRouterRequestsInjectedOneRequestLanguage() async {
+        var languageProviderCallCount = 0
+        let router = TranscriptionRouter(languagePreferenceProvider: {
+            languageProviderCallCount += 1
+            return "de"
+        })
+
+        do {
+            // This model is intentionally not installed in CI. The provider
+            // must still be consulted before SherpaService rejects its files.
+            try await router.loadModel(name: ModelSize.moonshineTiny.rawValue)
+        } catch {
+            // Missing local model files are expected and unrelated to routing.
+        }
+
+        XCTAssertEqual(languageProviderCallCount, 1)
+    }
+
     func testOmittedLanguageReadsPreferenceAndAutoBecomesNil() async throws {
         let selectedLanguage = makeDependencies(selectedModel: .small)
         selectedLanguage.preferences.selectedLanguageIdentifier = "fr"

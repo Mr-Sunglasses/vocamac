@@ -23,9 +23,10 @@ final class TranscriptionRouter: @unchecked Sendable {
     /// against an engine that a concurrent load just unloaded.
     private let operationSerializer = LoadSerializer()
 
-    /// Supplies the language Apple Speech must prepare before transcription.
-    /// The GUI reads the normal app preference; headless callers inject the
-    /// one-request language without changing that preference.
+    /// Supplies the language engines with load-time language configuration
+    /// must prepare before transcription. The GUI reads the normal app
+    /// preference; headless callers inject the one-request language without
+    /// changing that preference.
     private let languagePreferenceProvider: () -> String?
 
     init(languagePreferenceProvider: @escaping () -> String? = {
@@ -122,7 +123,11 @@ extension TranscriptionRouter: SpeechTranscribing {
         case .appleSpeech:
             try await appleSpeech.loadModel(language: languagePreference, onPhaseChange: onPhaseChange)
         case .sherpaOnnx:
-            try await sherpa.loadModel(name: name, onPhaseChange: onPhaseChange)
+            try await sherpa.loadModel(
+                name: name,
+                language: languagePreference,
+                onPhaseChange: onPhaseChange
+            )
         }
 
         activeEngine = engine
