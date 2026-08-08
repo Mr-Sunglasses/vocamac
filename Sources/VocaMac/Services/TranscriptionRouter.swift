@@ -23,6 +23,18 @@ final class TranscriptionRouter: @unchecked Sendable {
     /// against an engine that a concurrent load just unloaded.
     private let operationSerializer = LoadSerializer()
 
+    /// Supplies the language Apple Speech must prepare before transcription.
+    /// The GUI reads the normal app preference; headless callers inject the
+    /// one-request language without changing that preference.
+    private let languagePreferenceProvider: () -> String?
+
+    init(languagePreferenceProvider: @escaping () -> String? = {
+        let stored = UserDefaults.standard.string(forKey: PreferenceKey.selectedLanguage) ?? "auto"
+        return stored == "auto" ? nil : stored
+    }) {
+        self.languagePreferenceProvider = languagePreferenceProvider
+    }
+
     // MARK: - Engine Resolution
 
     /// Resolve which engine owns a model identifier.
@@ -118,8 +130,7 @@ extension TranscriptionRouter: SpeechTranscribing {
 
     /// The transcription language the user selected, or nil for auto-detect.
     private var languagePreference: String? {
-        let stored = UserDefaults.standard.string(forKey: PreferenceKey.selectedLanguage) ?? "auto"
-        return stored == "auto" ? nil : stored
+        languagePreferenceProvider()
     }
 
     func transcribe(
