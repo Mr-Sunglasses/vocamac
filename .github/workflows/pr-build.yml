@@ -99,6 +99,9 @@ jobs:
           restore-keys: |
             spm-${{ runner.os }}-
 
+      - name: Select Xcode 26
+        run: ./scripts/select-xcode-26.sh
+
       # ── Test ──────────────────────────────────────────────────────────────
       - name: Run tests
         run: swift test
