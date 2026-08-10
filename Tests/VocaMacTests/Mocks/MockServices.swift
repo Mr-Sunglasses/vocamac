@@ -109,6 +109,7 @@ final class MockHotKeyManager: HotKeyMonitoring {
     var lastMode: ActivationMode?
     var lastDoubleTapThreshold: Double?
     var lastSafetyTimeout: Double?
+    var lastModifiers: HotKeyModifiers?
     var resetKeyStateCallCount = 0
     var updateConfigurationCallCount = 0
 
@@ -122,12 +123,13 @@ final class MockHotKeyManager: HotKeyMonitoring {
         accessibilityPermission = granted
     }
 
-    func startListening(keyCode: Int, mode: ActivationMode, doubleTapThreshold: Double, safetyTimeout: Double) {
+    func startListening(keyCode: Int, mode: ActivationMode, doubleTapThreshold: Double, safetyTimeout: Double, modifiers: HotKeyModifiers) {
         startListeningCallCount += 1
         lastKeyCode = keyCode
         lastMode = mode
         lastDoubleTapThreshold = doubleTapThreshold
         lastSafetyTimeout = safetyTimeout
+        lastModifiers = modifiers
         isListening = true
     }
 
@@ -139,7 +141,7 @@ final class MockHotKeyManager: HotKeyMonitoring {
         resetKeyStateCallCount += 1
     }
 
-    func _updateConfiguration(keyCode: Int?, mode: ActivationMode?, doubleTapThreshold: Double?, safetyTimeout: Double?) {
+    func _updateConfiguration(keyCode: Int?, mode: ActivationMode?, doubleTapThreshold: Double?, safetyTimeout: Double?, modifiers: HotKeyModifiers?) {
         updateConfigurationCallCount += 1
         if let keyCode = keyCode {
             lastKeyCode = keyCode
@@ -152,6 +154,9 @@ final class MockHotKeyManager: HotKeyMonitoring {
         }
         if let safetyTimeout = safetyTimeout {
             lastSafetyTimeout = safetyTimeout
+        }
+        if let modifiers = modifiers {
+            lastModifiers = modifiers
         }
     }
 }

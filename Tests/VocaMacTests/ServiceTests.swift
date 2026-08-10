@@ -16,7 +16,7 @@ final class KeyCodeReferenceTests: XCTestCase {
     }
 
     func testDisplayNameForKnownKeyCode() {
-        XCTAssertEqual(KeyCodeReference.displayName(for: 61), "Right Option (⌥)")
+        XCTAssertEqual(KeyCodeReference.displayName(for: HotKeyCombo(keyCode: 61, modifiers: [])), "Right Option (⌥)")
     }
 
     func testDisplayNameForRecordedCharacterKeyCodeUsesActiveLayout() throws {
@@ -24,19 +24,19 @@ final class KeyCodeReferenceTests: XCTestCase {
             throw XCTSkip("Could not inspect active keyboard layout")
         }
 
-        XCTAssertEqual(KeyCodeReference.displayName(for: Int(keyCode)), "A")
+        XCTAssertEqual(KeyCodeReference.displayName(for: HotKeyCombo(keyCode: Int(keyCode), modifiers: [])), "A")
     }
 
     func testDisplayNameForRecordedFunctionKeyCode() {
-        XCTAssertEqual(KeyCodeReference.displayName(for: 105), "F13")
+        XCTAssertEqual(KeyCodeReference.displayName(for: HotKeyCombo(keyCode: 105, modifiers: [])), "F13")
     }
 
     func testDisplayNameForUnknownKeyCode() {
-        XCTAssertEqual(KeyCodeReference.displayName(for: 999), "Key 999")
+        XCTAssertEqual(KeyCodeReference.displayName(for: HotKeyCombo(keyCode: 999, modifiers: [])), "Key 999")
     }
 
     func testCustomKeyCodeIsNotCommonPreset() {
-        XCTAssertFalse(KeyCodeReference.isCommonHotKey(105))
+        XCTAssertFalse(KeyCodeReference.isCommonHotKey(HotKeyCombo(keyCode: 105, modifiers: [])))
     }
 
     func testModifierKeyCodeDetection() {
@@ -47,11 +47,19 @@ final class KeyCodeReferenceTests: XCTestCase {
 
     func testEscapeKeyCodeConstant() {
         XCTAssertEqual(KeyCodeReference.escapeKeyCode, 53)
-        XCTAssertEqual(KeyCodeReference.displayName(for: KeyCodeReference.escapeKeyCode), "Escape")
+        XCTAssertEqual(KeyCodeReference.displayName(for: HotKeyCombo(keyCode: KeyCodeReference.escapeKeyCode, modifiers: [])), "Escape")
     }
 
     func testDisplayNameForSpaceUsesReadableName() {
-        XCTAssertEqual(KeyCodeReference.displayName(for: 49), "Space")
+        XCTAssertEqual(KeyCodeReference.displayName(for: HotKeyCombo(keyCode: 49, modifiers: [])), "Space")
+    }
+
+    func testDisplayNameForComboUsesModifierSymbols() {
+        XCTAssertEqual(KeyCodeReference.displayName(for: HotKeyCombo(keyCode: 49, modifiers: .command)), "⌘ Space")
+    }
+
+    func testComboPresetIsRecognizedAsCommonHotKey() {
+        XCTAssertTrue(KeyCodeReference.isCommonHotKey(HotKeyCombo(keyCode: 49, modifiers: .command)))
     }
 
     func testCommonHotKeysValid() {

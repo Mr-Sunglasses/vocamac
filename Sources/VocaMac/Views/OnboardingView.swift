@@ -686,6 +686,9 @@ struct HotkeyConfigStep: View {
         .onChange(of: appState.hotKeyCode) {
             appState.syncHotKeyConfiguration()
         }
+        .onChange(of: appState.hotKeyModifiers) {
+            appState.syncHotKeyConfiguration()
+        }
     }
 }
 
@@ -835,7 +838,7 @@ struct CompleteStep: View {
                 if appState.inputMonitoringPermission == .granted {
                     SummaryItem(icon: "keyboard.fill", text: "Input monitoring enabled")
                 }
-                SummaryItem(icon: "keyboard", text: "Hotkey: \(KeyCodeReference.displayName(for: appState.hotKeyCode))")
+                SummaryItem(icon: "keyboard", text: "Hotkey: \(KeyCodeReference.displayName(for: HotKeyCombo(keyCode: appState.hotKeyCode, modifiers: appState.hotKeyModifiers)))")
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding()

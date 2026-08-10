@@ -24,6 +24,17 @@ final class HotKeyManager {
     /// The key code to listen for
     private var targetKeyCode: Int = 61  // Right Option
 
+    /// Modifiers required alongside `targetKeyCode` for a combo hotkey
+    /// (e.g. ⌘Space). Empty means legacy single-key behavior — `targetKeyCode`
+    /// alone triggers the hotkey, regardless of what other modifiers are held.
+    private var requiredModifiers: HotKeyModifiers = []
+
+    /// Whether the current key-down for `targetKeyCode` passed the modifier
+    /// check and is considered "held" for combo purposes. Tracked separately
+    /// from `isKeyHeld` because a key-down can now be rejected for having the
+    /// wrong modifiers without ever starting a recording.
+    private var isBaseKeyHeld = false
+
     /// Current activation mode
     private var mode: ActivationMode = .pushToTalk
 
@@ -90,7 +101,8 @@ final class HotKeyManager {
         keyCode: Int = 61,
         mode: ActivationMode = .pushToTalk,
         doubleTapThreshold: Double = 0.4,
-        safetyTimeout: Double = 65.0
+        safetyTimeout: Double = 65.0,
+        modifiers: HotKeyModifiers = []
     ) {
         guard !isListening else {
             VocaLogger.debug(.hotKeyManager, "Already listening")
@@ -98,6 +110,7 @@ final class HotKeyManager {
         }
 
         self.targetKeyCode = keyCode
+        self.requiredModifiers = modifiers
         self.mode = mode
         self.doubleTapThreshold = doubleTapThreshold
         self.safetyTimeoutSeconds = safetyTimeout
@@ -105,6 +118,7 @@ final class HotKeyManager {
         self.isKeyHeld = false
         self.isToggled = false
         self.isModifierKeyHeld = false
+        self.isBaseKeyHeld = false
 
         // Create event tap for key events and flags changed (modifier keys)
         let eventMask: CGEventMask = (
@@ -158,6 +172,7 @@ final class HotKeyManager {
         isKeyHeld = false
         isToggled = false
         isModifierKeyHeld = false
+        isBaseKeyHeld = false
         cancelSafetyTimer()
 
         VocaLogger.info(.hotKeyManager, "Stopped listening")
@@ -171,6 +186,7 @@ final class HotKeyManager {
         isKeyHeld = false
         isToggled = false
         isModifierKeyHeld = false
+        isBaseKeyHeld = false
         cancelSafetyTimer()
         VocaLogger.debug(.hotKeyManager, "Key state reset")
     }
@@ -187,12 +203,14 @@ final class HotKeyManager {
         keyCode: Int? = nil,
         mode: ActivationMode? = nil,
         doubleTapThreshold: Double? = nil,
-        safetyTimeout: Double? = nil
+        safetyTimeout: Double? = nil,
+        modifiers: HotKeyModifiers? = nil
     ) {
         if let keyCode = keyCode { self.targetKeyCode = keyCode }
         if let mode = mode { self.mode = mode }
         if let threshold = doubleTapThreshold { self.doubleTapThreshold = threshold }
         if let timeout = safetyTimeout { self.safetyTimeoutSeconds = timeout }
+        if let modifiers = modifiers { self.requiredModifiers = modifiers }
     }
 
     // MARK: - Event Tap Callback
@@ -235,11 +253,34 @@ final class HotKeyManager {
             if keyCode == targetKeyCode {
                 VocaLogger.debug(.hotKeyManager, "flagsChanged event for target keyCode \(keyCode)")
             }
-            return handleModifierKeyEvent(keyCode: keyCode, event: event)
+            if handleModifierKeyEvent(keyCode: keyCode, event: event) {
+                return true
+            }
+            return handleModifierReleaseDuringCombo(flags: event.flags)
         } else if type == .keyDown || type == .keyUp {
             return handleRegularKeyEvent(keyCode: keyCode, isKeyDown: type == .keyDown, event: event)
         }
 
+        return false
+    }
+
+    /// Detect a required modifier being released while a combo hotkey's base
+    /// key is still held (push-to-talk only), and force a stop. This is the
+    /// combo analogue of the safety timer: without it, releasing ⌘ before
+    /// Space in a ⌘Space hotkey would leave recording stuck until the base
+    /// key's own key-up (which may never come if the user releases Space
+    /// separately in a different app-focus context) or the safety timer fires.
+    ///
+    /// Does not consume the event — the modifier that changed isn't the
+    /// configured target key, so the frontmost app should still see it.
+    private func handleModifierReleaseDuringCombo(flags: CGEventFlags) -> Bool {
+        guard isBaseKeyHeld, mode == .pushToTalk, !requiredModifiers.isEmpty else { return false }
+        guard !requiredModifiers.isSubset(of: HotKeyModifiers(cgEventFlags: flags)) else { return false }
+        VocaLogger.warning(.hotKeyManager, "Combo modifier released while base key held — forcing STOP")
+        // Leave isBaseKeyHeld set so the base key's eventual real key-up is
+        // still consumed (reserving it from the frontmost app), even though
+        // handleKeyUp() here already performed the actual stop.
+        handleKeyUp()
         return false
     }
 
@@ -315,17 +356,33 @@ final class HotKeyManager {
     private func handleRegularKeyEvent(keyCode: Int, isKeyDown: Bool, event: CGEvent) -> Bool {
         guard keyCode == targetKeyCode else { return false }
 
-        if isKeyDown && event.getIntegerValueField(.keyboardEventAutorepeat) != 0 {
-            return true
-        }
-
         if isKeyDown {
+            if event.getIntegerValueField(.keyboardEventAutorepeat) != 0 {
+                // Only consume autorepeat if this key is actively our hotkey.
+                // Otherwise (e.g. a Space-based combo whose modifier wasn't
+                // held on the initial press) repeated keystrokes must keep
+                // reaching the frontmost app rather than being swallowed.
+                return isBaseKeyHeld
+            }
+            guard modifiersMatch(event.flags) else { return false }
+            isBaseKeyHeld = true
             handleKeyDown()
         } else {
+            guard isBaseKeyHeld else { return false }
+            isBaseKeyHeld = false
             handleKeyUp()
         }
 
         return true
+    }
+
+    /// Whether the live modifier flags satisfy this hotkey's configuration.
+    /// Legacy (no required modifiers) always matches, regardless of what
+    /// other modifiers happen to be held — preserving today's behavior for
+    /// single-key hotkeys like F5. A combo requires an exact match so that,
+    /// e.g., a ⌘Space hotkey does not also fire on ⌘⇧Space.
+    private func modifiersMatch(_ flags: CGEventFlags) -> Bool {
+        requiredModifiers.isEmpty || HotKeyModifiers(cgEventFlags: flags) == requiredModifiers
     }
 
     /// Process a key-down event for the target hotkey
@@ -446,8 +503,25 @@ extension HotKeyManager: HotKeyMonitoring {
         Self.checkAccessibilityPermission(prompt: prompt)
     }
 
-    func _updateConfiguration(keyCode: Int?, mode: ActivationMode?, doubleTapThreshold: Double?, safetyTimeout: Double?) {
-        updateConfiguration(keyCode: keyCode, mode: mode, doubleTapThreshold: doubleTapThreshold, safetyTimeout: safetyTimeout)
+    func _updateConfiguration(keyCode: Int?, mode: ActivationMode?, doubleTapThreshold: Double?, safetyTimeout: Double?, modifiers: HotKeyModifiers?) {
+        updateConfiguration(keyCode: keyCode, mode: mode, doubleTapThreshold: doubleTapThreshold, safetyTimeout: safetyTimeout, modifiers: modifiers)
+    }
+}
+
+// MARK: - HotKeyModifiers Conversion
+
+extension HotKeyModifiers {
+    /// Maps the 5 relevant CGEventFlags bits (Control/Option/Shift/Command/Fn)
+    /// into our own canonical representation. Other bits (e.g. caps lock,
+    /// numeric pad) are ignored.
+    init(cgEventFlags flags: CGEventFlags) {
+        var result: HotKeyModifiers = []
+        if flags.contains(.maskControl) { result.insert(.control) }
+        if flags.contains(.maskAlternate) { result.insert(.option) }
+        if flags.contains(.maskShift) { result.insert(.shift) }
+        if flags.contains(.maskCommand) { result.insert(.command) }
+        if flags.contains(.maskSecondaryFn) { result.insert(.function) }
+        self = result
     }
 }
 
@@ -467,21 +541,25 @@ extension HotKeyManager {
 enum KeyCodeReference {
     static let escapeKeyCode = 53
 
-    static let commonHotKeys: [(name: String, keyCode: Int)] = [
-        ("Right Option (⌥)", 61),
-        ("Left Option (⌥)", 58),
-        ("Right Command (⌘)", 54),
-        ("Right Shift (⇧)", 60),
-        ("Right Control (⌃)", 62),
-        ("Fn", 63),
-        ("F5", 96),
-        ("F6", 97),
-        ("F7", 98),
-        ("F8", 100),
-        ("F9", 101),
-        ("F10", 109),
-        ("F11", 103),
-        ("F12", 111),
+    static let commonHotKeys: [(name: String, keyCode: Int, modifiers: HotKeyModifiers)] = [
+        ("Right Option (⌥)", 61, []),
+        ("Left Option (⌥)", 58, []),
+        ("Right Command (⌘)", 54, []),
+        ("Right Shift (⇧)", 60, []),
+        ("Right Control (⌃)", 62, []),
+        ("Fn", 63, []),
+        ("F5", 96, []),
+        ("F6", 97, []),
+        ("F7", 98, []),
+        ("F8", 100, []),
+        ("F9", 101, []),
+        ("F10", 109, []),
+        ("F11", 103, []),
+        ("F12", 111, []),
+        ("⌘ Space", 49, .command),
+        ("⌃ Space", 49, .control),
+        ("⌥ Space", 49, .option),
+        ("⌃⌥ Space", 49, [.control, .option]),
     ]
 
     private static let namedKeyCodes: [Int: String] = [
@@ -550,17 +628,38 @@ enum KeyCodeReference {
         126: "Up Arrow",
     ]
 
-    /// Get the display name for a key code
-    static func displayName(for keyCode: Int) -> String {
-        commonHotKeys.first(where: { $0.keyCode == keyCode })?.name
-            ?? namedKeyCodes[keyCode]
-            ?? displayCharacter(for: keyCode)
-            ?? "Key \(keyCode)"
+    /// Get the display name for a hotkey combo (required modifiers + base key).
+    static func displayName(for combo: HotKeyCombo) -> String {
+        if let preset = commonHotKeys.first(where: { $0.keyCode == combo.keyCode && $0.modifiers == combo.modifiers }) {
+            return preset.name
+        }
+        let base = bareKeyName(for: combo.keyCode)
+        return combo.modifiers.isEmpty ? base : "\(symbol(for: combo.modifiers))\(base)"
     }
 
-    /// Whether this key code is included in the curated preset list.
-    static func isCommonHotKey(_ keyCode: Int) -> Bool {
-        commonHotKeys.contains(where: { $0.keyCode == keyCode })
+    /// Whether this combo is included in the curated preset list.
+    static func isCommonHotKey(_ combo: HotKeyCombo) -> Bool {
+        commonHotKeys.contains(where: { $0.keyCode == combo.keyCode && $0.modifiers == combo.modifiers })
+    }
+
+    /// Modifier symbols in standard macOS menu order (⌃⌥⇧⌘), plus "fn".
+    private static func symbol(for modifiers: HotKeyModifiers) -> String {
+        var symbols = ""
+        if modifiers.contains(.control) { symbols += "⌃" }
+        if modifiers.contains(.option) { symbols += "⌥" }
+        if modifiers.contains(.shift) { symbols += "⇧" }
+        if modifiers.contains(.command) { symbols += "⌘" }
+        if modifiers.contains(.function) { symbols += "fn" }
+        return symbols + " "
+    }
+
+    /// The base key's own name, ignoring any combo presets that share its
+    /// key code — e.g. keyCode 49 must resolve to "Space", not "⌘ Space",
+    /// regardless of which combo preset happens to appear first in the list.
+    private static func bareKeyName(for keyCode: Int) -> String {
+        namedKeyCodes[keyCode]
+            ?? displayCharacter(for: keyCode)
+            ?? "Key \(keyCode)"
     }
 
     /// Whether this key code represents a modifier key that emits flagsChanged events.

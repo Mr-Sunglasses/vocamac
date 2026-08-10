@@ -473,7 +473,7 @@ struct MenuBarView: View {
     }
 
     private var activationModeHint: String {
-        let keyName = KeyCodeReference.displayName(for: appState.hotKeyCode)
+        let keyName = KeyCodeReference.displayName(for: HotKeyCombo(keyCode: appState.hotKeyCode, modifiers: appState.hotKeyModifiers))
         switch appState.activationMode {
         case .pushToTalk:
             return "Hold \(keyName)"
