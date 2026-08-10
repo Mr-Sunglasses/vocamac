@@ -161,7 +161,6 @@ private struct HotKeyCaptureView: NSViewRepresentable {
     func updateNSView(_ nsView: HotKeyCaptureNSView, context: Context) {
         nsView.onCapture = onCapture
         nsView.onCancel = onCancel
-        nsView.focus()
     }
 
     static func dismantleNSView(_ nsView: HotKeyCaptureNSView, coordinator: ()) {
@@ -169,81 +168,38 @@ private struct HotKeyCaptureView: NSViewRepresentable {
     }
 }
 
+/// Thin lifecycle shell: starts the recorder while the (hidden) view is on
+/// screen and cancels it if the settings window loses focus mid-recording.
 private final class HotKeyCaptureNSView: NSView {
-    var onCapture: ((HotKeyCombo) -> Void)?
-    var onCancel: (() -> Void)?
+    var onCapture: ((HotKeyCombo) -> Void)? {
+        get { recorder.onCapture }
+        set { recorder.onCapture = newValue }
+    }
 
-    private var localMonitor: Any?
+    var onCancel: (() -> Void)? {
+        get { recorder.onCancel }
+        set { recorder.onCancel = newValue }
+    }
+
+    private let recorder = HotKeyComboRecorder()
     private var windowResignObserver: NSObjectProtocol?
-    private var didCapture = false
-
-    /// Key code of a modifier that was pressed while it was the *only*
-    /// modifier held — a candidate for a legacy lone-modifier hotkey. Cleared
-    /// as soon as a second modifier joins it, so a chord (e.g. holding
-    /// Control then Shift) is never mistaken for a completed tap.
-    private var singleModifierCandidateKeyCode: Int?
-
-    /// Physical modifier key codes currently believed held, tracked per key
-    /// (not per shared flag) so pressing both Left and Right Shift is
-    /// correctly seen as two distinct keys even though they share one
-    /// NSEvent.ModifierFlags bit.
-    private var heldModifierKeyCodes: Set<Int> = []
-
-    private static let modifierKeyCodes = [54, 55, 56, 58, 59, 60, 61, 62, 63]
-
-    override var acceptsFirstResponder: Bool { true }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        seedHeldModifiers()
-        installMonitor()
+        guard window != nil else { return }
+        recorder.start()
         installWindowObserver()
-        focus()
     }
 
-    /// Reads the *actual* current physical key state so a modifier already
-    /// held down before the user clicks "Record" (e.g. holding Command with
-    /// the other hand) is known from the start, rather than assumed absent.
-    private func seedHeldModifiers() {
-        let held = Self.modifierKeyCodes.filter {
-            CGEventSource.keyState(.combinedSessionState, key: CGKeyCode($0))
-        }
-        heldModifierKeyCodes = Set(held)
-        singleModifierCandidateKeyCode = held.count == 1 ? held[0] : nil
-    }
-
-    override func keyDown(with event: NSEvent) {
-        _ = capture(event)
-    }
-
-    override func flagsChanged(with event: NSEvent) {
-        _ = capture(event)
-    }
-
-    func focus() {
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            self.window?.makeFirstResponder(self)
-        }
-    }
-
+    /// Silent teardown — used when SwiftUI removes the view (the parent's
+    /// `onDisappear` already restores listener state), so it must not fire
+    /// `onCancel` and double-report a completed capture.
     func stopMonitoring() {
-        if let localMonitor {
-            NSEvent.removeMonitor(localMonitor)
-            self.localMonitor = nil
-        }
+        recorder.stop()
 
         if let windowResignObserver {
             NotificationCenter.default.removeObserver(windowResignObserver)
             self.windowResignObserver = nil
-        }
-    }
-
-    private func installMonitor() {
-        guard localMonitor == nil else { return }
-        localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { [weak self] event in
-            guard let self, self.window?.isKeyWindow == true else { return event }
-            return self.capture(event) ? nil : event
         }
     }
 
@@ -254,90 +210,228 @@ private final class HotKeyCaptureNSView: NSView {
             object: window,
             queue: .main
         ) { [weak self] _ in
-            self?.cancelCapture()
+            self?.recorder.cancel()
         }
     }
 
-    private func capture(_ event: NSEvent) -> Bool {
-        guard !didCapture else { return false }
-
-        if shouldCancel(event) {
-            cancelCapture()
-            return true
-        }
-
-        switch event.type {
-        case .keyDown:
-            guard !event.isARepeat else { return false }
-            // A non-modifier key press always finalizes immediately, using
-            // whatever modifiers are currently held (possibly none).
-            let combo = HotKeyCombo(keyCode: Int(event.keyCode), modifiers: HotKeyModifiers(nsFlags: event.modifierFlags))
-            finalizeCapture(with: combo)
-            return true
-
-        case .flagsChanged:
-            return handleFlagsChanged(event)
-
-        default:
-            return false
-        }
+    deinit {
+        stopMonitoring()
     }
+}
 
-    /// Tracks modifier presses/releases per physical key so a chord (e.g.
-    /// holding Control then Shift, then pressing Space) can be composed
-    /// before finalizing, while a lone modifier tap (press-then-release with
-    /// nothing else) still finalizes as the legacy single-modifier hotkey.
-    /// A flagsChanged event's `keyCode` always identifies the specific
-    /// physical key that changed, even when its shared modifier flag (e.g.
-    /// `.shift`) was already set by the other key in its left/right pair —
-    /// tracking by key code (rather than by flag) keeps Left+Right presses
-    /// of the same modifier from being conflated into a single toggle.
-    private func handleFlagsChanged(_ event: NSEvent) -> Bool {
-        let keyCode = Int(event.keyCode)
-        guard KeyCodeReference.isModifierKeyCode(keyCode) else { return false }
+/// Captures a hotkey combo (required modifiers + base key) from real input.
+///
+/// Uses a `CGEventTap` rather than an `NSEvent` local monitor. A local
+/// monitor only sees keystrokes macOS has already declined to handle itself,
+/// so combos the system reserves never arrive — ⌃Space and ⌃⌥Space are bound
+/// to input-source switching, ⌘Space to Spotlight — and ⌘-based combos are
+/// routed to menu key equivalents first. That made whole categories of
+/// shortcut unrecordable. A session tap inserted at the head of the queue —
+/// the same mechanism `HotKeyManager` already uses at runtime — sees every
+/// keystroke before the system does, so any combination can be recorded.
+/// Key-down events are consumed while recording so the shortcut being
+/// recorded doesn't also fire its normal action.
+private final class HotKeyComboRecorder {
+    var onCapture: ((HotKeyCombo) -> Void)?
+    var onCancel: (() -> Void)?
 
-        if heldModifierKeyCodes.remove(keyCode) != nil {
-            // This physical key was released.
-            guard heldModifierKeyCodes.isEmpty else { return false }
-            if singleModifierCandidateKeyCode == keyCode {
-                finalizeCapture(with: HotKeyCombo(keyCode: keyCode, modifiers: []))
-                return true
+    private var eventTap: CFMachPort?
+    private var runLoopSource: CFRunLoopSource?
+    private var fallbackMonitor: Any?
+    private var didFinish = false
+
+    /// Key code of a modifier pressed while it was the *only* modifier held —
+    /// a candidate for a legacy lone-modifier hotkey. Cleared as soon as a
+    /// second modifier joins it, so a chord is never mistaken for a tap.
+    private var singleModifierCandidateKeyCode: Int?
+
+    /// Modifier key codes currently held, tracked per *physical key* rather
+    /// than per shared flag, so Left+Right Shift register as two distinct
+    /// keys even though they set the same modifier bit.
+    private var heldModifierKeyCodes: Set<Int> = []
+
+    private static let modifierKeyCodes = [54, 55, 56, 58, 59, 60, 61, 62, 63]
+
+    func start() {
+        guard eventTap == nil, fallbackMonitor == nil else { return }
+        didFinish = false
+        seedHeldModifiers()
+
+        if installEventTap() { return }
+
+        // No Accessibility permission — fall back to a local monitor. Ordinary
+        // combos still record; macOS-reserved ones can't reach us this way.
+        VocaLogger.warning(.hotKeyManager, "Recorder event tap unavailable — falling back to local monitor")
+        fallbackMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { [weak self] event in
+            guard let self else { return event }
+            let consumed: Bool
+            switch event.type {
+            case .keyDown:
+                consumed = self.processKeyDown(
+                    keyCode: Int(event.keyCode),
+                    modifiers: HotKeyModifiers(nsFlags: event.modifierFlags),
+                    isRepeat: event.isARepeat
+                )
+            case .flagsChanged:
+                consumed = self.processFlagsChanged(keyCode: Int(event.keyCode))
+            default:
+                consumed = false
             }
-            singleModifierCandidateKeyCode = nil
-            return false
-        }
-
-        // This physical key was pressed. Only a press from zero-held is a
-        // lone-modifier candidate; anything joining an existing hold is
-        // building a chord and cancels any prior candidacy.
-        singleModifierCandidateKeyCode = heldModifierKeyCodes.isEmpty ? keyCode : nil
-        heldModifierKeyCodes.insert(keyCode)
-        return false
-    }
-
-    private func finalizeCapture(with combo: HotKeyCombo) {
-        didCapture = true
-        stopMonitoring()
-        DispatchQueue.main.async { [weak self] in
-            self?.onCapture?(combo)
+            return consumed ? nil : event
         }
     }
 
-    private func cancelCapture() {
-        guard !didCapture else { return }
-        didCapture = true
-        stopMonitoring()
+    /// Tear down without reporting anything.
+    func stop() {
+        didFinish = true
+        teardown()
+    }
+
+    /// Tear down and report the recording as cancelled (once).
+    func cancel() {
+        guard !didFinish else { return }
+        didFinish = true
+        teardown()
         DispatchQueue.main.async { [weak self] in
             self?.onCancel?()
         }
     }
 
-    private func shouldCancel(_ event: NSEvent) -> Bool {
-        event.type == .keyDown && Int(event.keyCode) == KeyCodeReference.escapeKeyCode
+    /// Reads actual physical key state so a modifier already held before the
+    /// user clicks "Record" is known from the start rather than assumed absent.
+    private func seedHeldModifiers() {
+        let held = Self.modifierKeyCodes.filter {
+            CGEventSource.keyState(.combinedSessionState, key: CGKeyCode($0))
+        }
+        heldModifierKeyCodes = Set(held)
+        singleModifierCandidateKeyCode = held.count == 1 ? held[0] : nil
+    }
+
+    private func installEventTap() -> Bool {
+        let mask: CGEventMask = (1 << CGEventType.keyDown.rawValue) | (1 << CGEventType.flagsChanged.rawValue)
+
+        guard let tap = CGEvent.tapCreate(
+            tap: .cgSessionEventTap,
+            place: .headInsertEventTap,
+            options: .defaultTap,
+            eventsOfInterest: mask,
+            callback: { _, type, event, userInfo in
+                guard let userInfo else { return Unmanaged.passUnretained(event) }
+                let recorder = Unmanaged<HotKeyComboRecorder>.fromOpaque(userInfo).takeUnretainedValue()
+                return recorder.handleTapEvent(type: type, event: event)
+                    ? nil
+                    : Unmanaged.passUnretained(event)
+            },
+            userInfo: Unmanaged.passUnretained(self).toOpaque()
+        ) else {
+            return false
+        }
+
+        let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
+        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
+        CGEvent.tapEnable(tap: tap, enable: true)
+
+        eventTap = tap
+        runLoopSource = source
+        return true
+    }
+
+    private func handleTapEvent(type: CGEventType, event: CGEvent) -> Bool {
+        if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+            if let eventTap {
+                CGEvent.tapEnable(tap: eventTap, enable: true)
+            }
+            return false
+        }
+
+        let keyCode = Int(event.getIntegerValueField(.keyboardEventKeycode))
+
+        switch type {
+        case .keyDown:
+            return processKeyDown(
+                keyCode: keyCode,
+                modifiers: HotKeyModifiers(cgEventFlags: event.flags),
+                isRepeat: event.getIntegerValueField(.keyboardEventAutorepeat) != 0
+            )
+        case .flagsChanged:
+            return processFlagsChanged(keyCode: keyCode)
+        default:
+            return false
+        }
+    }
+
+    /// A non-modifier key press finalizes immediately, using whatever
+    /// modifiers are held at that moment (possibly none).
+    private func processKeyDown(keyCode: Int, modifiers: HotKeyModifiers, isRepeat: Bool) -> Bool {
+        guard !didFinish else { return false }
+        guard !isRepeat else { return true }
+
+        if keyCode == KeyCodeReference.escapeKeyCode {
+            cancel()
+            return true
+        }
+
+        finish(with: HotKeyCombo(keyCode: keyCode, modifiers: modifiers))
+        return true
+    }
+
+    /// Modifier presses accumulate into a chord; a lone modifier pressed and
+    /// released with nothing else joining it records as a single-key hotkey.
+    /// Never consumes the event — modifiers must keep flowing to the system.
+    private func processFlagsChanged(keyCode: Int) -> Bool {
+        guard !didFinish, KeyCodeReference.isModifierKeyCode(keyCode) else { return false }
+
+        if heldModifierKeyCodes.remove(keyCode) != nil {
+            // This physical key was released.
+            guard heldModifierKeyCodes.isEmpty else { return false }
+            if singleModifierCandidateKeyCode == keyCode {
+                finish(with: HotKeyCombo(keyCode: keyCode, modifiers: []))
+            } else {
+                singleModifierCandidateKeyCode = nil
+            }
+            return false
+        }
+
+        // Pressed. Only a press from zero-held is a lone-modifier candidate;
+        // anything joining an existing hold is building a chord.
+        singleModifierCandidateKeyCode = heldModifierKeyCodes.isEmpty ? keyCode : nil
+        heldModifierKeyCodes.insert(keyCode)
+        return false
+    }
+
+    private func finish(with combo: HotKeyCombo) {
+        didFinish = true
+        teardown()
+        DispatchQueue.main.async { [weak self] in
+            self?.onCapture?(combo)
+        }
+    }
+
+    private func teardown() {
+        if let fallbackMonitor {
+            NSEvent.removeMonitor(fallbackMonitor)
+            self.fallbackMonitor = nil
+        }
+
+        guard let tap = eventTap else { return }
+
+        // Disable synchronously so no further callbacks can reach this object,
+        // but defer removing the run loop source so the run loop is never
+        // mutated from inside its own source callback.
+        CGEvent.tapEnable(tap: tap, enable: false)
+        let source = runLoopSource
+        eventTap = nil
+        runLoopSource = nil
+
+        DispatchQueue.main.async {
+            if let source {
+                CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
+            }
+        }
     }
 
     deinit {
-        stopMonitoring()
+        stop()
     }
 }
 
