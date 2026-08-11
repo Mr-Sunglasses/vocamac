@@ -312,7 +312,7 @@ struct VocaMacApp: App {
 
 // MARK: - Menu Bar Icon
 
-/// Renders a mic icon in the menu bar with color changes based on app status.
+/// Renders the Voca logo in the menu bar with color changes based on app status.
 ///
 /// Uses NSImage to create properly tinted menu bar icons because MenuBarExtra's
 /// label treats SwiftUI `.foregroundStyle()` colors as template images, stripping
@@ -320,8 +320,8 @@ struct VocaMacApp: App {
 /// the actual color in the menu bar.
 ///
 /// States:
-///   • idle       → system default (template mic, adapts to menu bar appearance)
-///   • recording  → red filled mic (non-template, colored)
+///   • idle       → Voca brand logo in brand green
+///   • recording  → Voca brand logo in red
 ///   • processing → orange spinner (non-template, colored)
 ///   • error      → yellow warning (non-template, colored)
 struct MenuBarIcon: View {
@@ -333,6 +333,19 @@ struct MenuBarIcon: View {
     }
 
     private func makeMenuBarIcon() -> NSImage {
+        if appStatus == .idle || appStatus == .recording,
+           let logo = BrandAssets.logo {
+            let size = NSSize(width: 16, height: 16)
+            let tinted = NSImage(size: size, flipped: false) { rect in
+                logo.draw(in: rect)
+                nsColor.set()
+                rect.fill(using: .sourceAtop)
+                return true
+            }
+            tinted.isTemplate = false
+            return tinted
+        }
+
         let config = NSImage.SymbolConfiguration(pointSize: 16, weight: .regular)
 
         guard let baseImage = NSImage(systemSymbolName: iconName, accessibilityDescription: "VocaMac")?
@@ -370,7 +383,7 @@ struct MenuBarIcon: View {
 
     private var nsColor: NSColor {
         switch appStatus {
-        case .idle:       return NSColor(red: 0, green: 0.478, blue: 1.0, alpha: 1.0)
+        case .idle:       return NSColor(red: 0.059, green: 0.420, blue: 0.341, alpha: 1.0) // Voca brand green
         case .recording:  return .systemRed
         case .processing: return NSColor(red: 0.749, green: 0.353, blue: 0.949, alpha: 1.0) // #BF5AF2
         case .error:      return .systemYellow

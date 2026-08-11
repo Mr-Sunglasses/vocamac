@@ -150,7 +150,7 @@ The project builds on **macOS only** (requires AppKit, CoreML, AVFoundation). CI
 - Served as static files from the `web/` directory
 - Deployed to GitHub Pages on release via `.github/workflows/deploy-website.yml`
 - Custom domain: `vocamac.com` (configured via `web/CNAME`)
-- Logo: `web/logo.png` — SF Symbol `mic.fill` rendered in #007AFF (Apple system blue)
+- Brand logo: `web/static/brand/voca-logo.svg`; app icon: `Sources/VocaMac/Resources/AppIcon.icns`
 - Supports light/dark theme toggle
 - Test locally: `cd web && python3 -m http.server 8080`
 

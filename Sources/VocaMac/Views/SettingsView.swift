@@ -803,10 +803,7 @@ struct AboutTab: View {
         VStack(spacing: 16) {
             Spacer()
 
-            // App icon
-            Image(systemName: "mic.circle.fill")
-                .font(.system(size: 64))
-                .foregroundStyle(.blue)
+            BrandLogoView(size: 64)
 
             // App name and version
             Text("VocaMac")

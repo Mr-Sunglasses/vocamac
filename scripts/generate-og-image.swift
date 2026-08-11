@@ -95,7 +95,7 @@ let leftContentHeight: CGFloat = logoSize + 30 + 38 + 34 + 142 + 36 + 52  // log
 let leftTopY: CGFloat = (height - leftContentHeight) / 2
 
 // Logo + Title inline
-let logoPath = "web/static/logo.png"
+let logoPath = "web/static/brand/voca-logo-512.png"
 if let logoImage = NSImage(contentsOfFile: logoPath) {
     let logoRect = NSRect(x: leftX, y: ty(leftTopY + 2, h: logoSize), width: logoSize * 0.75, height: logoSize)
     logoImage.draw(in: logoRect, from: .zero, operation: .sourceOver, fraction: 1.0)
