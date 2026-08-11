@@ -459,7 +459,9 @@ struct HandyOverlayView: View {
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                 .stroke(Color.white.opacity(0.13), lineWidth: 1)
         }
-        .shadow(color: .black.opacity(0.38), radius: 14, y: 5)
+        // Keep the surface inside the exact-size transparent NSPanel. An outer
+        // SwiftUI shadow is clipped to the panel's rectangular window bounds,
+        // which leaves square artifacts behind the rounded corners.
         .opacity(viewModel.isActive ? 1 : 0)
         .scaleEffect(viewModel.isActive ? 1 : 0.96)
         .animation(.easeOut(duration: 0.18), value: viewModel.isActive)
