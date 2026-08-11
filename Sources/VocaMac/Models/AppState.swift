@@ -106,6 +106,10 @@ final class AppState: ObservableObject {
     @AppStorage("vocamac.launchAtLogin") var launchAtLogin: Bool = false
     @AppStorage("vocamac.preserveClipboard") var preserveClipboard: Bool = true
     @AppStorage("vocamac.soundEffectsEnabled") var soundEffectsEnabled: Bool = true
+    @AppStorage("vocamac.overlayStyle") var overlayStyle: OverlayStyle = .minimal
+    @AppStorage("vocamac.overlayPosition") var overlayPosition: OverlayPosition = .bottom
+    /// Legacy preference retained so existing installs that disabled the old
+    /// cursor indicator continue to keep the overlay hidden after upgrading.
     @AppStorage("vocamac.showCursorIndicator") var showCursorIndicator: Bool = true
     @AppStorage("vocamac.translationEnabled") var translationEnabled: Bool = false
     @AppStorage("vocamac.customVocabulary") var customVocabulary: String = ""
@@ -204,6 +208,12 @@ final class AppState: ObservableObject {
         self.statsManager = statsManager
         self.permissionManager = permissionManager ?? PermissionManager(audioEngine: audioEngine, hotKeyManager: hotKeyManager)
         self.skipSystemIntegration = skipSystemIntegration
+
+        cursorOverlay.setCancelHandler { [weak self] in
+            Task { @MainActor [weak self] in
+                await self?.cancelRecording()
+            }
+        }
 
         VocaLogger.info(.appState, "Initializing... id=\(ObjectIdentifier(self))")
         if !skipSystemIntegration {
@@ -581,9 +591,9 @@ final class AppState: ObservableObject {
         isRecording = true
         errorMessage = nil
 
-        // Show cursor indicator
-        if showCursorIndicator {
-            cursorOverlay.show()
+        // Show the configured recording overlay.
+        if showCursorIndicator && overlayStyle != .off {
+            cursorOverlay.show(style: overlayStyle, position: overlayPosition)
         }
 
         // Start recording immediately for instant responsiveness.
@@ -690,6 +700,21 @@ final class AppState: ObservableObject {
                 }
             }
         }
+    }
+
+    /// Cancels the active recording without sending its audio to a transcription
+    /// engine. This is used by the overlay's cancel button.
+    func cancelRecording() async {
+        guard isRecording || appStatus == .recording else { return }
+
+        _ = await stopAudioEngine()
+        isRecording = false
+        audioLevel = 0.0
+        cursorOverlay.hide()
+        hotKeyManager.resetKeyState()
+        appStatus = .idle
+        errorMessage = nil
+        VocaLogger.info(.appState, "Recording cancelled from overlay")
     }
 
     private func startAudioEngine(
