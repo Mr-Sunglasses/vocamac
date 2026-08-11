@@ -61,7 +61,7 @@ Immediately after the paste completes, VocaMac:
 - Restores the original clipboard contents
 - Returns to idle state
 
-The entire process takes less than 100 milliseconds, and your original clipboard is never lost.
+The paste-and-restore window is kept to roughly 200 milliseconds, giving the target app enough time to consume the paste event while preserving your original clipboard.
 
 ## Enabling and Disabling
 

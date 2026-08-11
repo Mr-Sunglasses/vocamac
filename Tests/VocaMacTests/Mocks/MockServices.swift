@@ -220,9 +220,14 @@ final class MockCursorOverlay: CursorOverlayManaging {
     var hideCallCount = 0
     var transitionCallCount = 0
     var lastAudioLevel: Float?
+    var lastStyle: OverlayStyle?
+    var lastPosition: OverlayPosition?
+    var cancelHandler: (() -> Void)?
 
-    func show() {
+    func show(style: OverlayStyle, position: OverlayPosition) {
         showCallCount += 1
+        lastStyle = style
+        lastPosition = position
     }
 
     func hide() {
@@ -235,6 +240,10 @@ final class MockCursorOverlay: CursorOverlayManaging {
 
     func updateAudioLevel(_ level: Float) {
         lastAudioLevel = level
+    }
+
+    func setCancelHandler(_ handler: @escaping () -> Void) {
+        cancelHandler = handler
     }
 }
 
@@ -251,6 +260,10 @@ final class MockModelManager: ModelManaging {
     var installedBundledModels: [ModelSize] = []
     var ensuredTokenizerSizes: [ModelSize] = []
     var installBundledModelError: Error?
+    var downloadRequests: [ModelSize] = []
+    var downloadDelayNanoseconds: UInt64 = 0
+    private(set) var activeDownloadCount = 0
+    private(set) var maxConcurrentDownloadCount = 0
 
     func deviceRecommendation() -> (defaultModel: String, supported: [String], disabled: [String]) {
         (
@@ -332,6 +345,16 @@ final class MockModelManager: ModelManaging {
     }
 
     func downloadModel(size: ModelSize, onProgress: @escaping (Double) -> Void) async throws {
+        downloadRequests.append(size)
+        activeDownloadCount += 1
+        maxConcurrentDownloadCount = max(maxConcurrentDownloadCount, activeDownloadCount)
+        defer { activeDownloadCount -= 1 }
+
+        if downloadDelayNanoseconds > 0 {
+            try await Task.sleep(nanoseconds: downloadDelayNanoseconds)
+        }
+
+        onProgress(1.0)
         downloadedModels.insert(size)
     }
 
@@ -364,6 +387,9 @@ final class MockWhisperService: SpeechTranscribing {
     var lastVocabulary: String?
     var loadRequests: [LoadRequest] = []
     var loadResponses: [Result<String?, Error>] = []
+    var loadDelayNanoseconds: UInt64 = 0
+    private(set) var activeLoadCount = 0
+    private(set) var maxConcurrentLoadCount = 0
     var mockTranscriptionResult: VocaTranscription = VocaTranscription(text: "mock transcription", duration: 1.0, detectedLanguage: "en", audioLengthSeconds: 1.0, modelUsed: .tiny)
     var shouldThrow = false
 
@@ -380,7 +406,15 @@ final class MockWhisperService: SpeechTranscribing {
 
     func _loadModel(name: String?, folder: URL?, onPhaseChange: ((String) -> Void)?) async throws {
         loadRequests.append((name: name, folder: folder))
+        activeLoadCount += 1
+        maxConcurrentLoadCount = max(maxConcurrentLoadCount, activeLoadCount)
+        defer { activeLoadCount -= 1 }
+
         onPhaseChange?("Loading model…")
+
+        if loadDelayNanoseconds > 0 {
+            try await Task.sleep(nanoseconds: loadDelayNanoseconds)
+        }
 
         if !loadResponses.isEmpty {
             let response = loadResponses.removeFirst()

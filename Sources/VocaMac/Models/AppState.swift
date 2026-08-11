@@ -106,6 +106,10 @@ final class AppState: ObservableObject {
     @AppStorage("vocamac.launchAtLogin") var launchAtLogin: Bool = false
     @AppStorage("vocamac.preserveClipboard") var preserveClipboard: Bool = true
     @AppStorage("vocamac.soundEffectsEnabled") var soundEffectsEnabled: Bool = true
+    @AppStorage("vocamac.overlayStyle") var overlayStyle: OverlayStyle = .minimal
+    @AppStorage("vocamac.overlayPosition") var overlayPosition: OverlayPosition = .bottom
+    /// Legacy preference retained so existing installs that disabled the old
+    /// cursor indicator continue to keep the overlay hidden after upgrading.
     @AppStorage("vocamac.showCursorIndicator") var showCursorIndicator: Bool = true
     @AppStorage("vocamac.translationEnabled") var translationEnabled: Bool = false
     @AppStorage("vocamac.customVocabulary") var customVocabulary: String = ""
@@ -133,10 +137,16 @@ final class AppState: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
     private var hasStarted = false
 
-    /// Bumped at the start of every `loadModel` call. Failure restores and
-    /// success UI updates only apply when the generation is still current, so
-    /// a stale failure cannot undo a newer successful load.
+    /// Bumped when each load operation starts. Failure restores and success UI
+    /// updates only apply when the generation is still current, so a stale
+    /// failure cannot undo a newer successful load.
     private var loadGeneration: UInt64 = 0
+
+    /// Serializes model downloads and loads at the AppState boundary. The
+    /// engine router also protects its own load/transcribe lifecycle, but UI
+    /// actions can otherwise start several downloads or model-management
+    /// operations before they reach those lower-level services.
+    private let modelOperationSerializer = LoadSerializer()
 
     /// AudioEngine serializes its own lifecycle internally; this wrapper makes
     /// the intentional background handoff explicit for Dispatch's @Sendable API.
@@ -198,6 +208,12 @@ final class AppState: ObservableObject {
         self.statsManager = statsManager
         self.permissionManager = permissionManager ?? PermissionManager(audioEngine: audioEngine, hotKeyManager: hotKeyManager)
         self.skipSystemIntegration = skipSystemIntegration
+
+        cursorOverlay.setCancelHandler { [weak self] in
+            Task { @MainActor [weak self] in
+                await self?.cancelRecording()
+            }
+        }
 
         VocaLogger.info(.appState, "Initializing... id=\(ObjectIdentifier(self))")
         if !skipSystemIntegration {
@@ -575,9 +591,9 @@ final class AppState: ObservableObject {
         isRecording = true
         errorMessage = nil
 
-        // Show cursor indicator
-        if showCursorIndicator {
-            cursorOverlay.show()
+        // Show the configured recording overlay.
+        if showCursorIndicator && overlayStyle != .off {
+            cursorOverlay.show(style: overlayStyle, position: overlayPosition)
         }
 
         // Start recording immediately for instant responsiveness.
@@ -686,6 +702,21 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// Cancels the active recording without sending its audio to a transcription
+    /// engine. This is used by the overlay's cancel button.
+    func cancelRecording() async {
+        guard isRecording || appStatus == .recording else { return }
+
+        _ = await stopAudioEngine()
+        isRecording = false
+        audioLevel = 0.0
+        cursorOverlay.hide()
+        hotKeyManager.resetKeyState()
+        appStatus = .idle
+        errorMessage = nil
+        VocaLogger.info(.appState, "Recording cancelled from overlay")
+    }
+
     private func startAudioEngine(
         silenceThreshold: Float,
         silenceDuration: Double,
@@ -718,6 +749,13 @@ final class AppState: ObservableObject {
     // MARK: - Model Management
 
     func loadModel(_ size: ModelSize? = nil) async {
+        _ = try? await modelOperationSerializer.run { [self] in
+            await performLoadModel(size)
+        }
+    }
+
+    /// Perform one model load after earlier model operations have completed.
+    private func performLoadModel(_ size: ModelSize? = nil) async {
         loadGeneration += 1
         let generation = loadGeneration
 
@@ -951,6 +989,16 @@ final class AppState: ObservableObject {
     }
 
     func downloadModel(_ size: ModelSize) async {
+        _ = try? await modelOperationSerializer.run { [self] in
+            await performDownloadModel(size)
+        }
+    }
+
+    /// Perform one model download after earlier model operations have
+    /// completed. Keeping the UI updates inside the serialized operation
+    /// prevents multiple progress indicators from representing concurrent
+    /// writes to the model cache.
+    private func performDownloadModel(_ size: ModelSize) async {
         guard let index = availableModels.firstIndex(where: { $0.size == size }) else { return }
 
         availableModels[index].downloadProgress = 0.0
