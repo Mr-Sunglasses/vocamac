@@ -200,10 +200,7 @@ struct WelcomeStep: View {
         VStack(spacing: 24) {
             Spacer()
 
-            // App icon
-            Image(systemName: "mic.circle.fill")
-                .font(.system(size: 80))
-                .foregroundStyle(.blue)
+            BrandLogoView(size: 80)
 
             // App name and tagline
             VStack(spacing: 8) {

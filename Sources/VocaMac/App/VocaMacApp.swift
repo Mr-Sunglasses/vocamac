@@ -233,7 +233,7 @@ struct VocaMacApp: App {
             MenuBarView(settingsManager: settingsManager, updateWindowManager: updateWindowManager)
                 .environmentObject(appState)
         } label: {
-            MenuBarIcon(appStatus: appState.appStatus, audioLevel: appState.audioLevel)
+            MenuBarIcon(appStatus: appState.appStatus)
                 .onAppear {
                     // Trigger startup from the SwiftUI lifecycle so it only runs
                     // on the AppState instance that SwiftUI actually retains.
@@ -312,42 +312,97 @@ struct VocaMacApp: App {
 
 // MARK: - Menu Bar Icon
 
-/// Renders a mic icon in the menu bar with color changes based on app status.
+/// Renders the Voca mark in the menu bar with color changes based on app status.
 ///
-/// Uses NSImage to create properly tinted menu bar icons because MenuBarExtra's
-/// label treats SwiftUI `.foregroundStyle()` colors as template images, stripping
-/// color. By setting `isTemplate = false` for non-idle states, macOS renders
-/// the actual color in the menu bar.
+/// Idle uses a template silhouette so macOS follows the menu bar appearance.
+/// Recording tints that same mark red. Processing and error keep SF Symbols.
+///
+/// MenuBarExtra strips SwiftUI `.foregroundStyle()` colors, so status colors
+/// are applied via `NSImage` + `sourceAtop` with `isTemplate = false`.
 ///
 /// States:
-///   • idle       → system default (template mic, adapts to menu bar appearance)
-///   • recording  → red filled mic (non-template, colored)
-///   • processing → orange spinner (non-template, colored)
+///   • idle       → Voca mark (template, adapts to menu bar)
+///   • recording  → Voca mark in red
+///   • processing → purple ellipsis (non-template, colored)
 ///   • error      → yellow warning (non-template, colored)
 struct MenuBarIcon: View {
     let appStatus: AppStatus
-    let audioLevel: Float
 
     var body: some View {
         Image(nsImage: makeMenuBarIcon())
     }
 
     private func makeMenuBarIcon() -> NSImage {
-        let config = NSImage.SymbolConfiguration(pointSize: 16, weight: .regular)
+        switch MenuBarIconStyle.style(for: appStatus) {
+        case .brandMarkTemplate:
+            if let mark = sizedMark() {
+                mark.isTemplate = true
+                return mark
+            }
+            return fallbackSymbol(named: "mic.fill", tint: nil)
 
-        guard let baseImage = NSImage(systemSymbolName: iconName, accessibilityDescription: "VocaMac")?
+        case .brandMarkTinted:
+            if let mark = sizedMark() {
+                return tintedImage(base: mark, color: .systemRed)
+            }
+            return fallbackSymbol(named: "mic.fill", tint: .systemRed)
+
+        case .systemSymbol(let name):
+            return fallbackSymbol(named: name, tint: statusColor)
+        }
+    }
+
+    /// Menu-bar point size for the brand mark.
+    /// Slightly above the 16pt SF Symbol default so the line-art mic reads at a
+    /// similar visual weight to neighboring status items.
+    private static let markPointSize: CGFloat = 20
+
+    /// Sized copy of the bundled mic mark, or `nil` if the asset is missing.
+    ///
+    /// The mark is taller than it is wide, so it is scaled to fit the square
+    /// slot (not stretched) and centered — that uses the full slot height.
+    private func sizedMark() -> NSImage? {
+        guard let mark = BrandAssets.mark else { return nil }
+        let slot = Self.markPointSize
+        let size = NSSize(width: slot, height: slot)
+        return NSImage(size: size, flipped: false) { rect in
+            NSGraphicsContext.current?.imageInterpolation = .high
+            let markSize = mark.size
+            guard markSize.width > 0, markSize.height > 0 else { return false }
+            let scale = min(rect.width / markSize.width, rect.height / markSize.height)
+            let drawSize = NSSize(width: markSize.width * scale, height: markSize.height * scale)
+            let drawRect = NSRect(
+                x: rect.midX - drawSize.width / 2,
+                y: rect.midY - drawSize.height / 2,
+                width: drawSize.width,
+                height: drawSize.height
+            )
+            mark.draw(in: drawRect)
+            return true
+        }
+    }
+
+    private func fallbackSymbol(named name: String, tint: NSColor?) -> NSImage {
+        let config = NSImage.SymbolConfiguration(pointSize: Self.markPointSize, weight: .regular)
+        guard let baseImage = NSImage(systemSymbolName: name, accessibilityDescription: "VocaMac")?
             .withSymbolConfiguration(config) else {
-            // Fallback to a basic mic if symbol lookup fails
             return NSImage(systemSymbolName: "mic", accessibilityDescription: "VocaMac") ?? NSImage()
         }
 
-        // Tint the icon with the status color
-        let tintColor = nsColor
-        let size = baseImage.size
+        guard let tint else {
+            let copy = baseImage.copy() as? NSImage ?? baseImage
+            copy.isTemplate = true
+            return copy
+        }
 
+        return tintedImage(base: baseImage, color: tint)
+    }
+
+    private func tintedImage(base: NSImage, color: NSColor) -> NSImage {
+        let size = base.size
         let tinted = NSImage(size: size, flipped: false) { rect in
-            baseImage.draw(in: rect)
-            tintColor.set()
+            base.draw(in: rect)
+            color.set()
             rect.fill(using: .sourceAtop)
             return true
         }
@@ -355,22 +410,9 @@ struct MenuBarIcon: View {
         return tinted
     }
 
-    private var iconName: String {
+    private var statusColor: NSColor {
         switch appStatus {
-        case .idle:
-            return "mic.fill"
-        case .recording:
-            return "mic.fill"
-        case .processing:
-            return "ellipsis.circle"
-        case .error:
-            return "exclamationmark.triangle"
-        }
-    }
-
-    private var nsColor: NSColor {
-        switch appStatus {
-        case .idle:       return NSColor(red: 0, green: 0.478, blue: 1.0, alpha: 1.0)
+        case .idle:       return BrandAssets.brandGreen
         case .recording:  return .systemRed
         case .processing: return NSColor(red: 0.749, green: 0.353, blue: 0.949, alpha: 1.0) // #BF5AF2
         case .error:      return .systemYellow
