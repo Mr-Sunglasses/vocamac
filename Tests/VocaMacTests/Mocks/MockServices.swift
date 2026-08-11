@@ -96,6 +96,21 @@ final class MockSoundManager: SoundPlaying {
     }
 }
 
+// MARK: - MockSystemAudioMuter
+
+final class MockSystemAudioMuter: SystemAudioMuting {
+    var muteCallCount = 0
+    var restoreCallCount = 0
+
+    func muteSystemAudio() {
+        muteCallCount += 1
+    }
+
+    func restoreSystemAudio() {
+        restoreCallCount += 1
+    }
+}
+
 // MARK: - MockHotKeyManager
 
 final class MockHotKeyManager: HotKeyMonitoring {
@@ -484,9 +499,11 @@ extension AppState {
     ) -> (appState: AppState, mocks: TestMocks) {
         UserDefaults.standard.removeObject(forKey: "vocamac.selectedAudioDeviceID")
         UserDefaults.standard.removeObject(forKey: "vocamac.selectedAudioDeviceName")
+        UserDefaults.standard.removeObject(forKey: "vocamac.muteSystemAudioWhileRecording")
 
         let audioEngine = MockAudioEngine()
         let soundManager = MockSoundManager()
+        let systemAudioMuter = MockSystemAudioMuter()
         let hotKeyManager = MockHotKeyManager()
         let permissionManager = MockPermissionManager()
         let cursorOverlay = MockCursorOverlay()
@@ -496,6 +513,7 @@ extension AppState {
         let mocks = TestMocks(
             audioEngine: audioEngine,
             soundManager: soundManager,
+            systemAudioMuter: systemAudioMuter,
             hotKeyManager: hotKeyManager,
             permissionManager: permissionManager,
             cursorOverlay: cursorOverlay,
@@ -511,6 +529,7 @@ extension AppState {
             hotKeyManager: hotKeyManager,
             modelManager: modelManager,
             soundManager: soundManager,
+            systemAudioMuter: systemAudioMuter,
             cursorOverlay: cursorOverlay,
             statsManager: statsManager,
             permissionManager: permissionManager,
@@ -523,6 +542,7 @@ extension AppState {
 struct TestMocks {
     let audioEngine: MockAudioEngine
     let soundManager: MockSoundManager
+    let systemAudioMuter: MockSystemAudioMuter
     let hotKeyManager: MockHotKeyManager
     let permissionManager: MockPermissionManager
     let cursorOverlay: MockCursorOverlay
