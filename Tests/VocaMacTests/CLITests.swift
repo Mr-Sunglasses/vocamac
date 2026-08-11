@@ -13,6 +13,12 @@ final class CLITests: XCTestCase {
         XCTAssertEqual(CLICommand.invocationMode(arguments: []), .gui)
     }
 
+    func testRestartedArgumentRoutesToGUI() {
+        // Settings -> Debug -> Restart relaunches with `open ... --args --restarted`.
+        // That argv must reach VocaMacApp, not be rejected by the CLI parser.
+        XCTAssertEqual(CLICommand.invocationMode(arguments: ["--restarted"]), .gui)
+    }
+
     func testHelpRoutesToCLIAndDoesNotRunHeadlessServices() async {
         let dependencies = makeDependencies(selectedModel: .tiny)
         var standardOutput = Data()
@@ -56,6 +62,20 @@ final class CLITests: XCTestCase {
         XCTAssertEqual(response.model, ModelSize.parakeetV2.rawValue)
         XCTAssertEqual(response.engine, "parakeet")
         XCTAssertEqual(dependencies.transcriber.loadRequests.first?.name, ModelSize.parakeetV2.rawValue)
+    }
+
+    func testMissingModelPreferenceFallsBackToTiny() async throws {
+        // AppState's @AppStorage default is ModelSize.tiny, so a fresh install
+        // (or prefs that never persisted the key) must behave the same headlessly.
+        let dependencies = makeDependencies(selectedModelIdentifier: nil)
+
+        let response = try await dependencies.headless.transcribe(
+            fileURL: URL(fileURLWithPath: "/mock/audio.wav"),
+            modelOverride: nil,
+            languageOverride: nil
+        )
+
+        XCTAssertEqual(response.model, ModelSize.tiny.rawValue)
     }
 
     func testAppPreferencesReaderUsesInjectedDefaultsDomain() throws {
@@ -331,7 +351,7 @@ final class CLITests: XCTestCase {
         makeDependencies(selectedModelIdentifier: selectedModel.rawValue)
     }
 
-    private func makeDependencies(selectedModelIdentifier: String) -> TestDependencies {
+    private func makeDependencies(selectedModelIdentifier: String?) -> TestDependencies {
         let modelManager = MockModelManager()
         modelManager.downloadedModels = Set(ModelSize.allCases.filter { !$0.isSystemManaged })
         let preferences = MockCLIPreferences(

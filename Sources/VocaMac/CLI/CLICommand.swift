@@ -17,10 +17,19 @@ enum CLICommand: Equatable {
     case transcribeFile(path: String, model: String?, language: String?)
     case listModels
 
-    /// Any explicit arguments are handled before SwiftUI constructs the app.
-    /// This makes unknown arguments fail safely instead of opening the GUI.
+    /// Flags that unambiguously request the headless CLI. Any other launch
+    /// arguments (e.g. GUI-only `--restarted` from Settings → Debug → Restart)
+    /// fall through to the normal SwiftUI app. Also used by
+    /// `VocaMacApp.ensureSingleInstance()` to avoid killing an in-flight CLI job.
+    static let cliFlags: Set<String> = [
+        "--transcribe-file", "--list-models", "--help", "-h",
+    ]
+
+    /// Only dispatch to the headless CLI when a recognized CLI flag is present.
+    /// This makes unknown/GUI-only arguments fail safely into the GUI instead
+    /// of being rejected by the CLI parser before the app ever launches.
     static func invocationMode(arguments: [String]) -> CLIInvocationMode {
-        arguments.isEmpty ? .gui : .cli
+        arguments.contains(where: cliFlags.contains) ? .cli : .gui
     }
 
     /// Parse arguments excluding the executable path.

@@ -203,6 +203,8 @@ By default, the command follows the model and language currently selected in the
 
 The model must already be downloaded in VocaMac. Headless mode never downloads a missing model automatically. Input is validated and converted with AVFoundation to mono, 16 kHz, Float32 PCM; files are limited to 500 MB and 30 minutes.
 
+Only the selected model and language follow your app preferences. Translate-to-English and WhisperKit custom vocabulary are always off in headless mode, even if enabled in the app.
+
 Successful transcription writes exactly one JSON object to stdout:
 
 ```json

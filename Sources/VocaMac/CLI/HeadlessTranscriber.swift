@@ -89,6 +89,8 @@ final class HeadlessTranscriber {
 
         do {
             try await transcriber.loadModel(name: modelIdentifier, folder: modelFolder)
+            // Only model and language follow app prefs (see README); translate
+            // and custom vocabulary are intentionally always off headlessly.
             let result = try await transcriber.transcribe(
                 audioData: loadedAudio.samples,
                 language: language,
@@ -129,7 +131,9 @@ final class HeadlessTranscriber {
 
     private func resolveModel(identifier: String?) throws -> ModelSize {
         guard let identifier, !identifier.isEmpty else {
-            throw CLIError(.modelNotFound, "No model is selected in VocaMac.")
+            // Matches AppState's @AppStorage default, so a fresh install (or
+            // prefs that never persisted the key) behaves the same headlessly.
+            return .tiny
         }
         guard let model = ModelSize(rawValue: identifier) ?? modelManager.modelSize(from: identifier) else {
             throw CLIError(.modelNotFound, "Unknown model: \(identifier)")
