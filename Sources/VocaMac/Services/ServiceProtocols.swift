@@ -85,10 +85,11 @@ protocol PermissionManaging: AnyObject {
 
 @MainActor
 protocol CursorOverlayManaging: AnyObject {
-    func show()
+    func show(style: OverlayStyle, position: OverlayPosition)
     func hide()
     func transitionToProcessing()
     func updateAudioLevel(_ level: Float)
+    func setCancelHandler(_ handler: @escaping () -> Void)
 }
 
 // MARK: - ModelManaging

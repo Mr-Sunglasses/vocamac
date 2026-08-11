@@ -34,6 +34,40 @@ final class AppStateRecordingTests: XCTestCase {
                      "Error message should mention microphone")
     }
 
+    func testStartRecordingPassesOverlayStyleAndPosition() async {
+        let (appState, mocks) = AppState.makeTestState()
+        let originalStyle = appState.overlayStyle
+        let originalPosition = appState.overlayPosition
+        defer {
+            appState.overlayStyle = originalStyle
+            appState.overlayPosition = originalPosition
+        }
+
+        appState.overlayStyle = .live
+        appState.overlayPosition = .top
+
+        await appState.startRecording()
+
+        XCTAssertEqual(mocks.cursorOverlay.lastStyle, .live)
+        XCTAssertEqual(mocks.cursorOverlay.lastPosition, .top)
+    }
+
+    func testCancelRecordingReturnsToIdleWithoutTranscribing() async {
+        let (appState, mocks) = AppState.makeTestState()
+        appState.isRecording = true
+        appState.appStatus = .recording
+        appState.audioLevel = 0.8
+
+        await appState.cancelRecording()
+
+        XCTAssertEqual(appState.appStatus, .idle)
+        XCTAssertFalse(appState.isRecording)
+        XCTAssertEqual(appState.audioLevel, 0.0)
+        XCTAssertNil(mocks.whisperService.lastTranscribedAudioData)
+        XCTAssertEqual(mocks.cursorOverlay.hideCallCount, 1)
+        XCTAssertEqual(mocks.hotKeyManager.resetKeyStateCallCount, 1)
+    }
+
     func testStartRecordingDoesNotBlockMainActorDuringAudioStart() async throws {
         let (appState, mocks) = AppState.makeTestState()
         mocks.audioEngine.startRecordingDelay = 0.3

@@ -1,12 +1,89 @@
 // CursorOverlayManager.swift
 // VocaMac
 //
-// Shows a floating mic indicator near the text cursor during recording.
-// Uses the Accessibility API to locate the caret position in the focused app,
-// then renders a small, non-interactive overlay that shows recording/processing state.
+// Shows a Handy-inspired floating recording overlay. The overlay can be a
+// compact pill or a larger status panel and can be anchored to the caret or to
+// the top/bottom edge of the active display.
 
 import AppKit
 import SwiftUI
+
+// MARK: - Overlay Layout
+
+/// Shared overlay dimensions keep the AppKit panel and SwiftUI content in sync.
+enum OverlayLayout {
+    static func size(for style: OverlayStyle) -> CGSize {
+        switch style {
+        case .off:
+            return .zero
+        case .minimal:
+            return CGSize(width: 128, height: 44)
+        case .live:
+            return CGSize(width: 272, height: 72)
+        }
+    }
+}
+
+/// Pure placement helpers used by the Accessibility-based cursor positioning.
+enum OverlayPlacement {
+    static func origin(
+        near anchorRect: CGRect,
+        panelSize: CGSize,
+        visibleFrames: [CGRect]
+    ) -> CGPoint {
+        let anchorPoint = CGPoint(x: anchorRect.midX, y: anchorRect.midY)
+        guard let visibleFrame = nearestVisibleFrame(to: anchorPoint, in: visibleFrames) else {
+            return CGPoint(x: anchorRect.maxX + 10, y: anchorRect.minY - panelSize.height - 8)
+        }
+
+        let rightOrigin = anchorRect.maxX + 10
+        let leftOrigin = anchorRect.minX - panelSize.width - 10
+        let x = rightOrigin + panelSize.width <= visibleFrame.maxX
+            ? rightOrigin
+            : leftOrigin
+
+        let belowOrigin = anchorRect.minY - panelSize.height - 8
+        let aboveOrigin = anchorRect.maxY + 8
+        let y = belowOrigin >= visibleFrame.minY
+            ? belowOrigin
+            : aboveOrigin
+
+        return clampedOrigin(
+            CGPoint(x: x, y: y),
+            panelSize: panelSize,
+            visibleFrames: visibleFrames
+        )
+    }
+
+    static func clampedOrigin(
+        _ point: CGPoint,
+        panelSize: CGSize,
+        visibleFrames: [CGRect]
+    ) -> CGPoint {
+        guard let visibleFrame = nearestVisibleFrame(to: point, in: visibleFrames) else {
+            return point
+        }
+
+        return CGPoint(
+            x: min(max(point.x, visibleFrame.minX), visibleFrame.maxX - panelSize.width),
+            y: min(max(point.y, visibleFrame.minY), visibleFrame.maxY - panelSize.height)
+        )
+    }
+
+    private static func nearestVisibleFrame(to point: CGPoint, in visibleFrames: [CGRect]) -> CGRect? {
+        visibleFrames.min { lhs, rhs in
+            squaredDistance(from: point, to: lhs) < squaredDistance(from: point, to: rhs)
+        }
+    }
+
+    private static func squaredDistance(from point: CGPoint, to rect: CGRect) -> CGFloat {
+        let nearestX = min(max(point.x, rect.minX), rect.maxX)
+        let nearestY = min(max(point.y, rect.minY), rect.maxY)
+        let xDistance = point.x - nearestX
+        let yDistance = point.y - nearestY
+        return xDistance * xDistance + yDistance * yDistance
+    }
+}
 
 // MARK: - CursorOverlayManager
 
@@ -15,36 +92,61 @@ final class CursorOverlayManager {
 
     // MARK: - Properties
 
-    /// The floating panel that hosts the mic indicator
+    /// The floating panel that hosts the overlay.
     private var overlayPanel: NSPanel?
 
-    /// Hosting view for the SwiftUI indicator content
-    private var hostingView: NSHostingView<MicIndicatorView>?
+    /// Hosting view for the SwiftUI overlay content.
+    private var hostingView: NSHostingView<HandyOverlayView>?
 
-    /// The SwiftUI view model driving the indicator
+    /// The SwiftUI view model driving the overlay.
     private let viewModel = MicIndicatorViewModel()
 
-    /// Timer to periodically reposition the overlay to follow the cursor
+    /// Timer to follow the caret or active display when needed.
     private var repositionTimer: Timer?
+
+    /// Timer for the recording duration shown by the live panel.
+    private var elapsedTimer: Timer?
+
+    /// Called when the user cancels the active recording.
+    private var cancelHandler: (() -> Void)?
 
     // MARK: - Public API
 
-    /// Show the recording indicator near the text cursor
-    func show() {
-        guard overlayPanel == nil else {
-            // Already showing - just ensure it's in recording state
-            viewModel.phase = .recording
+    /// Registers the action invoked by the overlay's cancel button.
+    func setCancelHandler(_ handler: @escaping () -> Void) {
+        cancelHandler = handler
+    }
+
+    /// Shows the recording overlay using the requested style and position.
+    func show(style: OverlayStyle, position: OverlayPosition) {
+        guard style != .off else {
+            hide()
             return
         }
 
+        viewModel.style = style
+        viewModel.position = position
         viewModel.phase = .recording
+        viewModel.elapsedSeconds = 0
+        viewModel.isActive = true
 
-        let indicatorView = MicIndicatorView(viewModel: viewModel)
-        let hosting = NSHostingView(rootView: indicatorView)
-        hosting.frame = NSRect(x: 0, y: 0, width: 36, height: 36)
+        if let overlayPanel {
+            updatePanelLayout(overlayPanel)
+            startTimers()
+            VocaLogger.debug(.cursorOverlay, "Overlay shown (existing panel, style=\(style.rawValue))")
+            return
+        }
+
+        let size = overlaySize
+        let hosting = NSHostingView(
+            rootView: HandyOverlayView(viewModel: viewModel) { [weak self] in
+                self?.cancelHandler?()
+            }
+        )
+        hosting.frame = NSRect(origin: .zero, size: size)
 
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 36, height: 36),
+            contentRect: NSRect(origin: .zero, size: size),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -52,66 +154,133 @@ final class CursorOverlayManager {
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = false
-        panel.level = .floating
+        panel.level = .statusBar
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        panel.ignoresMouseEvents = true
+        // The panel remains non-activating, but the cancel button still needs to
+        // receive clicks. Its small footprint does not cover the target field.
+        panel.ignoresMouseEvents = false
+        panel.hidesOnDeactivate = false
+        panel.isMovableByWindowBackground = false
         panel.contentView = hosting
 
-        // Position near the text cursor
-        positionNearCaret(panel)
-
-        panel.orderFront(nil)
         overlayPanel = panel
         hostingView = hosting
+        updatePanelLayout(panel)
+        panel.orderFrontRegardless()
+        startTimers()
 
-        // Reposition periodically in case the user scrolls or the cursor moves
-        repositionTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                guard let self = self, let panel = self.overlayPanel else { return }
-                self.positionNearCaret(panel)
-            }
-        }
-
-        viewModel.isActive = true
-        VocaLogger.debug(.cursorOverlay, "Indicator shown (recording)")
+        VocaLogger.debug(.cursorOverlay, "Overlay shown (style=\(style.rawValue), position=\(position.rawValue))")
     }
 
-    /// Transition the indicator from recording (red) to processing (purple)
-    /// Keeps the overlay visible so the user knows text is on its way.
+    /// Transitions the overlay from recording to batch transcription.
     func transitionToProcessing() {
+        guard overlayPanel != nil else { return }
         viewModel.phase = .processing
-        VocaLogger.debug(.cursorOverlay, "Transitioned to processing")
+        viewModel.isActive = true
+        if let overlayPanel {
+            updatePanelLayout(overlayPanel)
+        }
+        VocaLogger.debug(.cursorOverlay, "Overlay transitioned to processing")
     }
 
-    /// Hide the recording indicator
+    /// Hides the recording overlay and resets its transient state.
     func hide() {
         repositionTimer?.invalidate()
         repositionTimer = nil
+        elapsedTimer?.invalidate()
+        elapsedTimer = nil
+
         viewModel.isActive = false
         viewModel.phase = .idle
+        viewModel.audioLevel = 0
+        viewModel.waveformTick = 0
+        viewModel.elapsedSeconds = 0
+
         overlayPanel?.orderOut(nil)
         overlayPanel = nil
         hostingView = nil
-        VocaLogger.debug(.cursorOverlay, "Indicator hidden")
+        VocaLogger.debug(.cursorOverlay, "Overlay hidden")
     }
 
-    /// Update the audio level (kept for future use)
+    /// Updates the current audio level used to animate the waveform.
     func updateAudioLevel(_ level: Float) {
-        viewModel.audioLevel = level
+        let target = min(max(level, 0), 1)
+        let smoothing: Float = target > viewModel.audioLevel ? 0.58 : 0.22
+        viewModel.audioLevel += (target - viewModel.audioLevel) * smoothing
+        viewModel.waveformTick &+= 1
+    }
+
+    // MARK: - Layout
+
+    private var overlaySize: CGSize {
+        OverlayLayout.size(for: viewModel.style)
+    }
+
+    private func updatePanelLayout(_ panel: NSPanel) {
+        let size = overlaySize
+        panel.setContentSize(size)
+        hostingView?.frame = NSRect(origin: .zero, size: size)
+        positionPanel(panel, size: size)
+    }
+
+    private func positionPanel(_ panel: NSPanel, size: CGSize) {
+        switch viewModel.position {
+        case .nearCursor:
+            panel.setFrameOrigin(detectIndicatorPosition(panelSize: size))
+        case .top, .bottom:
+            guard let screen = activeScreen else {
+                panel.setFrameOrigin(detectIndicatorPosition(panelSize: size))
+                return
+            }
+
+            let visibleFrame = screen.visibleFrame
+            let x = visibleFrame.midX - size.width / 2
+            let y: CGFloat
+            switch viewModel.position {
+            case .top:
+                y = visibleFrame.maxY - size.height - 46
+            case .bottom:
+                y = visibleFrame.minY + 15
+            case .nearCursor:
+                y = visibleFrame.minY
+            }
+            panel.setFrameOrigin(NSPoint(x: x, y: y))
+        }
+    }
+
+    private var activeScreen: NSScreen? {
+        let mouseLocation = NSEvent.mouseLocation
+        return NSScreen.screens.first(where: { $0.frame.contains(mouseLocation) })
+            ?? NSScreen.main
+            ?? NSScreen.screens.first
+    }
+
+    private func startTimers() {
+        repositionTimer?.invalidate()
+        repositionTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self, let panel = self.overlayPanel else { return }
+                self.positionPanel(panel, size: self.overlaySize)
+            }
+        }
+
+        elapsedTimer?.invalidate()
+        elapsedTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self, self.viewModel.phase == .recording else { return }
+                self.viewModel.elapsedSeconds += 1
+            }
+        }
     }
 
     // MARK: - Caret Position Detection
 
-    private func positionNearCaret(_ panel: NSPanel) {
-        panel.setFrameOrigin(detectIndicatorPosition())
-    }
-
-    private func detectIndicatorPosition() -> NSPoint {
+    private func detectIndicatorPosition(panelSize: CGSize) -> NSPoint {
         let systemWide = AXUIElementCreateSystemWide()
 
         var focusedApp: AnyObject?
         guard AXUIElementCopyAttributeValue(systemWide, kAXFocusedApplicationAttribute as CFString, &focusedApp) == .success else {
-            return mousePosition()
+            return clamped(mousePosition(), panelSize: panelSize)
         }
         let app = focusedApp as! AXUIElement
 
@@ -122,22 +291,33 @@ final class CursorOverlayManager {
 
             if let caretRect = getCaretRectFromElement(element) {
                 VocaLogger.debug(.cursorOverlay, "Positioned via caret")
-                return clamped(NSPoint(x: caretRect.maxX + 4, y: caretRect.maxY + 4))
+                return OverlayPlacement.origin(
+                    near: caretRect,
+                    panelSize: panelSize,
+                    visibleFrames: visibleScreenFrames
+                )
             }
 
             if let elementRect = convertAXRectToAppKit(getElementRect(element)) {
                 VocaLogger.debug(.cursorOverlay, "Positioned via focused element")
-                return clamped(NSPoint(x: elementRect.maxX + 4, y: elementRect.maxY - 4))
+                return OverlayPlacement.origin(
+                    near: elementRect,
+                    panelSize: panelSize,
+                    visibleFrames: visibleScreenFrames
+                )
             }
         }
 
         if let windowRect = convertAXRectToAppKit(getFocusedWindowRect(app)) {
             VocaLogger.debug(.cursorOverlay, "Positioned via focused window")
-            return clamped(NSPoint(x: windowRect.maxX - 60, y: windowRect.maxY - 50))
+            return clamped(
+                NSPoint(x: windowRect.maxX - panelSize.width - 20, y: windowRect.maxY - panelSize.height - 20),
+                panelSize: panelSize
+            )
         }
 
         VocaLogger.debug(.cursorOverlay, "Positioned via mouse cursor (fallback)")
-        return mousePosition()
+        return clamped(mousePosition(), panelSize: panelSize)
     }
 
     private func getCaretRectFromElement(_ element: AXUIElement) -> CGRect? {
@@ -184,9 +364,14 @@ final class CursorOverlayManager {
     // MARK: - Coordinate Helpers
 
     private func convertAXRectToAppKit(_ rect: CGRect?) -> CGRect? {
-        guard let rect, let primaryScreenHeight = NSScreen.screens.first?.frame.height else { return nil }
+        guard let rect,
+              rect.origin.x.isFinite,
+              rect.origin.y.isFinite,
+              rect.width.isFinite,
+              rect.height.isFinite,
+              let primaryScreenTop = NSScreen.screens.first?.frame.maxY else { return nil }
         var converted = rect
-        converted.origin.y = primaryScreenHeight - rect.origin.y - rect.height
+        converted.origin.y = primaryScreenTop - rect.origin.y - rect.height
         return converted
     }
 
@@ -195,24 +380,18 @@ final class CursorOverlayManager {
         return NSPoint(x: loc.x + 16, y: loc.y - 40)
     }
 
-    private func clamped(_ point: NSPoint) -> NSPoint {
-        let panelSize = CGSize(width: 36, height: 36)
-        for screen in NSScreen.screens {
-            if screen.frame.contains(point) {
-                let visible = screen.visibleFrame
-                return NSPoint(
-                    x: min(max(point.x, visible.minX), visible.maxX - panelSize.width),
-                    y: min(max(point.y, visible.minY), visible.maxY - panelSize.height)
-                )
-            }
-        }
-        return point
+    private func clamped(_ point: NSPoint, panelSize: CGSize) -> NSPoint {
+        OverlayPlacement.clampedOrigin(
+            point,
+            panelSize: panelSize,
+            visibleFrames: visibleScreenFrames
+        )
+    }
+
+    private var visibleScreenFrames: [CGRect] {
+        NSScreen.screens.map(\.visibleFrame)
     }
 }
-
-// MARK: - CursorOverlayManaging Conformance
-
-extension CursorOverlayManager: CursorOverlayManaging {}
 
 // MARK: - IndicatorPhase
 
@@ -229,54 +408,243 @@ final class MicIndicatorViewModel: ObservableObject {
     @Published var isActive: Bool = false
     @Published var audioLevel: Float = 0.0
     @Published var phase: IndicatorPhase = .idle
+    @Published var style: OverlayStyle = .minimal
+    @Published var position: OverlayPosition = .nearCursor
+    @Published var waveformTick: Int = 0
+    @Published var elapsedSeconds: Int = 0
 }
 
-// MARK: - MicIndicatorView
+// MARK: - Waveform Metrics
 
-struct MicIndicatorView: View {
+/// Converts the single audio level currently exposed by AudioEngine into the
+/// nine asymmetric bars used by the Handy-inspired overlay.
+enum OverlayWaveformMetrics {
+    static let barProfile: [CGFloat] = [0.42, 0.68, 0.92, 0.70, 1.0, 0.78, 0.88, 0.60, 0.38]
+
+    static func heights(for level: Float, tick: Int = 0, maximumHeight: CGFloat = 18) -> [CGFloat] {
+        let normalized = min(max(CGFloat(level), 0), 1)
+        let shaped = pow(normalized, 0.62)
+        return barProfile.enumerated().map { index, profile in
+            let phase = Double(tick) * 0.78 + Double(index) * 1.31
+            let movement = CGFloat(0.88 + sin(phase) * 0.12)
+            return min(maximumHeight, max(3, 3 + shaped * profile * movement * (maximumHeight - 3)))
+        }
+    }
+}
+
+// MARK: - HandyOverlayView
+
+struct HandyOverlayView: View {
     @ObservedObject var viewModel: MicIndicatorViewModel
+    let onCancel: () -> Void
 
-    /// Recording state - red, matching menu bar icon (.systemRed)
+    @State private var isPulsing = false
+
     private let recordingColor = Color(nsColor: .systemRed)
-
-    /// Processing state - purple (#BF5AF2), matching menu bar icon
-    private let processingColor = Color(
-        red: 0.749, green: 0.353, blue: 0.949
-    )
+    private let processingColor = Color(red: 0.749, green: 0.353, blue: 0.949)
+    private let panelColor = Color(red: 0.105, green: 0.108, blue: 0.118)
 
     var body: some View {
-        ZStack {
-            // Background circle with color transition
-            Circle()
-                .fill(phaseColor)
-                .frame(width: 28, height: 28)
-                .shadow(color: phaseColor.opacity(0.4), radius: 4, x: 0, y: 0)
-
-            // Icon changes based on phase
-            Image(systemName: phaseIcon)
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundColor(.white)
+        Group {
+            if viewModel.style == .live {
+                livePanelContent
+            } else {
+                minimalControlRow
+            }
         }
+        .frame(width: panelSize.width, height: panelSize.height)
+        .background(panelColor.opacity(0.98))
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .stroke(Color.white.opacity(0.13), lineWidth: 1)
+        }
+        .shadow(color: .black.opacity(0.38), radius: 14, y: 5)
         .opacity(viewModel.isActive ? 1 : 0)
-        .animation(.easeInOut(duration: 0.3), value: viewModel.isActive)
-        .animation(.easeInOut(duration: 0.4), value: viewModel.phase)
-    }
-
-    /// Color based on current phase
-    private var phaseColor: Color {
-        switch viewModel.phase {
-        case .idle:       return recordingColor
-        case .recording:  return recordingColor
-        case .processing: return processingColor
+        .scaleEffect(viewModel.isActive ? 1 : 0.96)
+        .animation(.easeOut(duration: 0.18), value: viewModel.isActive)
+        .animation(.easeInOut(duration: 0.16), value: viewModel.phase)
+        .onAppear {
+            withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
+                isPulsing = true
+            }
         }
     }
 
-    /// Icon based on current phase
-    private var phaseIcon: String {
-        switch viewModel.phase {
-        case .idle:       return "mic.fill"
-        case .recording:  return "mic.fill"
-        case .processing: return "ellipsis.circle"
+    private var panelSize: CGSize {
+        OverlayLayout.size(for: viewModel.style)
+    }
+
+    private var cornerRadius: CGFloat {
+        viewModel.style == .live ? 16 : 22
+    }
+
+    private var liveHeader: some View {
+        HStack(spacing: 7) {
+            statusDot
+
+            Text(viewModel.phase == .recording ? "Listening" : "Transcribing")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.white.opacity(0.92))
+
+            Spacer()
+
+            if viewModel.phase == .recording {
+                Text(formattedElapsed)
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.62))
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(Color.white.opacity(0.07), in: Capsule())
+            }
         }
+        .frame(maxWidth: .infinity)
+        .frame(height: 28)
+    }
+
+    private var livePanelContent: some View {
+        HStack(spacing: 10) {
+            VStack(spacing: 0) {
+                liveHeader
+                liveControlRow
+            }
+            .frame(maxWidth: .infinity)
+
+            Rectangle()
+                .fill(Color.white.opacity(viewModel.phase == .recording ? 0.09 : 0))
+                .frame(width: 1, height: 34)
+
+            if viewModel.phase == .recording {
+                cancelButton
+            } else {
+                Color.clear
+                    .frame(width: 24, height: 24)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+    }
+
+    @ViewBuilder
+    private var liveControlRow: some View {
+        HStack(spacing: 8) {
+            if viewModel.phase == .recording {
+                waveform
+
+                Text("Speak naturally")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.46))
+            } else {
+                ProgressView()
+                    .controlSize(.small)
+                    .tint(processingColor)
+
+                Text("Turning speech into text…")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.68))
+            }
+
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(height: 28)
+    }
+
+    @ViewBuilder
+    private var minimalControlRow: some View {
+        HStack(spacing: 8) {
+            if viewModel.phase == .recording {
+                statusDot
+                waveform
+            } else {
+                ProgressView()
+                    .controlSize(.small)
+                    .tint(processingColor)
+
+                Text("Transcribing…")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.68))
+            }
+
+            if viewModel.phase == .recording {
+                cancelButton
+            }
+        }
+        .padding(.horizontal, 10)
+        .frame(height: 44)
+    }
+
+    private var waveform: some View {
+        let maximumHeight: CGFloat = viewModel.style == .live ? 20 : 16
+        let barWidth: CGFloat = viewModel.style == .live ? 4 : 3
+        let spacing: CGFloat = viewModel.style == .live ? 3 : 2
+        let heights = OverlayWaveformMetrics.heights(
+            for: viewModel.audioLevel,
+            tick: viewModel.waveformTick,
+            maximumHeight: maximumHeight
+        )
+
+        return HStack(spacing: spacing) {
+            ForEach(Array(heights.enumerated()), id: \.offset) { _, height in
+                Capsule()
+                    .fill(Color.white.opacity(0.88))
+                    .frame(width: barWidth, height: height)
+            }
+        }
+        .frame(height: maximumHeight)
+        .animation(
+            .interactiveSpring(response: 0.20, dampingFraction: 0.72, blendDuration: 0.08),
+            value: viewModel.waveformTick
+        )
+        .accessibilityLabel("Microphone level")
+    }
+
+    private var statusDot: some View {
+        ZStack {
+            if viewModel.phase == .recording {
+                Circle()
+                    .fill(recordingColor.opacity(0.24))
+                    .frame(width: 13, height: 13)
+                    .scaleEffect(isPulsing ? 1 : 0.72)
+                    .opacity(isPulsing ? 0.38 : 0.9)
+            }
+
+            Circle()
+                .fill(viewModel.phase == .recording ? recordingColor : processingColor)
+                .frame(width: 6, height: 6)
+                .shadow(
+                    color: (viewModel.phase == .recording ? recordingColor : processingColor).opacity(0.55),
+                    radius: 4
+                )
+        }
+        .frame(width: 13, height: 13)
+    }
+
+    private var cancelButton: some View {
+        Button(action: onCancel) {
+            Image(systemName: "xmark")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.70))
+                .frame(width: 24, height: 24)
+                .background(Color.white.opacity(0.08), in: Circle())
+                .overlay {
+                    Circle()
+                        .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                }
+        }
+        .buttonStyle(.plain)
+        .contentShape(Circle())
+        .help("Cancel recording")
+        .accessibilityLabel("Cancel recording")
+    }
+
+    private var formattedElapsed: String {
+        let minutes = viewModel.elapsedSeconds / 60
+        let seconds = viewModel.elapsedSeconds % 60
+        return "\(minutes):\(String(format: "%02d", seconds))"
     }
 }
+
+// MARK: - CursorOverlayManaging Conformance
+
+extension CursorOverlayManager: CursorOverlayManaging {}

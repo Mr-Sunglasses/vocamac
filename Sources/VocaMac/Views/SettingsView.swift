@@ -208,11 +208,33 @@ struct GeneralSettingsTab: View {
 
                 Toggle("Preserve clipboard after text injection", isOn: $appState.preserveClipboard)
 
-                Toggle("Show mic indicator near cursor while recording", isOn: $appState.showCursorIndicator)
-
                 Text("When enabled, your clipboard contents are restored after injecting text.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+
+            Section("Recording Overlay") {
+                Picker("Style", selection: $appState.overlayStyle) {
+                    ForEach(OverlayStyle.allCases) { style in
+                        Text(style.displayName).tag(style)
+                    }
+                }
+                .pickerStyle(.radioGroup)
+                .onChange(of: appState.overlayStyle) {
+                    appState.showCursorIndicator = appState.overlayStyle != .off
+                }
+
+                Text(appState.overlayStyle.description)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Picker("Position", selection: $appState.overlayPosition) {
+                    ForEach(OverlayPosition.allCases) { position in
+                        Text(position.displayName).tag(position)
+                    }
+                }
+                .pickerStyle(.radioGroup)
+                .disabled(appState.overlayStyle == .off)
             }
 
         }
