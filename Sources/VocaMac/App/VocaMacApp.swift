@@ -226,10 +226,11 @@ struct VocaMacApp: App {
     @StateObject private var settingsManager = SettingsWindowManager()
     @StateObject private var updateWindowManager = UpdateWindowManager()
     @StateObject private var onboardingManager = OnboardingWindowManager()
+    @AppStorage("vocamac.showTrayIcon") private var showTrayIcon = true
 
     var body: some Scene {
         // Menu bar presence — the primary UI for VocaMac
-        MenuBarExtra {
+        MenuBarExtra(isInserted: $showTrayIcon) {
             MenuBarView(settingsManager: settingsManager, updateWindowManager: updateWindowManager)
                 .environmentObject(appState)
         } label: {
@@ -244,6 +245,11 @@ struct VocaMacApp: App {
                 }
         }
         .menuBarExtraStyle(.window)
+
+        Settings {
+            SettingsView()
+                .environmentObject(appState)
+        }
     }
 
     @MainActor init() {

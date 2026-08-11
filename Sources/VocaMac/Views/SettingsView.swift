@@ -374,6 +374,12 @@ struct ApplicationSettingsPage: View {
                 Text("When enabled, your clipboard contents are restored after injecting text.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+
+                Toggle("Show VocaMac in the menu bar", isOn: $appState.showTrayIcon)
+
+                Text("Display the VocaMac icon in the system menu bar. If hidden, use ⌘, while VocaMac is active to reopen Settings.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section("Recording Overlay") {

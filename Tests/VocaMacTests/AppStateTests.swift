@@ -30,6 +30,31 @@ final class TranslationToggleTests: XCTestCase {
     }
 }
 
+// MARK: - Tray Icon Toggle Tests
+
+final class TrayIconToggleTests: XCTestCase {
+
+    @MainActor
+    func testTrayIconIsShownByDefault() {
+        let (appState, _) = AppState.makeTestState()
+
+        XCTAssertTrue(appState.showTrayIcon)
+    }
+
+    @MainActor
+    func testTrayIconCanBeToggled() {
+        let (appState, _) = AppState.makeTestState()
+
+        appState.showTrayIcon = false
+        XCTAssertFalse(appState.showTrayIcon)
+        XCTAssertFalse(UserDefaults.standard.bool(forKey: "vocamac.showTrayIcon"))
+
+        appState.showTrayIcon = true
+        XCTAssertTrue(appState.showTrayIcon)
+        XCTAssertTrue(UserDefaults.standard.bool(forKey: "vocamac.showTrayIcon"))
+    }
+}
+
 
 // MARK: - OnboardingStep Tests
 

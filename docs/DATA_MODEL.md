@@ -312,6 +312,7 @@ struct UserSettings {
     // App Behavior
     var launchAtLogin: Bool = false
     var preserveClipboard: Bool = true          // Restore clipboard after text injection
+    var showTrayIcon: Bool = true               // Show VocaMac in the system menu bar
     var playSoundEffects: Bool = false          // Sound on start/stop recording
 }
 ```

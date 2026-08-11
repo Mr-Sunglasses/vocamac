@@ -318,6 +318,7 @@ Open Settings from the menu bar popover or with **⌘,**
 - **Hotkey** - Choose from common presets or record a custom activation key directly from your keyboard. The selected key is consumed by VocaMac while the app is running.
 - **Language** - Auto-detect or specify (English, Spanish, French, German, Chinese, Japanese, and more)
 - **Launch at login**
+- **Menu bar icon** - Show or hide the VocaMac icon in the system menu bar
 
 ### Audio
 - **Max recording duration** - 30s, 60s, 120s, or 300s
