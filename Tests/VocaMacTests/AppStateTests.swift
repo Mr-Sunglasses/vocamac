@@ -347,6 +347,50 @@ final class AppStateModelLoadingTests: XCTestCase {
     }
 
     @MainActor
+    func testConcurrentModelDownloadsAreSerialized() async throws {
+        let modelManager = MockModelManager()
+        modelManager.downloadDelayNanoseconds = 50_000_000
+        let (appState, _) = AppState.makeTestState(modelManager: modelManager)
+
+        async let firstDownload: Void = appState.downloadModel(.small)
+        try await Task.sleep(nanoseconds: 5_000_000)
+        async let secondDownload: Void = appState.downloadModel(.medium)
+
+        await firstDownload
+        await secondDownload
+
+        XCTAssertEqual(modelManager.downloadRequests, [.small, .medium])
+        XCTAssertEqual(modelManager.maxConcurrentDownloadCount, 1)
+        XCTAssertEqual(modelManager.downloadedModels, [.small, .medium])
+    }
+
+    @MainActor
+    func testConcurrentModelLoadsAreSerialized() async throws {
+        let modelManager = MockModelManager()
+        modelManager.downloadedModels = [.small, .medium]
+        let whisperService = MockWhisperService()
+        whisperService.loadDelayNanoseconds = 50_000_000
+        let (appState, _) = AppState.makeTestState(
+            modelManager: modelManager,
+            whisperService: whisperService
+        )
+
+        async let firstLoad: Void = appState.loadModel(.small)
+        try await Task.sleep(nanoseconds: 5_000_000)
+        async let secondLoad: Void = appState.loadModel(.medium)
+
+        await firstLoad
+        await secondLoad
+
+        XCTAssertEqual(
+            whisperService.loadRequests.map { $0.name },
+            ["openai_whisper-small", "openai_whisper-medium"]
+        )
+        XCTAssertEqual(whisperService.maxConcurrentLoadCount, 1)
+        XCTAssertEqual(appState.currentModel?.size, .medium)
+    }
+
+    @MainActor
     func testStartupFallsBackFromUnsupportedMediumPreference() async {
         UserDefaults.standard.set(ModelSize.medium.rawValue, forKey: "vocamac.selectedModelSize")
 
