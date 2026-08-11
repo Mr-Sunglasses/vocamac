@@ -78,15 +78,12 @@ final class TextInjectorTests: XCTestCase {
         injector.inject(text: "", preserveClipboard: false)
     }
 
-    /// Verify that the clipboard restore delay is short enough to avoid the
-    /// race condition where a user's Cmd+V pastes transcribed text instead
-    /// of their original clipboard. The total injection window (pre-paste
-    /// delay + restore delay) must be well under 300 ms — the lower bound
-    /// of the user-reported lag. See GitHub issue #104.
+    /// Verify that the clipboard restore delay remains bounded while leaving
+    /// enough time for a busy target application to consume Cmd+V.
     func testClipboardRestoreDelayIsSufficientlyShort() {
         // TextInjector's delays are private, so we verify the observable
         // behaviour: after inject() returns synchronously the pasteboard
-        // should be restored within 200 ms (generous upper bound).
+        // should be restored within a short, bounded window.
         // We can't exercise the full path without accessibility permission,
         // but we *can* assert the injector doesn't crash and the total
         // constant budget is reasonable by inspecting known internals via
@@ -94,6 +91,86 @@ final class TextInjectorTests: XCTestCase {
         let injector = TextInjector()
         // Instantiation succeeds — the constants compiled to valid values
         XCTAssertNotNil(injector)
+    }
+
+    /// A delayed clipboard change must not become the value consumed by the
+    /// paste event. This models a clipboard manager or an older restore task
+    /// racing with the current transcription.
+    func testClipboardFallbackReassertsTranscriptionBeforePaste() {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString("original clipboard", forType: .string)
+
+        var pastedTexts: [String] = []
+        let pasteExpectation = expectation(description: "transcription paste event")
+        let finishedExpectation = expectation(description: "clipboard restoration")
+
+        let injector = TextInjector(
+            accessibilityTrustedOverride: true,
+            accessibilityInjectionOverride: { _ in false },
+            pasteActionOverride: {
+                pastedTexts.append(pasteboard.string(forType: .string) ?? "")
+                pasteExpectation.fulfill()
+            }
+        )
+
+        injector.inject(text: "spoken transcription", preserveClipboard: true)
+
+        // Change the clipboard after VocaMac writes the transcription but
+        // before it posts Cmd+V. The injector must put the transcription back
+        // before the simulated paste and preserve this newer clipboard value.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) {
+            pasteboard.clearContents()
+            pasteboard.setString("clipboard manager value", forType: .string)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+            finishedExpectation.fulfill()
+        }
+
+        wait(for: [pasteExpectation, finishedExpectation], timeout: 1.0)
+
+        XCTAssertEqual(pastedTexts, ["spoken transcription"])
+        XCTAssertEqual(
+            pasteboard.string(forType: .string),
+            "clipboard manager value",
+            "A newer clipboard value must survive the transcription paste"
+        )
+    }
+
+    /// Consecutive transcriptions must not share an asynchronous clipboard
+    /// window. Each paste event should consume its own transcription, and the
+    /// original clipboard should be restored only after both are complete.
+    func testRapidClipboardInjectionsAreSerialized() {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString("original clipboard", forType: .string)
+
+        var pastedTexts: [String] = []
+        let pasteExpectation = expectation(description: "two transcription paste events")
+        pasteExpectation.expectedFulfillmentCount = 2
+        let finishedExpectation = expectation(description: "queued clipboard restoration")
+
+        let injector = TextInjector(
+            accessibilityTrustedOverride: true,
+            accessibilityInjectionOverride: { _ in false },
+            pasteActionOverride: {
+                pastedTexts.append(pasteboard.string(forType: .string) ?? "")
+                pasteExpectation.fulfill()
+                if pastedTexts.count == 2 {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                        finishedExpectation.fulfill()
+                    }
+                }
+            }
+        )
+
+        injector.inject(text: "first transcription", preserveClipboard: true)
+        injector.inject(text: "second transcription", preserveClipboard: true)
+
+        wait(for: [pasteExpectation, finishedExpectation], timeout: 1.5)
+
+        XCTAssertEqual(pastedTexts, ["first transcription", "second transcription"])
+        XCTAssertEqual(pasteboard.string(forType: .string), "original clipboard")
     }
 
     /// Verify that the mock text injector faithfully records calls,
@@ -189,6 +266,14 @@ final class TextInjectorTests: XCTestCase {
         // Both preserveClipboard variants must survive without crashing.
         injector.inject(text: "Hello, Raycast!", preserveClipboard: false)
         injector.inject(text: "Hello, Raycast!", preserveClipboard: true)
+
+        // Let both asynchronous clipboard operations finish so their restore
+        // work cannot leak into the next test.
+        let finishedExpectation = expectation(description: "clipboard fallback operations finished")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            finishedExpectation.fulfill()
+        }
+        wait(for: [finishedExpectation], timeout: 1.0)
     }
 
     /// When the process does not have Accessibility permission,
