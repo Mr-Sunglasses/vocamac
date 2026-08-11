@@ -491,6 +491,15 @@ struct ModelRow: View {
     let model: WhisperModelInfo
     @ObservedObject var appState: AppState
     @State private var showForceDownloadAlert = false
+    @State private var showDeleteAlert = false
+
+    /// Apple Speech models are managed by the OS, not stored by the app, so there's nothing to
+    /// delete. A model that's mid-load or mid-download is also excluded so its files aren't
+    /// removed out from under an in-flight read.
+    private var canDelete: Bool {
+        model.isDownloaded && !model.isActive && !model.size.isSystemManaged
+            && !model.isLoading && model.downloadProgress == nil
+    }
 
     var body: some View {
         HStack {
@@ -608,6 +617,18 @@ struct ModelRow: View {
                 }
                 .controlSize(.small)
             }
+
+            if canDelete {
+                Button {
+                    showDeleteAlert = true
+                } label: {
+                    Image(systemName: "trash")
+                }
+                .controlSize(.small)
+                .buttonStyle(.borderless)
+                .foregroundStyle(.secondary)
+                .help("Delete downloaded model")
+            }
         }
         .padding(.vertical, 8)
         .padding(.horizontal, 4)
@@ -625,6 +646,14 @@ struct ModelRow: View {
             }
         } message: {
             Text("WhisperKit hasn't verified this model on your chip family. It may fail to load, or it may run slower than tuned models.")
+        }
+        .alert("Delete \(model.size.displayName)?", isPresented: $showDeleteAlert) {
+            Button("Cancel", role: .cancel) {}
+            Button("Delete", role: .destructive) {
+                Task { @MainActor in await appState.deleteModel(model.size) }
+            }
+        } message: {
+            Text("This removes the downloaded model file (\(model.size.fileSizeDescription)) from disk. You can download it again later.")
         }
     }
 }
