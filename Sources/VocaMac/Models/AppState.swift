@@ -1032,6 +1032,32 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// Delete a downloaded model's local files, freeing disk space.
+    /// Refuses to delete the currently active model — the user must load a
+    /// different model first so the app is never left without a loaded model —
+    /// and refuses a model that's mid-download or mid-load, so its files
+    /// aren't yanked out from under an in-flight read.
+    func deleteModel(_ size: ModelSize) async {
+        guard let index = availableModels.firstIndex(where: { $0.size == size }) else { return }
+        guard !availableModels[index].isActive else {
+            errorMessage = "Can't delete the active model. Load a different model first."
+            return
+        }
+        guard !availableModels[index].isLoading, availableModels[index].downloadProgress == nil else {
+            errorMessage = "Can't delete a model that's loading or downloading."
+            return
+        }
+
+        do {
+            try await modelManager.deleteModel(size)
+            refreshModelStatuses()
+            VocaLogger.info(.appState, "Deleted model \(size.displayName)")
+        } catch {
+            errorMessage = "Delete failed: \(error.localizedDescription)"
+            VocaLogger.error(.appState, "Delete failed for \(size.displayName): \(error.localizedDescription)")
+        }
+    }
+
     /// Refresh the download status of all models
     /// This ensures that all previously downloaded models are detected and marked correctly
     private func refreshModelStatuses() {

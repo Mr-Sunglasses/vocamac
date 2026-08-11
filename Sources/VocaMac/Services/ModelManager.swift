@@ -730,20 +730,28 @@ final class ModelManager {
 
     // MARK: - Model Deletion
 
-    /// Delete a downloaded model's local files
-    func deleteModel(_ size: ModelSize) throws {
+    /// Delete a downloaded model's local files.
+    ///
+    /// `async` so callers on `@MainActor` (the Settings UI) don't block while
+    /// removing a multi-gigabyte model directory — `ModelManager` carries no
+    /// actor isolation of its own, so the removal runs off the main thread.
+    func deleteModel(_ size: ModelSize) async throws {
         let modelDir: URL
         switch size.engine {
         case .whisperKit:
             modelDir = modelStorageBase.appendingPathComponent(whisperKitModelName(for: size))
         case .parakeet:
-            guard let version = parakeetVersion(for: size) else { return }
+            guard let version = parakeetVersion(for: size) else {
+                throw ModelManagerError.modelNotAvailable(modelIdentifier(for: size))
+            }
             modelDir = parakeetDirectory(for: version)
         case .appleSpeech:
             // System-managed assets cannot be deleted by the app.
             return
         case .sherpaOnnx:
-            guard let spec = SherpaModelCatalog.spec(for: size) else { return }
+            guard let spec = SherpaModelCatalog.spec(for: size) else {
+                throw ModelManagerError.modelNotAvailable(modelIdentifier(for: size))
+            }
             modelDir = SherpaService.modelDirectory(for: spec)
         }
 

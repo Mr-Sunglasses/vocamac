@@ -358,6 +358,17 @@ final class MockModelManager: ModelManaging {
         downloadedModels.insert(size)
     }
 
+    var deleteModelError: Error?
+    var deletedModels: [ModelSize] = []
+
+    func deleteModel(_ size: ModelSize) async throws {
+        if let deleteModelError {
+            throw deleteModelError
+        }
+        downloadedModels.remove(size)
+        deletedModels.append(size)
+    }
+
     func diskUsageDescription() -> String {
         diskUsage
     }

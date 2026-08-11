@@ -105,6 +105,7 @@ protocol ModelManaging: AnyObject {
     func modelIdentifier(for size: ModelSize) -> String
     func modelSize(from identifier: String) -> ModelSize?
     func downloadModel(size: ModelSize, onProgress: @escaping (Double) -> Void) async throws
+    func deleteModel(_ size: ModelSize) async throws
     func diskUsageDescription() -> String
 }
 

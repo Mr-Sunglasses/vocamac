@@ -347,6 +347,66 @@ final class AppStateModelLoadingTests: XCTestCase {
     }
 
     @MainActor
+    func testDeleteModelRemovesDownloadedModel() async {
+        let modelManager = MockModelManager()
+        modelManager.downloadedModels = [.small, .medium]
+        let (appState, _) = AppState.makeTestState(modelManager: modelManager)
+
+        await appState.deleteModel(.medium)
+
+        XCTAssertEqual(modelManager.deletedModels, [.medium])
+        XCTAssertEqual(appState.availableModels.first(where: { $0.size == .medium })?.isDownloaded, false)
+        XCTAssertNil(appState.errorMessage)
+    }
+
+    @MainActor
+    func testDeleteModelRefusesToDeleteTheActiveModel() async {
+        let modelManager = MockModelManager()
+        modelManager.downloadedModels = [.small]
+        let (appState, _) = AppState.makeTestState(modelManager: modelManager)
+
+        await appState.loadModel(.small)
+        await appState.deleteModel(.small)
+
+        XCTAssertTrue(modelManager.deletedModels.isEmpty)
+        XCTAssertEqual(appState.availableModels.first(where: { $0.size == .small })?.isDownloaded, true)
+        XCTAssertTrue(appState.errorMessage?.contains("active model") == true)
+    }
+
+    @MainActor
+    func testDeleteModelRefusesToDeleteAModelThatIsLoading() async {
+        // A model mid-load or mid-download must not have its files pulled out
+        // from under the in-flight read.
+        let modelManager = MockModelManager()
+        modelManager.downloadedModels = [.small]
+        let (appState, _) = AppState.makeTestState(modelManager: modelManager)
+        let index = appState.availableModels.firstIndex(where: { $0.size == .small })!
+        appState.availableModels[index].isLoading = true
+
+        await appState.deleteModel(.small)
+
+        XCTAssertTrue(modelManager.deletedModels.isEmpty)
+        XCTAssertTrue(appState.errorMessage?.contains("loading") == true)
+    }
+
+    @MainActor
+    func testDeleteModelSurfacesUnderlyingError() async {
+        let modelManager = MockModelManager()
+        modelManager.downloadedModels = [.small]
+        modelManager.deleteModelError = NSError(
+            domain: "VocaMacTests",
+            code: 1,
+            userInfo: [NSLocalizedDescriptionKey: "Permission denied"]
+        )
+        let (appState, _) = AppState.makeTestState(modelManager: modelManager)
+
+        await appState.deleteModel(.small)
+
+        XCTAssertTrue(appState.errorMessage?.contains("Permission denied") == true)
+        XCTAssertEqual(appState.availableModels.first(where: { $0.size == .small })?.isDownloaded, true)
+    }
+
+    @MainActor
     func testConcurrentModelDownloadsAreSerialized() async throws {
         let modelManager = MockModelManager()
         modelManager.downloadDelayNanoseconds = 50_000_000
