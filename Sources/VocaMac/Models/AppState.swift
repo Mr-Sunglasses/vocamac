@@ -69,6 +69,9 @@ final class AppState: ObservableObject {
     /// The most recent transcription result
     @Published var lastTranscription: VocaTranscription?
 
+    /// Last Settings → Test Dictation result (shown in the sidebar footer; not injected).
+    @Published var settingsTestResultText: String?
+
     /// Error message to display, if any
     @Published var errorMessage: String?
 
@@ -114,6 +117,53 @@ final class AppState: ObservableObject {
     @AppStorage("vocamac.translationEnabled") var translationEnabled: Bool = false
     @AppStorage("vocamac.customVocabulary") var customVocabulary: String = ""
     @AppStorage("vocamac.logLevel") var logLevel: String = "info"
+    @AppStorage(PreferenceKey.appendTrailingSpace) var appendTrailingSpace: Bool = true
+    @AppStorage(PreferenceKey.autoCapitalize) var autoCapitalize: Bool = true
+    @AppStorage(PreferenceKey.autoPauseEnabled) var autoPauseEnabled: Bool = false
+    @AppStorage(PreferenceKey.autoPausePollInterval) var autoPausePollIntervalSeconds: Double = 5
+    @AppStorage(PreferenceKey.modelKeepAliveEnabled) var modelKeepAliveEnabled: Bool = false
+    @AppStorage(PreferenceKey.modelKeepAliveIdleTimeout) var modelKeepAliveIdleTimeoutSeconds: Double = 300
+
+    /// JSON-encoded `[AutoPauseAppEntry]` list (complex value not stored via `@AppStorage`).
+    var autoPauseAppsJSON: String {
+        get { UserDefaults.standard.string(forKey: PreferenceKey.autoPauseApps) ?? "[]" }
+        set { UserDefaults.standard.set(newValue, forKey: PreferenceKey.autoPauseApps) }
+    }
+
+    /// Decoded auto-pause app list. Empty when unset or invalid JSON.
+    var autoPauseApps: [AutoPauseAppEntry] {
+        get {
+            guard let data = autoPauseAppsJSON.data(using: .utf8),
+                  let decoded = try? JSONDecoder().decode([AutoPauseAppEntry].self, from: data) else {
+                return []
+            }
+            return decoded
+        }
+        set {
+            if let data = try? JSONEncoder().encode(newValue),
+               let json = String(data: data, encoding: .utf8) {
+                autoPauseAppsJSON = json
+            } else {
+                autoPauseAppsJSON = "[]"
+            }
+            objectWillChange.send()
+        }
+    }
+
+    /// True while a configured auto-pause app is running and dictation is blocked.
+    @Published var isAutoPaused: Bool = false
+
+    /// Last reason the speech model was unloaded (nil while a model is loaded).
+    @Published var lastModelUnloadReason: ModelUnloadReason?
+
+    /// Display name of the app that triggered the current auto-pause, if any.
+    @Published var autoPauseTriggerDisplayName: String?
+
+    /// Approximate process RSS (MB) sampled just before the last unload.
+    @Published var processMemoryBeforeUnloadMB: Double?
+
+    /// Approximate process RSS (MB) sampled right after the last unload.
+    @Published var processMemoryAfterUnloadMB: Double?
 
     private var hotKeySafetyTimeout: Double {
         Double(maxRecordingDuration) + 5.0
@@ -132,10 +182,24 @@ final class AppState: ObservableObject {
     let updateChecker = UpdateChecker()
     let permissionManager: any PermissionManaging
 
+    /// Polls configured apps and pauses dictation while they run.
+    let autoPauseMonitor = AutoPauseMonitor()
+    /// Unloads the model after an idle timeout when enabled.
+    let modelKeepAlive = ModelKeepAlive()
+    /// Sleep/wake recovery hooks.
+    let sleepWakeMonitor = SleepWakeMonitor()
+
     // MARK: - Private
 
     private var cancellables = Set<AnyCancellable>()
     private var hasStarted = false
+
+    /// Why the model was last unloaded (for logs / UI).
+    enum ModelUnloadReason: String {
+        case autoPause = "auto_pause"
+        case idleKeepAlive = "idle_keepalive"
+        case manual = "manual"
+    }
 
     /// Bumped when each load operation starts. Failure restores and success UI
     /// updates only apply when the generation is still current, so a stale
@@ -208,12 +272,6 @@ final class AppState: ObservableObject {
         self.statsManager = statsManager
         self.permissionManager = permissionManager ?? PermissionManager(audioEngine: audioEngine, hotKeyManager: hotKeyManager)
         self.skipSystemIntegration = skipSystemIntegration
-
-        cursorOverlay.setCancelHandler { [weak self] in
-            Task { @MainActor [weak self] in
-                await self?.cancelRecording()
-            }
-        }
 
         VocaLogger.info(.appState, "Initializing... id=\(ObjectIdentifier(self))")
         if !skipSystemIntegration {
@@ -432,6 +490,191 @@ final class AppState: ObservableObject {
 
         // Check permissions
         checkPermissions()
+
+        if !skipSystemIntegration {
+            setupPowerManagement()
+        }
+    }
+
+    // MARK: - Power Management
+
+    /// Wire auto-pause, idle unload, and sleep/wake monitors.
+    private func setupPowerManagement() {
+        autoPauseMonitor.getConfig = { [weak self] in
+            guard let self else {
+                return (false, [], AutoPauseMonitor.defaultPollIntervalSeconds)
+            }
+            return (
+                self.autoPauseEnabled,
+                self.autoPauseApps,
+                self.autoPausePollIntervalSeconds
+            )
+        }
+        autoPauseMonitor.onPause = { [weak self] in
+            Task { @MainActor in
+                await self?.handleAutoPauseEntered()
+            }
+        }
+        autoPauseMonitor.onResume = { [weak self] in
+            Task { @MainActor in
+                await self?.handleAutoPauseCleared()
+            }
+        }
+
+        modelKeepAlive.getConfig = { [weak self] in
+            guard let self else {
+                return (false, ModelKeepAlive.defaultIdleTimeoutSeconds)
+            }
+            return (self.modelKeepAliveEnabled, self.modelKeepAliveIdleTimeoutSeconds)
+        }
+        modelKeepAlive.isSafeToUnload = { [weak self] in
+            guard let self else { return false }
+            return self.appStatus == .idle
+                && !self.isAutoPaused
+                && self.whisperService.isModelLoaded
+        }
+        modelKeepAlive.onIdleUnload = { [weak self] in
+            Task { @MainActor in
+                await self?.unloadActiveModel(reason: .idleKeepAlive)
+            }
+        }
+
+        sleepWakeMonitor.onWillSleep = { [weak self] in
+            self?.modelKeepAlive.cancel()
+            if self?.isRecording == true || self?.appStatus == .recording {
+                self?.forceRecovery()
+            }
+        }
+        sleepWakeMonitor.onDidWake = { [weak self] in
+            guard let self else { return }
+            VocaLogger.info(.appState, "Wake recovery: refreshing hotkey health")
+            if self.permissionManager.allPermissionsGranted {
+                self.syncHotKeyConfiguration()
+                if !self.hotKeyManager.isListening {
+                    self.hotKeyManager.startListening(
+                        keyCode: self.hotKeyCode,
+                        mode: self.activationMode,
+                        doubleTapThreshold: self.doubleTapThreshold,
+                        safetyTimeout: self.hotKeySafetyTimeout
+                    )
+                }
+            }
+            if !self.isAutoPaused {
+                self.modelKeepAlive.bump()
+            }
+        }
+
+        $appStatus
+            .sink { [weak self] status in
+                guard let self else { return }
+                switch status {
+                case .idle:
+                    if !self.isAutoPaused {
+                        self.modelKeepAlive.bump()
+                    }
+                case .recording, .processing, .error:
+                    self.modelKeepAlive.cancel()
+                }
+            }
+            .store(in: &cancellables)
+
+        autoPauseMonitor.start()
+        modelKeepAlive.start()
+        sleepWakeMonitor.start()
+    }
+
+    /// Unload the resident model and clear active UI flags.
+    func unloadActiveModel(reason: ModelUnloadReason) async {
+        VocaLogger.info(.appState, "Unloading model (reason=\(reason.rawValue))")
+        modelKeepAlive.cancel()
+        let beforeMB = ProcessMonitor.currentResidentMemoryMB()
+        processMemoryBeforeUnloadMB = beforeMB
+        await whisperService.unloadModel()
+        // Give the allocator a beat to release pages before sampling again.
+        try? await Task.sleep(nanoseconds: 150_000_000)
+        let afterMB = ProcessMonitor.currentResidentMemoryMB()
+        processMemoryAfterUnloadMB = afterMB
+        lastModelUnloadReason = reason
+        for i in availableModels.indices {
+            availableModels[i].isActive = false
+            availableModels[i].isLoading = false
+        }
+        currentModel = nil
+        VocaLogger.info(
+            .appState,
+            "Unload complete (reason=\(reason.rawValue), RSS \(String(format: "%.0f", beforeMB))→\(String(format: "%.0f", afterMB)) MB)"
+        )
+    }
+
+    /// Approximate RAM freed by the last unload, when both samples exist.
+    var approximateMemoryFreedMB: Double? {
+        guard let before = processMemoryBeforeUnloadMB,
+              let after = processMemoryAfterUnloadMB,
+              before > after else {
+            return nil
+        }
+        return before - after
+    }
+
+    /// User-facing summary of why the model is currently unloaded.
+    var modelUnloadStatusMessage: String? {
+        guard !whisperService.isModelLoaded else { return nil }
+        if isAutoPaused {
+            if let name = autoPauseTriggerDisplayName, !name.isEmpty {
+                return "Paused while \(name) is running. The speech model was unloaded to free memory."
+            }
+            return "Paused by a listed app. The speech model was unloaded to free memory."
+        }
+        switch lastModelUnloadReason {
+        case .idleKeepAlive:
+            return "Model unloaded after idle timeout. Next dictation reloads it."
+        case .autoPause:
+            return "Model unloaded by auto-pause."
+        case .manual:
+            return "Model unloaded."
+        case .none:
+            return nil
+        }
+    }
+
+    /// Ensure a model is loaded before dictation (lazy reload after idle unload).
+    func ensureModelLoaded() async {
+        guard !whisperService.isModelLoaded else { return }
+        let size = ModelSize(rawValue: selectedModelSize)
+            ?? currentModel?.size
+            ?? .tiny
+        VocaLogger.info(.appState, "Ensuring model loaded: \(size.displayName)")
+        await loadModel(size)
+    }
+
+    private func handleAutoPauseEntered() async {
+        isAutoPaused = true
+        autoPauseTriggerDisplayName = autoPauseMonitor.activeTrigger?.displayName
+        modelKeepAlive.cancel()
+
+        if isRecording || appStatus == .recording {
+            VocaLogger.warning(.appState, "Auto-pause entered while recording: stopping without inject")
+            _ = await stopAudioEngine()
+            isRecording = false
+            audioLevel = 0
+            cursorOverlay.hide()
+            hotKeyManager.resetKeyState()
+            appStatus = .idle
+        }
+
+        if whisperService.isModelLoaded {
+            await unloadActiveModel(reason: .autoPause)
+        } else {
+            lastModelUnloadReason = .autoPause
+        }
+    }
+
+    private func handleAutoPauseCleared() async {
+        isAutoPaused = false
+        autoPauseTriggerDisplayName = nil
+        // Warm-reload so the next hotkey is ready (Linux behavior).
+        await ensureModelLoaded()
+        modelKeepAlive.bump()
     }
 
     /// Build the model list shown in Settings and onboarding.
@@ -569,6 +812,13 @@ final class AppState: ObservableObject {
             return
         }
 
+        if isAutoPaused {
+            let message = "Dictation is paused while a listed app is running."
+            VocaLogger.info(.appState, message)
+            showTemporaryError(message)
+            return
+        }
+
         guard appStatus == .idle else {
             // If stuck in .processing or .error for too long, force recovery
             // so the user can start a fresh recording.
@@ -585,6 +835,17 @@ final class AppState: ObservableObject {
             errorMessage = "Microphone permission is required. Please grant access in System Settings."
             appStatus = .error
             return
+        }
+
+        // Lazy-reload after idle unload (or any other cold start).
+        if !whisperService.isModelLoaded {
+            appStatus = .processing
+            await ensureModelLoaded()
+            guard whisperService.isModelLoaded else {
+                showTemporaryError("Could not load the speech model. Open Settings → Speech Model and try again.")
+                return
+            }
+            appStatus = .idle
         }
 
         appStatus = .recording
@@ -622,7 +883,7 @@ final class AppState: ObservableObject {
         }
     }
 
-    func stopRecordingAndTranscribe() async {
+    func stopRecordingAndTranscribe(injectResult: Bool = true) async {
         // Accept stop if we're recording OR if the audio engine thinks
         // it's recording (covers stuck-state recovery scenarios where
         // isRecording and appStatus may be out of sync).
@@ -673,16 +934,27 @@ final class AppState: ObservableObject {
             // Update stats
             statsManager.recordTranscription(result)
 
-            // Inject text at cursor position
-            // by WhisperService to remove hallucination tokens like [BLANK_AUDIO])
             let trimmedText = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
             if !trimmedText.isEmpty {
-                textInjector.inject(
-                    text: trimmedText,
-                    preserveClipboard: preserveClipboard
+                let polished = DictationOutputFormatter.apply(
+                    trimmedText,
+                    autoCapitalize: autoCapitalize,
+                    appendTrailingSpace: appendTrailingSpace
                 )
+                if injectResult {
+                    textInjector.inject(
+                        text: polished,
+                        preserveClipboard: preserveClipboard
+                    )
+                } else {
+                    // Settings Test Dictation: show only in the sidebar footer.
+                    settingsTestResultText = polished
+                }
             } else {
                 VocaLogger.info(.appState, "Transcription produced no usable text (silence or blank audio)")
+                if !injectResult {
+                    settingsTestResultText = nil
+                }
             }
 
             cursorOverlay.hide()
@@ -865,6 +1137,9 @@ final class AppState: ObservableObject {
                 }
             }
 
+            lastModelUnloadReason = nil
+            processMemoryBeforeUnloadMB = nil
+            processMemoryAfterUnloadMB = nil
             VocaLogger.info(.appState, "Model ready: \(resolvedSize.displayName)")
         } catch {
             // A newer load superseded this one; do not restore over it.
