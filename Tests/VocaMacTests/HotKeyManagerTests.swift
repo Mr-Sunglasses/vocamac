@@ -266,6 +266,174 @@ final class HotKeyManagerConfigurationTests: XCTestCase {
     }
 }
 
+// MARK: - HotKeyManager Combo Tests
+
+final class HotKeyManagerComboTests: XCTestCase {
+
+    private func markAsExternal(_ event: CGEvent) {
+        event.setIntegerValueField(.eventSourceUnixProcessID, value: 0)
+    }
+
+    /// Space (keyCode 49) is a good combo base key: not itself a modifier.
+    private func spaceEvent(keyDown: Bool, flags: CGEventFlags) throws -> CGEvent {
+        guard let event = CGEvent(keyboardEventSource: nil, virtualKey: 49, keyDown: keyDown) else {
+            throw XCTSkip("Could not create keyboard event")
+        }
+        markAsExternal(event)
+        event.flags = flags
+        return event
+    }
+
+    func testComboKeyDownWithExactModifiersStartsRecording() throws {
+        let manager = HotKeyManager()
+        manager.updateConfiguration(keyCode: 49, mode: .pushToTalk, safetyTimeout: 5.0, modifiers: .command)
+
+        let startExpectation = expectation(description: "Recording starts")
+        manager.onRecordingStart = { startExpectation.fulfill() }
+
+        let keyDown = try spaceEvent(keyDown: true, flags: .maskCommand)
+        XCTAssertTrue(manager._handleTestEvent(type: .keyDown, event: keyDown))
+        wait(for: [startExpectation], timeout: 1.0)
+        manager.resetKeyState()
+    }
+
+    func testComboKeyDownWithExtraModifierIsRejected() throws {
+        let manager = HotKeyManager()
+        manager.updateConfiguration(keyCode: 49, mode: .pushToTalk, safetyTimeout: 5.0, modifiers: .command)
+
+        let startExpectation = expectation(description: "Recording should not start")
+        startExpectation.isInverted = true
+        manager.onRecordingStart = { startExpectation.fulfill() }
+
+        let keyDown = try spaceEvent(keyDown: true, flags: [.maskCommand, .maskShift])
+        XCTAssertFalse(manager._handleTestEvent(type: .keyDown, event: keyDown))
+        wait(for: [startExpectation], timeout: 0.2)
+        manager.resetKeyState()
+    }
+
+    func testComboKeyDownWithMissingModifierIsRejected() throws {
+        let manager = HotKeyManager()
+        manager.updateConfiguration(keyCode: 49, mode: .pushToTalk, safetyTimeout: 5.0, modifiers: .command)
+
+        let startExpectation = expectation(description: "Recording should not start")
+        startExpectation.isInverted = true
+        manager.onRecordingStart = { startExpectation.fulfill() }
+
+        let keyDown = try spaceEvent(keyDown: true, flags: [])
+        XCTAssertFalse(manager._handleTestEvent(type: .keyDown, event: keyDown))
+        wait(for: [startExpectation], timeout: 0.2)
+        manager.resetKeyState()
+    }
+
+    /// Regression guard: plain spacebar-holding in another app must keep
+    /// working when a Space-based combo (e.g. ⌘Space) is configured. The
+    /// rejected initial press must not leave autorepeat events falsely
+    /// consumed on every subsequent repeat.
+    func testComboRejectedKeyDownAutorepeatIsNotConsumed() throws {
+        let manager = HotKeyManager()
+        manager.updateConfiguration(keyCode: 49, mode: .pushToTalk, safetyTimeout: 5.0, modifiers: .command)
+
+        let startExpectation = expectation(description: "Recording should not start")
+        startExpectation.isInverted = true
+        manager.onRecordingStart = { startExpectation.fulfill() }
+
+        let keyDown = try spaceEvent(keyDown: true, flags: [])
+        XCTAssertFalse(manager._handleTestEvent(type: .keyDown, event: keyDown))
+
+        let repeatedKeyDown = try spaceEvent(keyDown: true, flags: [])
+        repeatedKeyDown.setIntegerValueField(.keyboardEventAutorepeat, value: 1)
+        XCTAssertFalse(manager._handleTestEvent(type: .keyDown, event: repeatedKeyDown), "Autorepeat of an unrelated Space press must pass through to the frontmost app")
+
+        wait(for: [startExpectation], timeout: 0.2)
+        manager.resetKeyState()
+    }
+
+    func testComboKeyUpStopsPushToTalk() throws {
+        let manager = HotKeyManager()
+        manager.updateConfiguration(keyCode: 49, mode: .pushToTalk, safetyTimeout: 5.0, modifiers: .command)
+
+        let startExpectation = expectation(description: "Recording starts")
+        let stopExpectation = expectation(description: "Recording stops")
+        manager.onRecordingStart = { startExpectation.fulfill() }
+        manager.onRecordingStop = { stopExpectation.fulfill() }
+
+        let keyDown = try spaceEvent(keyDown: true, flags: .maskCommand)
+        XCTAssertTrue(manager._handleTestEvent(type: .keyDown, event: keyDown))
+        wait(for: [startExpectation], timeout: 1.0)
+
+        let keyUp = try spaceEvent(keyDown: false, flags: .maskCommand)
+        XCTAssertTrue(manager._handleTestEvent(type: .keyUp, event: keyUp))
+        wait(for: [stopExpectation], timeout: 1.0)
+        manager.resetKeyState()
+    }
+
+    func testComboModifierReleasedWhileBaseKeyHeldForcesStop() throws {
+        let manager = HotKeyManager()
+        manager.updateConfiguration(keyCode: 49, mode: .pushToTalk, safetyTimeout: 5.0, modifiers: .command)
+
+        let startExpectation = expectation(description: "Recording starts")
+        let stopExpectation = expectation(description: "Recording stops")
+        manager.onRecordingStart = { startExpectation.fulfill() }
+        manager.onRecordingStop = { stopExpectation.fulfill() }
+
+        let keyDown = try spaceEvent(keyDown: true, flags: .maskCommand)
+        XCTAssertTrue(manager._handleTestEvent(type: .keyDown, event: keyDown))
+        wait(for: [startExpectation], timeout: 1.0)
+
+        // Command is released (flagsChanged for Right Command, keyCode 54)
+        // while Space is still conceptually held.
+        guard let modifierUp = CGEvent(keyboardEventSource: nil, virtualKey: 54, keyDown: false) else {
+            throw XCTSkip("Could not create modifier event")
+        }
+        markAsExternal(modifierUp)
+        modifierUp.flags = []
+
+        _ = manager._handleTestEvent(type: .flagsChanged, event: modifierUp)
+        wait(for: [stopExpectation], timeout: 1.0)
+        manager.resetKeyState()
+    }
+
+    func testComboDoubleTapTiming() throws {
+        let manager = HotKeyManager()
+        manager.updateConfiguration(keyCode: 49, mode: .doubleTapToggle, doubleTapThreshold: 1.0, safetyTimeout: 5.0, modifiers: .control)
+
+        let startExpectation = expectation(description: "Double-tap starts recording")
+        manager.onRecordingStart = { startExpectation.fulfill() }
+
+        let firstTap = try spaceEvent(keyDown: true, flags: .maskControl)
+        XCTAssertTrue(manager._handleTestEvent(type: .keyDown, event: firstTap))
+
+        let releaseDelay = expectation(description: "Delay between taps")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) {
+            releaseDelay.fulfill()
+        }
+        wait(for: [releaseDelay], timeout: 1.0)
+
+        let secondTap = try spaceEvent(keyDown: true, flags: .maskControl)
+        XCTAssertTrue(manager._handleTestEvent(type: .keyDown, event: secondTap))
+        wait(for: [startExpectation], timeout: 1.0)
+        manager.resetKeyState()
+    }
+
+    func testLegacyRegularKeyStillIgnoresModifiers() throws {
+        let manager = HotKeyManager()
+        manager.updateConfiguration(keyCode: 96, mode: .pushToTalk, safetyTimeout: 5.0) // F5, no modifiers configured
+
+        let startExpectation = expectation(description: "Recording starts regardless of held modifiers")
+        manager.onRecordingStart = { startExpectation.fulfill() }
+
+        guard let keyDown = CGEvent(keyboardEventSource: nil, virtualKey: 96, keyDown: true) else {
+            throw XCTSkip("Could not create keyboard event")
+        }
+        markAsExternal(keyDown)
+        keyDown.flags = .maskCommand
+
+        XCTAssertTrue(manager._handleTestEvent(type: .keyDown, event: keyDown))
+        wait(for: [startExpectation], timeout: 1.0)
+        manager.resetKeyState()
+    }
+}
+
 // MARK: - HotKeyManager Reset State Tests
 
 final class HotKeyManagerResetStateTests: XCTestCase {

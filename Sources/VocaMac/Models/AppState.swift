@@ -98,6 +98,7 @@ final class AppState: ObservableObject {
     @AppStorage("vocamac.hasCompletedOnboarding") var hasCompletedOnboarding: Bool = false
     @AppStorage("vocamac.activationMode") var activationMode: ActivationMode = .pushToTalk
     @AppStorage("vocamac.hotKeyCode") var hotKeyCode: Int = 61  // Right Option
+    @AppStorage("vocamac.hotKeyModifiers") var hotKeyModifiers: HotKeyModifiers = []
     @AppStorage("vocamac.doubleTapThreshold") var doubleTapThreshold: Double = 0.4
     @AppStorage("vocamac.silenceThreshold") var silenceThreshold: Double = 0.01
     @AppStorage("vocamac.silenceDuration") var silenceDuration: Double = 2.0
@@ -478,7 +479,8 @@ final class AppState: ObservableObject {
                 keyCode: self.hotKeyCode,
                 mode: self.activationMode,
                 doubleTapThreshold: self.doubleTapThreshold,
-                safetyTimeout: self.hotKeySafetyTimeout
+                safetyTimeout: self.hotKeySafetyTimeout,
+                modifiers: self.hotKeyModifiers
             )
             VocaLogger.info(.appState, "Hotkey listener started after permission grant")
         }
@@ -555,7 +557,8 @@ final class AppState: ObservableObject {
                         keyCode: self.hotKeyCode,
                         mode: self.activationMode,
                         doubleTapThreshold: self.doubleTapThreshold,
-                        safetyTimeout: self.hotKeySafetyTimeout
+                        safetyTimeout: self.hotKeySafetyTimeout,
+                        modifiers: self.hotKeyModifiers
                     )
                 }
             }
@@ -772,9 +775,10 @@ final class AppState: ObservableObject {
             keyCode: hotKeyCode,
             mode: activationMode,
             doubleTapThreshold: doubleTapThreshold,
-            safetyTimeout: hotKeySafetyTimeout
+            safetyTimeout: hotKeySafetyTimeout,
+            modifiers: hotKeyModifiers
         )
-        VocaLogger.debug(.appState, "Hotkey configuration synced (keyCode=\(hotKeyCode), mode=\(activationMode.rawValue))")
+        VocaLogger.debug(.appState, "Hotkey configuration synced (keyCode=\(hotKeyCode), modifiers=\(hotKeyModifiers.rawValue), mode=\(activationMode.rawValue))")
     }
 
     // MARK: - Force Recovery
@@ -1422,7 +1426,8 @@ final class AppState: ObservableObject {
             keyCode: hotKeyCode,
             mode: activationMode,
             doubleTapThreshold: doubleTapThreshold,
-            safetyTimeout: hotKeySafetyTimeout
+            safetyTimeout: hotKeySafetyTimeout,
+            modifiers: hotKeyModifiers
         )
         if hotKeyManager.isListening {
             VocaLogger.info(.appState, "Hotkey listener active (keyCode=\(hotKeyCode), mode=\(activationMode.rawValue))")

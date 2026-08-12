@@ -152,6 +152,7 @@ final class AppStateOnboardingTests: XCTestCase {
             "vocamac.hasCompletedOnboarding",
             "vocamac.activationMode",
             "vocamac.hotKeyCode",
+            "vocamac.hotKeyModifiers",
             "vocamac.doubleTapThreshold",
             "vocamac.maxRecordingDuration",
         ].forEach { UserDefaults.standard.removeObject(forKey: $0) }
