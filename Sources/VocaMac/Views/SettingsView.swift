@@ -1246,12 +1246,12 @@ struct AudioSettingsTab: View {
 
     private func syncSelectedAudioDeviceName() {
         guard !appState.selectedAudioDeviceID.isEmpty else {
-            appState.selectedAudioDeviceName = ""
+            appState.selectAudioDevice(nil)
             return
         }
 
         if let selectedAudioDevice {
-            appState.selectedAudioDeviceName = selectedAudioDevice.name
+            appState.selectAudioDevice(selectedAudioDevice)
         }
     }
 

@@ -93,6 +93,7 @@ struct MenuBarView: View {
     @ObservedObject var settingsManager: SettingsWindowManager
     @ObservedObject var updateWindowManager: UpdateWindowManager
     @StateObject private var processMonitor = ProcessMonitor()
+    @State private var audioDevices: [AudioDevice] = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -108,6 +109,11 @@ struct MenuBarView: View {
 
             // Status & Recording
             statusSection
+
+            Divider()
+
+            // Microphone selection
+            microphoneSection
 
             // Last Transcription
             if let transcription = appState.lastTranscription {
@@ -286,6 +292,133 @@ struct MenuBarView: View {
                 }
                 .buttonStyle(.plain)
             }
+        }
+    }
+
+    // MARK: - Microphone
+
+    /// Provides a quick microphone switcher without requiring the Settings window.
+    /// The selected device is persisted by AppState and takes effect on the next
+    /// recording; it does not change macOS's global input-device selection.
+    private var microphoneSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Label("Microphone", systemImage: "mic.fill")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+
+                Spacer()
+
+                Button {
+                    refreshAudioDevices()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.caption)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help("Refresh microphones")
+            }
+
+            Menu {
+                Button {
+                    appState.selectAudioDevice(nil)
+                } label: {
+                    microphoneMenuItem("System Default", isSelected: appState.selectedAudioDeviceID.isEmpty)
+                }
+
+                if selectedAudioDeviceIsUnavailable {
+                    Divider()
+                    Text(selectedAudioDeviceDisplayName)
+                }
+
+                if !audioDevices.isEmpty {
+                    Divider()
+                }
+
+                ForEach(audioDevices) { device in
+                    Button {
+                        appState.selectAudioDevice(device)
+                    } label: {
+                        microphoneMenuItem(device.name, isSelected: appState.selectedAudioDeviceID == device.id)
+                    }
+                }
+
+                if audioDevices.isEmpty {
+                    Text("No audio input devices found")
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "mic.circle.fill")
+                        .foregroundStyle(Color(nsColor: BrandAssets.brandGreen))
+
+                    Text(selectedAudioDeviceDisplayName)
+                        .lineLimit(1)
+
+                    Spacer()
+
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .font(.body)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            }
+            .menuStyle(.borderlessButton)
+            .disabled(appState.isRecording)
+
+            Text(appState.isRecording
+                 ? "Stop recording before changing the input."
+                 : "Applies to the next recording. Does not change macOS's system default.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .onAppear {
+            refreshAudioDevices()
+        }
+    }
+
+    /// Renders a checkmarked microphone option inside the tray menu.
+    @ViewBuilder
+    private func microphoneMenuItem(_ name: String, isSelected: Bool) -> some View {
+        HStack {
+            Text(name)
+            Spacer()
+            if isSelected {
+                Image(systemName: "checkmark")
+            }
+        }
+    }
+
+    private var selectedAudioDevice: AudioDevice? {
+        guard !appState.selectedAudioDeviceID.isEmpty else { return nil }
+        return audioDevices.first { $0.id == appState.selectedAudioDeviceID }
+    }
+
+    private var selectedAudioDeviceIsUnavailable: Bool {
+        !appState.selectedAudioDeviceID.isEmpty && selectedAudioDevice == nil
+    }
+
+    private var selectedAudioDeviceDisplayName: String {
+        if appState.selectedAudioDeviceID.isEmpty {
+            return "System Default"
+        }
+        if let selectedAudioDevice {
+            return selectedAudioDevice.name
+        }
+        let storedName = appState.selectedAudioDeviceName.isEmpty
+            ? "Selected microphone"
+            : appState.selectedAudioDeviceName
+        return "\(storedName) (Unavailable)"
+    }
+
+    private func refreshAudioDevices() {
+        audioDevices = AudioEngine.availableInputDevices()
+        if let selectedAudioDevice {
+            appState.selectedAudioDeviceName = selectedAudioDevice.name
         }
     }
 

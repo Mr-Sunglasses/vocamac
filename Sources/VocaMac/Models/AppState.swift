@@ -170,6 +170,13 @@ final class AppState: ObservableObject {
         Double(maxRecordingDuration) + 5.0
     }
 
+    /// Persist the microphone VocaMac should use for future recordings.
+    /// Passing nil restores the system-default input behavior.
+    func selectAudioDevice(_ device: AudioDevice?) {
+        selectedAudioDeviceID = device?.id ?? ""
+        selectedAudioDeviceName = device?.name ?? ""
+    }
+
     // MARK: - Services
 
     let audioEngine: AudioRecording

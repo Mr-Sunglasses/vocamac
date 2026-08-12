@@ -288,6 +288,27 @@ final class AppStateRecordingTests: XCTestCase {
                       "No device name should be persisted for system default")
     }
 
+    func testSelectingAudioDevicePersistsIDAndName() {
+        let (appState, _) = AppState.makeTestState()
+        let device = AudioDevice(
+            id: "test-microphone-uid",
+            name: "USB Microphone",
+            isDefault: false,
+            sampleRate: 48_000,
+            channelCount: 1
+        )
+
+        appState.selectAudioDevice(device)
+
+        XCTAssertEqual(appState.selectedAudioDeviceID, device.id)
+        XCTAssertEqual(appState.selectedAudioDeviceName, device.name)
+
+        appState.selectAudioDevice(nil)
+
+        XCTAssertEqual(appState.selectedAudioDeviceID, "")
+        XCTAssertEqual(appState.selectedAudioDeviceName, "")
+    }
+
     func testActivationModeDefault() {
         let (appState, _) = AppState.makeTestState()
 
