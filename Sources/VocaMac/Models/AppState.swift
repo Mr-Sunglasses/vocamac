@@ -557,7 +557,8 @@ final class AppState: ObservableObject {
                         keyCode: self.hotKeyCode,
                         mode: self.activationMode,
                         doubleTapThreshold: self.doubleTapThreshold,
-                        safetyTimeout: self.hotKeySafetyTimeout
+                        safetyTimeout: self.hotKeySafetyTimeout,
+                        modifiers: self.hotKeyModifiers
                     )
                 }
             }
