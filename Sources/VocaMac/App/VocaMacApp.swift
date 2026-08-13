@@ -220,7 +220,6 @@ final class OnboardingWindowManager: ObservableObject {
     }
 }
 
-@main
 struct VocaMacApp: App {
     @StateObject private var appState = AppState.production()
     @StateObject private var settingsManager = SettingsWindowManager()
@@ -285,10 +284,13 @@ struct VocaMacApp: App {
             app.terminate()
         }
 
-        // Also kill by process name for direct binary execution (no bundle ID)
+        // Also kill by process name for direct binary execution (no bundle ID).
+        // Match against the full command line (pid + args) so a running
+        // headless CLI job (e.g. `VocaMac --transcribe-file ... --json`) is
+        // never mistaken for another GUI instance and killed mid-job.
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
-        task.arguments = ["-f", "VocaMac"]
+        task.arguments = ["-fl", "VocaMac"]
 
         let pipe = Pipe()
         task.standardOutput = pipe
@@ -298,8 +300,12 @@ struct VocaMacApp: App {
             task.waitUntilExit()
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
             if let output = String(data: data, encoding: .utf8) {
-                let pids = output.split(separator: "\n").compactMap { Int32($0) }
-                for pid in pids where pid != currentPID {
+                for line in output.split(separator: "\n") {
+                    let components = line.split(separator: " ", maxSplits: 1)
+                    guard let pidField = components.first, let pid = Int32(pidField),
+                          pid != currentPID else { continue }
+                    let commandLine = components.count > 1 ? components[1] : ""
+                    guard !Self.isHeadlessCLICommandLine(commandLine) else { continue }
                     VocaLogger.info(.general, "Killing previous VocaMac process (PID \(pid))")
                     kill(pid, SIGTERM)
                 }
@@ -307,6 +313,12 @@ struct VocaMacApp: App {
         } catch {
             // pgrep not found or failed — not critical
         }
+    }
+
+    /// Recognizes the headless CLI flags from `CLICommand.cliFlags` so the GUI
+    /// leaves an in-flight one-shot transcription running instead of killing it.
+    private static func isHeadlessCLICommandLine(_ commandLine: some StringProtocol) -> Bool {
+        CLICommand.cliFlags.contains { commandLine.contains($0) }
     }
 }
 
