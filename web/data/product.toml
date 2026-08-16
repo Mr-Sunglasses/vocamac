@@ -5,7 +5,9 @@
 # Version/artifact figures were verified against the tagged v0.7.2 release.
 # Re-verify this file before publishing a website change.
 #
-# Verified: 2026-08-16 against v0.7.2 and PRODUCT.md.
+# Verified: 2026-08-17 against v0.7.2 (stable) and main @ 1b409b6 (nightly
+# models, from Sources/VocaMac/Models/WhisperModel.swift and
+# SherpaModelCatalog.swift).
 
 [stable]
 version = "0.7.2"
@@ -108,6 +110,72 @@ size = "3.1 GB"
 ram = "10 GB"
 quality = "Best"
 note = "Highest accuracy. Wants a 16 GB Mac and patience."
+
+# Additional engines and models shipped only in nightly builds from main
+# (Sources/VocaMac/Models/WhisperModel.swift ModelSize + SherpaModelCatalog.swift),
+# not in the v0.7.2 release above. size/note follow README.md's Models section.
+[[nightlyModels]]
+id = "parakeet-v3"
+name = "Parakeet v3"
+engine = "Parakeet"
+size = "0.7 GB"
+note = "Fastest engine. 25 European languages + Japanese, auto-detected."
+
+[[nightlyModels]]
+id = "parakeet-v2"
+name = "Parakeet v2"
+engine = "Parakeet"
+size = "1.2 GB"
+note = "Fastest engine. English only, highest recall."
+
+[[nightlyModels]]
+id = "parakeet-110m"
+name = "Parakeet 110M"
+engine = "Parakeet"
+size = "0.2 GB"
+note = "English only, smaller download and faster first load."
+
+[[nightlyModels]]
+id = "apple-speech"
+name = "Apple Speech"
+engine = "Apple Speech"
+size = "Managed by macOS"
+note = "macOS 26+ system engine (SpeechAnalyzer). Roughly 30 locales."
+
+[[nightlyModels]]
+id = "moonshine-v2-tiny"
+name = "Moonshine v2 Tiny"
+engine = "sherpa-onnx"
+size = "60 MB"
+note = "CPU-only. Very low-RAM Macs, English."
+
+[[nightlyModels]]
+id = "moonshine-v2-base"
+name = "Moonshine v2 Base"
+engine = "sherpa-onnx"
+size = "190 MB"
+note = "CPU-only. Low-RAM Macs, English."
+
+[[nightlyModels]]
+id = "sense-voice"
+name = "SenseVoice"
+engine = "sherpa-onnx"
+size = "240 MB"
+note = "CPU-only. Chinese, Japanese, Korean, Cantonese, English."
+
+[[nightlyModels]]
+id = "gigaam-v3"
+name = "GigaAM v3"
+engine = "sherpa-onnx"
+size = "270 MB"
+note = "CPU-only. Russian, with punctuation."
+
+[[nightlyModels]]
+id = "canary-180m-flash"
+name = "Canary 180M Flash"
+engine = "sherpa-onnx"
+size = "320 MB"
+note = "CPU-only. English, Spanish, German, French."
 
 [links]
 repo = "https://github.com/VocaHQ/vocamac"

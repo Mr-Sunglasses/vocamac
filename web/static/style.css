@@ -722,6 +722,8 @@ a:hover > .btn-arrow-back { transform: translateX(-3px); }
   border-radius: var(--radius-md);
 }
 
+.table-scroll + .table-scroll { margin-top: 1.25rem; }
+
 .model-table {
   width: 100%;
   border-collapse: collapse;
