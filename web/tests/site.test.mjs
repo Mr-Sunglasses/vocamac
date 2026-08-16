@@ -62,7 +62,10 @@ test("keeps the PRODUCT.md product boundary explicit", () => {
   assert.match(index, /WhisperKit/);
   assert.match(index, /model downloads/i);
   assert.match(index, /Beta/);
-  assert.match(index, /Additional engine work is currently shipped in nightly\/source channels/i);
+  assert.match(index, /Nightly builds add three more engines/i);
+  assert.match(index, /ship in nightly\/source channels/i);
+  assert.match(index, /Parakeet/);
+  assert.match(index, /sherpa-onnx/);
   assert.doesNotMatch(index, /Stable release/i);
   assert.doesNotMatch(index, /macOS 13/);
   assert.doesNotMatch(index, /Zero Network Calls/i);
