@@ -11,6 +11,16 @@ import XCTest
 @MainActor
 final class AppStateRecordingTests: XCTestCase {
 
+    override func setUp() {
+        super.setUp()
+        UserDefaults.standard.removeObject(forKey: "vocamac.soundEffectsEnabled")
+    }
+
+    override func tearDown() {
+        UserDefaults.standard.removeObject(forKey: "vocamac.soundEffectsEnabled")
+        super.tearDown()
+    }
+
     func testInitialState() {
         let (appState, _) = AppState.makeTestState()
 
@@ -256,6 +266,25 @@ final class AppStateRecordingTests: XCTestCase {
 
         XCTAssertTrue(appState.soundEffectsEnabled,
                      "Sound effects should be enabled by default")
+    }
+
+    func testDictationToneDefaultsToVoca() {
+        UserDefaults.standard.removeObject(forKey: PreferenceKey.dictationTone)
+        let (appState, _) = AppState.makeTestState()
+
+        XCTAssertEqual(appState.dictationTone, .voca,
+                      "Unset tone preference should resolve to voca")
+    }
+
+    func testSoundEffectsDisabledSkipsCues() async {
+        let (appState, mocks) = AppState.makeTestState()
+        appState.soundEffectsEnabled = false
+
+        await appState.startRecording()
+        XCTAssertEqual(mocks.soundManager.startSoundCallCount, 0)
+
+        await appState.stopRecordingAndTranscribe()
+        XCTAssertEqual(mocks.soundManager.stopSoundCallCount, 0)
     }
 
     func testShowCursorIndicatorDefault() {
