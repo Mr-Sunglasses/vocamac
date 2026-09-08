@@ -41,6 +41,7 @@
 - **🧠 Engine and Model Choice** - Choose the local speech engine and model that fit your language, speed, and memory needs. VocaMac recommends compatible options for your Apple Silicon Mac.
 - **⚡ Native Apple Acceleration** - CoreML + Metal + Neural Engine acceleration on Apple Silicon. No manual setup.
 - **📊 Visual Feedback** - Menu bar icon changes color during recording and processing. Audio level indicator shows input.
+- **✨ Transcript Cleanup (optional)** - Run a small local language model over the finished transcript to drop filler words and false starts and punctuate what you said. Off by default, needs a one-time model download, and never leaves your Mac.
 - **🔄 Auto-Updates** - Built-in update checker queries GitHub Releases on launch and lets you download and install the latest version in one click from within the app.
 - **⚙️ Configurable** - Choose hotkey presets or record a custom activation key reserved by VocaMac while it runs, models, languages, silence detection thresholds, and more.
 
@@ -95,9 +96,11 @@
 </p>
 
 <p align="center">
+  <img src="docs/screenshots/settings-cleanup.png" alt="Settings - Cleanup" width="400">
+  &nbsp;&nbsp;
   <img src="docs/screenshots/settings-about.png" alt="Settings - About" width="400">
   <br>
-  <em>Settings: About</em>
+  <em>Settings: Cleanup (left) and About (right)</em>
 </p>
 
 <p align="center">

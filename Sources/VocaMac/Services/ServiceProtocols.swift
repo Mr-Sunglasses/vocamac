@@ -198,3 +198,23 @@ protocol StatsManaging: AnyObject {
 protocol SnippetExpanding: AnyObject {
     func expand(in text: String, using snippets: [Snippet]) -> String
 }
+
+// MARK: - TranscriptCleaning
+
+@MainActor
+protocol TranscriptCleaning: AnyObject {
+    var modelState: CleanupModelState { get }
+    var isLoaded: Bool { get }
+    nonisolated func inputBudget(forPrompt prompt: String) -> Int
+    var objectWillChangePublisher: AnyPublisher<Void, Never> { get }
+
+    func clean(_ text: String, prompt: String) async -> String
+    func preview(_ text: String, prompt: String) async -> CleanupAttempt
+    func isDownloaded(_ kind: CleanupModelKind) -> Bool
+    func pruneUnknownModels()
+    func download(_ kind: CleanupModelKind) async
+    func cancelDownload()
+    func load(_ kind: CleanupModelKind) async
+    func unload()
+    func delete(_ kind: CleanupModelKind)
+}

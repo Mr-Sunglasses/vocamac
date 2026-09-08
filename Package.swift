@@ -32,6 +32,15 @@ let package = Package(
             url: "https://github.com/k2-fsa/sherpa-onnx",
             exact: "1.13.7"
         ),
+        // LLM.swift — llama.cpp GGUF runtime for optional on-device transcript cleanup.
+        // Pin the exact release: the package is pre-1.0 in spirit (it re-vendors
+        // a specific llama.cpp xcframework per tag), and the cleanup service
+        // depends on APIs that move between releases — `respond(to:thinking:)`,
+        // `updateThinking`, `historyLimit`, and `LLMCore.interrupt()`.
+        .package(
+            url: "https://github.com/eastriverlee/LLM.swift.git",
+            exact: "3.0.3"
+        ),
     ],
     targets: [
         // Objective-C helpers used by the Swift app.
@@ -48,6 +57,7 @@ let package = Package(
                 .product(name: "WhisperKit", package: "WhisperKit"),
                 .product(name: "FluidAudio", package: "FluidAudio"),
                 .product(name: "sherpa-onnx", package: "sherpa-onnx"),
+                .product(name: "LLM", package: "LLM.swift"),
             ],
             path: "Sources/VocaMac",
             resources: [

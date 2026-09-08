@@ -4,7 +4,7 @@ Agent-facing rules for this repo. Product copy lives in `README.md` and `web/`.
 
 ## Project overview
 
-Native **macOS menu bar** dictation app (Swift 5.9+, SwiftUI). Four on-device engines; `TranscriptionRouter` dispatches to the engine that owns the selected model.
+Native **macOS menu bar** dictation app (Swift 5.9+, SwiftUI). Four on-device engines; `TranscriptionRouter` dispatches to the engine that owns the selected model. Optional post-transcript cleanup uses a local GGUF LLM (`TranscriptCleanupService`); views and `AppState` must not call `LLM` directly.
 
 | Engine | Library / API | Runtime |
 |--------|---------------|---------|
@@ -12,6 +12,7 @@ Native **macOS menu bar** dictation app (Swift 5.9+, SwiftUI). Four on-device en
 | Parakeet | [FluidAudio](https://github.com/FluidInference/FluidAudio) | NVIDIA Parakeet TDT, CoreML on the Neural Engine |
 | Apple Speech | SpeechAnalyzer / SpeechTranscriber | macOS 26+, system-managed assets |
 | Specialized ONNX | [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) | Moonshine, SenseVoice, GigaAM, Canary; CPU-only |
+| Cleanup (opt-in) | [LLM.swift](https://github.com/eastriverlee/LLM.swift) | Qwen 3 GGUF via llama.cpp Metal |
 
 The marketing site is Hugo in `web/`, deployed to GitHub Pages at [vocamac.com](https://vocamac.com).
 
@@ -191,8 +192,11 @@ Version-bump changelog tables go in the **PR description**, not a tracked file. 
 | [WhisperKit](https://github.com/argmaxinc/WhisperKit) | Whisper CoreML | `from: "0.9.4"` |
 | [FluidAudio](https://github.com/FluidInference/FluidAudio) | Parakeet CoreML / ANE | `.upToNextMinor(from: "0.15.5")` (pre-1.0) |
 | [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) | Specialized ONNX, CPU | exact `1.13.7` (matching xcframework) |
+| [LLM.swift](https://github.com/eastriverlee/LLM.swift) | GGUF cleanup (llama.cpp) | exact `3.0.3` (vendors a pinned llama.cpp xcframework) |
 
-Keep dependencies minimal. Do not bump FluidAudio across a minor without checking `AsrManager.loadModels` / TDT decoder APIs.
+Cleanup models must not use a hybrid attention/recurrent architecture. Read `general.architecture` from the GGUF header: `qwen2`, `qwen3`, `llama`, `gemma3` and `granite` are fine, `qwen35` is not. LLM.swift reuses the llama.cpp KV cache between calls and drops the non-shared suffix with `llama_memory_seq_rm`, which is wrong for hybrid attention/recurrent architectures (`qwen35`): Qwen 3.5 0.8B answered the first utterance and returned empty output for the next seven, and `LLM.reset()` aborts the process inside `llama_memory_recurrent::find_slot`. Measure any new model as well as checking its architecture — of eight small GGUFs benchmarked on the cleanup probes, Qwen 2.5 0.5B and Qwen 3 0.6B were the only ones worth shipping; Llama 3.2 3B scored no better at four times the size.
+
+Keep dependencies minimal. Do not bump FluidAudio across a minor without checking `AsrManager.loadModels` / TDT decoder APIs. Do not unpin LLM.swift to a branch or a bare `revision:` — pin the release tag so the vendored llama.cpp xcframework moves only on a deliberate bump.
 
 ---
 

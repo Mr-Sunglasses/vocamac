@@ -528,13 +528,114 @@ final class MockStatsManager: StatsManaging, ObservableObject {
     }
 }
 
+// MARK: - MockTranscriptCleanup
+
+@MainActor
+final class MockTranscriptCleanup: TranscriptCleaning, ObservableObject {
+    @Published var modelState: CleanupModelState = .idle
+    var downloadedKinds: Set<CleanupModelKind> = Set(CleanupModelKind.allCases)
+    var cleanHandler: ((String) -> String)?
+    var cleanCallCount = 0
+    var lastCleanedText: String?
+    var lastPrompt: String?
+    var loadCallCount = 0
+    var downloadCallCount = 0
+    var downloadSucceeds = true
+    var loadSucceeds = true
+    var cancelDownloadCallCount = 0
+    var unloadCallCount = 0
+    var lastLoadedKind: CleanupModelKind?
+
+    var isLoaded = false
+    var pruneCallCount = 0
+
+    var objectWillChangePublisher: AnyPublisher<Void, Never> {
+        objectWillChange.eraseToAnyPublisher()
+    }
+
+    func pruneUnknownModels() {
+        pruneCallCount += 1
+    }
+
+    nonisolated func inputBudget(forPrompt prompt: String) -> Int {
+        TranscriptCleanup.inputCharacterBudget(
+            promptCharacters: prompt.count,
+            maxTokenCount: Int(CleanupModelCatalog.recommended.maxTokenCount)
+        )
+    }
+
+    func clean(_ text: String, prompt: String) async -> String {
+        cleanCallCount += 1
+        lastCleanedText = text
+        lastPrompt = prompt
+        return cleanHandler?(text) ?? text
+    }
+
+    var previewCallCount = 0
+
+    func preview(_ text: String, prompt: String) async -> CleanupAttempt {
+        previewCallCount += 1
+        lastPrompt = prompt
+        let output = cleanHandler?(text) ?? text
+        return CleanupAttempt(
+            output: output,
+            outcome: output == text ? .unchanged : .cleaned,
+            duration: 0
+        )
+    }
+
+    func isDownloaded(_ kind: CleanupModelKind) -> Bool {
+        downloadedKinds.contains(kind)
+    }
+
+    func download(_ kind: CleanupModelKind) async {
+        downloadCallCount += 1
+        if downloadSucceeds {
+            downloadedKinds.insert(kind)
+            modelState = .idle
+        } else {
+            modelState = .error("download failed")
+        }
+    }
+
+    func cancelDownload() {
+        cancelDownloadCallCount += 1
+        modelState = .idle
+    }
+
+    func load(_ kind: CleanupModelKind) async {
+        loadCallCount += 1
+        guard loadSucceeds else {
+            modelState = .error("load failed")
+            return
+        }
+        lastLoadedKind = kind
+        isLoaded = true
+        modelState = .ready
+    }
+
+    func unload() {
+        unloadCallCount += 1
+        isLoaded = false
+        modelState = .idle
+    }
+
+    func delete(_ kind: CleanupModelKind) {
+        downloadedKinds.remove(kind)
+        if lastLoadedKind == kind {
+            modelState = .idle
+        }
+    }
+}
+
 // MARK: - Test Helper
 
 extension AppState {
     @MainActor
     static func makeTestState(
         modelManager: MockModelManager = MockModelManager(),
-        whisperService: MockWhisperService = MockWhisperService()
+        whisperService: MockWhisperService = MockWhisperService(),
+        transcriptCleanup: MockTranscriptCleanup? = nil
     ) -> (appState: AppState, mocks: TestMocks) {
         UserDefaults.standard.removeObject(forKey: "vocamac.selectedAudioDeviceID")
         UserDefaults.standard.removeObject(forKey: "vocamac.selectedAudioDeviceName")
@@ -542,6 +643,9 @@ extension AppState {
         UserDefaults.standard.removeObject(forKey: "vocamac.selectedAudioChannelDeviceID")
         UserDefaults.standard.removeObject(forKey: "vocamac.selectedAudioChannelCount")
         UserDefaults.standard.removeObject(forKey: "vocamac.soundEffectsEnabled")
+        UserDefaults.standard.removeObject(forKey: PreferenceKey.transcriptCleanupEnabled)
+        UserDefaults.standard.removeObject(forKey: PreferenceKey.transcriptCleanupModel)
+        UserDefaults.standard.removeObject(forKey: PreferenceKey.transcriptCleanupPrompt)
 
         let audioEngine = MockAudioEngine()
         let soundManager = MockSoundManager()
@@ -550,6 +654,7 @@ extension AppState {
         let cursorOverlay = MockCursorOverlay()
         let textInjector = MockTextInjector()
         let statsManager = MockStatsManager()
+        let cleanup = transcriptCleanup ?? MockTranscriptCleanup()
 
         let mocks = TestMocks(
             audioEngine: audioEngine,
@@ -560,7 +665,8 @@ extension AppState {
             modelManager: modelManager,
             whisperService: whisperService,
             textInjector: textInjector,
-            statsManager: statsManager
+            statsManager: statsManager,
+            transcriptCleanup: cleanup
         )
         let appState = AppState(
             audioEngine: audioEngine,
@@ -572,6 +678,7 @@ extension AppState {
             cursorOverlay: cursorOverlay,
             statsManager: statsManager,
             snippetExpander: SnippetExpander(),
+            transcriptCleanup: cleanup,
             permissionManager: permissionManager,
             skipSystemIntegration: true
         )
@@ -591,4 +698,5 @@ struct TestMocks {
     let whisperService: MockWhisperService
     let textInjector: MockTextInjector
     let statsManager: MockStatsManager
+    let transcriptCleanup: MockTranscriptCleanup
 }
