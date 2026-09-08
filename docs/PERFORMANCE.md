@@ -71,7 +71,7 @@ outside the checkout:
 ```sh
 VOCAMAC_BENCHMARK_AUDIO=/tmp/dictation.wav \
 VOCAMAC_BENCHMARK_OUTPUT=/tmp/dictation-performance.json \
-swift test -c release -Xswiftc -enable-testing --filter DictationPerformanceTests
+swift test -c release -Xswiftc -enable-testing --disable-swift-testing --filter DictationPerformanceTests
 ```
 
 This compares prepared batch time with stop-to-result time after feeding the
