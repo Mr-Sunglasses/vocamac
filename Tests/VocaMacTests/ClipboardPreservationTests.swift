@@ -16,7 +16,7 @@ final class ClipboardPreservationTests: XCTestCase {
                                     accessibilityInjectionOverride: { _ in false }, pasteActionOverride: {
             XCTAssertEqual(board.string(forType: .string), "dictation")
             pasted.fulfill()
-        })
+        }, frontmostPIDProvider: { 123 })
         injector.inject(text: "dictation", preserveClipboard: true)
         await fulfillment(of: [pasted], timeout: 2)
         // Wait for the deliberately retained target-app consumption window.
@@ -39,7 +39,7 @@ final class ClipboardPreservationTests: XCTestCase {
                                     accessibilityInjectionOverride: { _ in false }, pasteActionOverride: {
             XCTAssertEqual(board.string(forType: .string), "dictation")
             pasted.fulfill()
-        })
+        }, frontmostPIDProvider: { 123 })
         injector.inject(text: "dictation", preserveClipboard: true)
         await fulfillment(of: [pasted], timeout: 2)
         try? await Task.sleep(nanoseconds: 250_000_000)
@@ -104,6 +104,23 @@ extension ClipboardPreservationTests {
         injector.onFailure = { _ in cancelled.fulfill() }
         injector.inject(text: "result", preserveClipboard: true)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) { pid = 456 }
+        await fulfillment(of: [cancelled], timeout: 1)
+        XCTAssertEqual(board.string(forType: .string), "original")
+    }
+
+    func testMissingPasteTargetDoesNotPasteAndReportsFailure() async {
+        let board = NSPasteboard(name: .init("com.vocamac.tests.\(UUID())"))
+        defer { board.releaseGlobally() }
+        board.setString("original", forType: .string)
+        let cancelled = expectation(description: "missing target reported")
+        let injector = TextInjector(
+            pasteboard: board, accessibilityTrustedOverride: true,
+            accessibilityInjectionOverride: { _ in false },
+            pasteActionOverride: { XCTFail("Must not paste without a destination") },
+            frontmostPIDProvider: { nil }
+        )
+        injector.onFailure = { _ in cancelled.fulfill() }
+        injector.inject(text: "result", preserveClipboard: true)
         await fulfillment(of: [cancelled], timeout: 1)
         XCTAssertEqual(board.string(forType: .string), "original")
     }

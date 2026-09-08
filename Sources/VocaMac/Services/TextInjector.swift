@@ -166,6 +166,12 @@ final class TextInjector {
             completion()
             return
         }
+        // No destination app: skip AX and never post Cmd+V into nowhere.
+        guard targetPID != nil else {
+            reportMissingPasteTarget()
+            completion()
+            return
+        }
         let deliverFallback = { [self] (result: AccessibilityInsertion) in
             if result == .inserted {
                 PerformanceTrace.event("AccessibilityTextInserted")
@@ -173,15 +179,18 @@ final class TextInjector {
             } else if result == .uncertain {
                 onFailure?("The target app did not confirm text insertion. Check the field before retrying; your transcript is available in VocaMac.")
                 completion()
-            } else if targetPID == frontmostPIDProvider() {
-                processClipboardInjection(
-                    ClipboardInjectionRequest(text: text, preserveClipboard: preserveClipboard, targetPID: targetPID),
-                    completion: completion
-                )
             } else {
-                // Focus changed while another process was responding. Do not paste into a different app.
-                reportFocusChange()
-                completion()
+                let currentPID = frontmostPIDProvider()
+                if samePasteTarget(targetPID, currentPID) {
+                    processClipboardInjection(
+                        ClipboardInjectionRequest(text: text, preserveClipboard: preserveClipboard, targetPID: targetPID),
+                        completion: completion
+                    )
+                } else {
+                    // Focus changed or the destination app disappeared. Do not paste.
+                    reportPasteTargetMismatch(queued: targetPID, current: currentPID)
+                    completion()
+                }
             }
         }
         if let accessibilityInjectionOverride {
@@ -291,7 +300,11 @@ final class TextInjector {
             let interval = PerformanceTrace.begin("TextInjectionToPaste")
             defer { PerformanceTrace.end(interval); completion() }
             do {
-                guard request.targetPID == frontmostPIDProvider() else { reportFocusChange(); return }
+                let currentPID = frontmostPIDProvider()
+                guard samePasteTarget(request.targetPID, currentPID) else {
+                    reportPasteTargetMismatch(queued: request.targetPID, current: currentPID)
+                    return
+                }
                 var snapshot = request.preserveClipboard ? try await captureStableSnapshot(pasteboard) : nil
                 guard writeTranscribedText(request.text, to: pasteboard) else { return }
                 var expectedChangeCount = pasteboard.changeCount
@@ -301,12 +314,13 @@ final class TextInjector {
                     guard writeTranscribedText(request.text, to: pasteboard) else { return }
                     expectedChangeCount = pasteboard.changeCount
                 }
-                guard request.targetPID == frontmostPIDProvider() else {
+                let pidBeforePaste = frontmostPIDProvider()
+                guard samePasteTarget(request.targetPID, pidBeforePaste) else {
                     if request.preserveClipboard, pasteboard.changeCount == expectedChangeCount {
                         if let snapshot { restoreSnapshot(snapshot, to: pasteboard) }
                         else { pasteboard.clearContents() }
                     }
-                    reportFocusChange()
+                    reportPasteTargetMismatch(queued: request.targetPID, current: pidBeforePaste)
                     return
                 }
                 simulatePaste()
@@ -322,6 +336,25 @@ final class TextInjector {
                 onFailure?("The clipboard kept changing, so text was not pasted. Your transcript is available in VocaMac.")
             }
         }
+    }
+
+    /// Both PIDs must be known and equal. `nil == nil` is not a valid paste target.
+    private func samePasteTarget(_ queued: pid_t?, _ current: pid_t?) -> Bool {
+        guard let queued, let current else { return false }
+        return queued == current
+    }
+
+    private func reportPasteTargetMismatch(queued: pid_t?, current: pid_t?) {
+        if queued == nil || current == nil {
+            reportMissingPasteTarget()
+        } else {
+            reportFocusChange()
+        }
+    }
+
+    private func reportMissingPasteTarget() {
+        VocaLogger.warning(.textInjector, "No active app to paste into; paste cancelled")
+        onFailure?("There was no active app to paste into. Your transcript is available in VocaMac.")
     }
 
     private func reportFocusChange() {
