@@ -211,6 +211,11 @@ struct SettingsSidebarFooter: View {
             || appState.appStatus == .processing
     }
 
+    private var isPracticeRecording: Bool { appState.isPracticeRecording }
+    private var externalRecording: Bool {
+        (appState.isRecording || appState.appStatus == .recording) && !appState.isPracticeRecording
+    }
+
     private var resultText: String? {
         let text = appState.settingsTestResultText?
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -251,24 +256,35 @@ struct SettingsSidebarFooter: View {
 
             Button {
                 Task { @MainActor in
-                    if appState.isRecording || appState.appStatus == .recording {
+                    if isPracticeRecording {
                         await appState.stopRecordingAndTranscribe()
-                    } else {
+                    } else if !externalRecording {
                         appState.settingsTestResultText = nil
+                        // TOCTOU re-check after Task hop
+                        if (appState.isRecording || appState.appStatus == .recording) && !appState.isPracticeRecording {
+                            return
+                        }
+                        guard appState.appStatus == .idle, !appState.isRecording else { return }
                         await appState.startRecording(injectResult: false)
                     }
                 }
             } label: {
                 Label(
-                    appState.isRecording || appState.appStatus == .recording ? "Stop Dictation" : "Test Dictation",
-                    systemImage: appState.isRecording || appState.appStatus == .recording ? "stop.fill" : "mic.fill"
+                    isPracticeRecording ? "Stop Dictation" : "Test Dictation",
+                    systemImage: isPracticeRecording ? "stop.fill" : "mic.fill"
                 )
                 .frame(maxWidth: .infinity)
             }
             .vocaGlassButton()
             .controlSize(.regular)
             .help("Try dictation here. The result stays in this window.")
-            .disabled(appState.appStatus == .processing || (appState.isAutoPaused && !appState.isRecording))
+            .disabled(externalRecording || appState.appStatus == .processing || (appState.isAutoPaused && !appState.isRecording))
+
+            if externalRecording {
+                Text("Dictation is active elsewhere. Finish it with your shortcut before testing here.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
         .padding(8)
     }

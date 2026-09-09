@@ -708,8 +708,16 @@ struct QuickTestStep: View {
                 appState.settingsTestResultText = nil
                 isPreparing = true
                 if appState.appStatus == .error { appState.forceRecovery() }
-                await appState.startRecording(injectResult: false)
-                if !isRecording { testFeedback = appState.errorMessage }
+                // Re-check after the Task hop: a hotkey may have started ordinary dictation.
+                if (appState.isRecording || appState.appStatus == .recording) && !appState.isPracticeRecording {
+                    testFeedback = "Dictation is active in another app. Finish it with your shortcut before trying a practice recording."
+                    isPreparing = false
+                } else if appState.isPracticeRecording || appState.appStatus != .idle || appState.isRecording {
+                    isPreparing = false
+                } else {
+                    await appState.startRecording(injectResult: false)
+                    if !isRecording { testFeedback = appState.errorMessage }
+                }
             }
         }
     }

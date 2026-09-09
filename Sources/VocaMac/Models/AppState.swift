@@ -1119,7 +1119,9 @@ final class AppState: ObservableObject {
     }
 
     func stopRecordingAndTranscribe(injectResult: Bool = true) async {
-        let injectResult = injectResult && recordingInjectsResult
+        // Start-time recordingInjectsResult alone decides injection. The parameter is kept
+        // for source compatibility but ignored so practice/settings UIs cannot demote an ordinary hotkey session.
+        let injectResult = recordingInjectsResult
         let interval = PerformanceTrace.begin("StopToResultQueued")
         defer { PerformanceTrace.end(interval) }
         // Accept stop if we're recording OR if the audio engine thinks
