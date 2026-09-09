@@ -26,12 +26,15 @@ final class SettingsWindowManager: ObservableObject {
 
         // Create a new window
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 920, height: 680),
+            contentRect: NSRect(x: 0, y: 0, width: 860, height: 620),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
         )
         window.title = "VocaMac Settings"
+        window.titlebarAppearsTransparent = true
+        window.toolbarStyle = .unified
+        window.backgroundColor = .windowBackgroundColor
         window.contentView = NSHostingView(rootView: settingsView)
         window.center()
         window.isReleasedWhenClosed = false

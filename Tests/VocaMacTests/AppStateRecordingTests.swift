@@ -268,12 +268,15 @@ final class AppStateRecordingTests: XCTestCase {
         appState.autoCapitalize = false
 
         await appState.startRecording(injectResult: false)
+        XCTAssertTrue(appState.isPracticeRecording)
         await appState.stopRecordingAndTranscribe()
+        XCTAssertFalse(appState.isPracticeRecording)
         XCTAssertEqual(mocks.textInjector.injectCallCount, 0)
         XCTAssertEqual(appState.settingsTestResultText, "practice words")
 
         // The next normal recording must regain ordinary text insertion.
         await appState.startRecording()
+        XCTAssertFalse(appState.isPracticeRecording)
         await appState.stopRecordingAndTranscribe()
         XCTAssertEqual(mocks.textInjector.injectCallCount, 1)
     }

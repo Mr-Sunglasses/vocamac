@@ -65,6 +65,11 @@ final class AppState: ObservableObject {
     private var recordingGeneration = UUID()
     /// Practice sessions keep their output local even when a hotkey stops them.
     private var recordingInjectsResult = true
+    /// Whether the active recording belongs to an in-window practice control.
+    var isPracticeRecording: Bool {
+        (isRecording || appStatus == .recording) && !recordingInjectsResult
+    }
+
     private var recordingTranscription: RecordingTranscription?
     private var finishingTranscription: RecordingTranscription?
     private var isStoppingAudio = false

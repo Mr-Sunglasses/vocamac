@@ -178,7 +178,7 @@ struct OnboardingView: View {
         .padding(24)
         .frame(width: 245)
         .frame(maxHeight: .infinity)
-        .background(VocaDesign.surface)
+        .background(VocaSidebarMaterial())
     }
 
     // MARK: - Navigation
@@ -507,7 +507,10 @@ struct QuickTestStep: View {
     @State private var testResult: String?
     @State private var testFeedback: String?
     @State private var isPreparing = false
-    private var isRecording: Bool { appState.isRecording || appState.appStatus == .recording }
+    private var isRecording: Bool { appState.isPracticeRecording }
+    private var externalRecording: Bool {
+        (appState.isRecording || appState.appStatus == .recording) && !appState.isPracticeRecording
+    }
 
     var body: some View {
         VStack(spacing: 16) {
@@ -547,8 +550,12 @@ struct QuickTestStep: View {
                 }
                 .buttonStyle(.plain)
                 .padding(24)
-                .disabled(isBusy || appState.appStatus == .processing)
+                .disabled(isBusy || externalRecording || appState.appStatus == .processing)
 
+                if externalRecording {
+                    Text("Dictation is active in another app. Finish it with your shortcut before trying a practice recording.")
+                        .font(.callout).foregroundStyle(.secondary)
+                }
                 if let feedback = testFeedback ?? appState.errorMessage {
                     Label(feedback, systemImage: "info.circle")
                         .font(.callout).foregroundStyle(.secondary)
@@ -681,7 +688,7 @@ struct QuickTestStep: View {
     }
 
     private func toggleRecording() {
-        guard !isBusy else { return }
+        guard !isBusy, !externalRecording else { return }
         isBusy = true
         Task { @MainActor in
             defer {
@@ -690,7 +697,7 @@ struct QuickTestStep: View {
             }
             testFeedback = nil
             if isRecording {
-                await appState.stopRecordingAndTranscribe(injectResult: false)
+                await appState.stopRecordingAndTranscribe()
                 testResult = appState.settingsTestResultText
                 testFeedback = appState.errorMessage
                 if testResult == nil && testFeedback == nil {

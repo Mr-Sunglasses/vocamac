@@ -14,13 +14,10 @@ extension Notification.Name {
 struct SettingsView: View {
     @EnvironmentObject var appState: AppState
 
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
     @State private var selectedPage: SettingsPage? = .dictation
     @State private var searchText = ""
     @State private var pageBeforeSearch: SettingsPage = .dictation
-    /// Manual sidebar visibility. Avoids NavigationSplitView relocating system toggles.
-    @State private var isSidebarVisible = true
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
 
     private var matchCounts: [SettingsPage: Int] {
         SettingsSearchIndex.matchCounts(query: searchText)
@@ -38,56 +35,37 @@ struct SettingsView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            HStack(spacing: 0) {
-                if isSidebarVisible {
-                    settingsSidebar
-                        .frame(width: 236)
-                        .transition(.move(edge: .leading).combined(with: .opacity))
-
-                    Divider()
-                }
-
-                VStack(spacing: 0) {
-                    VocaPageHeader(title: (selectedPage ?? .dictation).title,
-                                   subtitle: (selectedPage ?? .dictation).subtitle)
-                    settingsDetail
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                }
-                .background(VocaDesign.canvas)
+        NavigationSplitView(columnVisibility: $columnVisibility) {
+            settingsSidebar
+                .navigationSplitViewColumnWidth(min: 210, ideal: 224, max: 260)
+        } detail: {
+            VStack(spacing: 0) {
+                VocaPageHeader(title: (selectedPage ?? .dictation).title,
+                               subtitle: (selectedPage ?? .dictation).subtitle)
+                settingsDetail
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
-            .toolbar {
-                ToolbarItem(placement: .primaryAction) {
-                    Button {
-                        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
-                            isSidebarVisible.toggle()
-                        }
-                    } label: {
-                        Image(systemName: "sidebar.left")
-                    }
-                    .help(isSidebarVisible ? "Hide Sidebar" : "Show Sidebar")
-                    .accessibilityLabel(isSidebarVisible ? "Hide Sidebar" : "Show Sidebar")
-                }
+            .background(VocaDesign.canvas)
+        }
+        .navigationSplitViewStyle(.balanced)
+        .onChange(of: searchText) { _, newValue in
+            let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty {
+                selectedPage = pageBeforeSearch
+                return
             }
-            .onChange(of: searchText) { _, newValue in
-                let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
-                if trimmed.isEmpty {
-                    selectedPage = pageBeforeSearch
-                    return
-                }
-                if let current = selectedPage, matchCounts[current, default: 0] == 0 {
-                    selectedPage = SettingsSearchIndex.firstMatchingPage(query: trimmed)
-                } else if selectedPage == nil {
-                    selectedPage = SettingsSearchIndex.firstMatchingPage(query: trimmed)
-                }
-            }
-            .onChange(of: selectedPage) { _, newValue in
-                if !hasSearchQuery, let newValue {
-                    pageBeforeSearch = newValue
-                }
+            if let current = selectedPage, matchCounts[current, default: 0] == 0 {
+                selectedPage = SettingsSearchIndex.firstMatchingPage(query: trimmed)
+            } else if selectedPage == nil {
+                selectedPage = SettingsSearchIndex.firstMatchingPage(query: trimmed)
             }
         }
-        .frame(minWidth: 780, minHeight: 600)
+        .onChange(of: selectedPage) { _, newValue in
+            if !hasSearchQuery, let newValue {
+                pageBeforeSearch = newValue
+            }
+        }
+        .frame(minWidth: 760, minHeight: 560)
         .tint(VocaDesign.accent)
         .groupBoxStyle(VocaGroupBoxStyle())
     }
@@ -95,42 +73,54 @@ struct SettingsView: View {
     private var settingsSidebar: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
-                BrandLogoView(size: 34)
+                BrandLogoView(size: 30)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("VocaMac").font(.headline)
                     Text("Your voice. On your Mac.").font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
             }
-            .padding(18)
+            .padding(16)
             SettingsSidebarSearchField(text: $searchText)
 
-            List(selection: $selectedPage) {
-                ForEach(visiblePages) { page in
-                    Label {
-                        Text(page.title).font(.system(size: 13, weight: selectedPage == page ? .semibold : .regular))
-                    } icon: {
-                        Image(systemName: page.systemImage)
-                            .foregroundStyle(selectedPage == page ? Color.white : VocaDesign.accent)
-                            .frame(width: 22, height: 26)
+            ScrollView {
+                VStack(spacing: 3) {
+                    ForEach(visiblePages) { page in
+                        Button {
+                            selectedPage = page
+                        } label: {
+                            HStack(spacing: 10) {
+                                Image(systemName: page.systemImage)
+                                    .font(.system(size: 15, weight: .medium))
+                                    .foregroundStyle(selectedPage == page ? VocaDesign.accent : .secondary)
+                                    .frame(width: 22)
+                                Text(page.title)
+                                    .font(.system(size: 13, weight: selectedPage == page ? .semibold : .regular))
+                                Spacer(minLength: 0)
+                                if hasSearchQuery {
+                                    Text("\(matchCounts[page] ?? 0)").font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
+                            .foregroundStyle(.primary)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 10)
+                            .contentShape(RoundedRectangle(cornerRadius: 12))
+                            .modifier(SidebarSelectionSurface(isSelected: selectedPage == page))
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityAddTraits(selectedPage == page ? [.isSelected] : [])
                     }
-                        .padding(.vertical, 2)
-                        .badge(hasSearchQuery ? (matchCounts[page] ?? 0) : 0)
-                        .tag(page)
+                    if hasSearchQuery && visiblePages.isEmpty {
+                        ContentUnavailableView.search(text: searchText)
+                    }
                 }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
             }
-            .listStyle(.sidebar)
-            .scrollContentBackground(.hidden)
-            .overlay {
-                if hasSearchQuery && visiblePages.isEmpty {
-                    ContentUnavailableView.search(text: searchText)
-                }
-            }
-
-            Divider()
             SettingsSidebarFooter()
+                .padding(12)
         }
-        .background(VocaDesign.surface)
+        .background(VocaSidebarMaterial())
     }
 
     @ViewBuilder
@@ -199,7 +189,14 @@ struct SettingsSidebarSearchField: View {
         .padding(.horizontal, 12)
         .padding(.top, 8)
         .padding(.bottom, 6)
-        .background(.bar)
+    }
+}
+
+private struct SidebarSelectionSurface: ViewModifier {
+    let isSelected: Bool
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if isSelected { content.vocaGlass(selected: true) } else { content }
     }
 }
 
@@ -240,33 +237,22 @@ struct SettingsSidebarFooter: View {
                 }
             }
 
-            ObservedAudioLevelView(
-                meter: appState.audioMeter,
-                tint: appState.appStatus == .recording ? Color(nsColor: BrandAssets.brandGreen) : Color.accentColor
-            )
-            .frame(height: isActiveSession ? 8 : 5)
-            .animation(.easeInOut(duration: 0.15), value: isActiveSession)
-
-            Group {
-                if let resultText, !isActiveSession {
-                    Text(resultText)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(3)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                } else if !isActiveSession {
-                    Text("Try dictation here. Your text stays in this window.")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
+            if isActiveSession {
+                ObservedAudioLevelView(meter: appState.audioMeter, tint: VocaDesign.accent)
+                    .frame(height: 5)
             }
-            .frame(minHeight: 28, alignment: .topLeading)
+            if let resultText, !isActiveSession {
+                Text(resultText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(3)
+                    .textSelection(.enabled)
+            }
 
             Button {
                 Task { @MainActor in
                     if appState.isRecording || appState.appStatus == .recording {
-                        await appState.stopRecordingAndTranscribe(injectResult: false)
+                        await appState.stopRecordingAndTranscribe()
                     } else {
                         appState.settingsTestResultText = nil
                         await appState.startRecording(injectResult: false)
@@ -279,11 +265,12 @@ struct SettingsSidebarFooter: View {
                 )
                 .frame(maxWidth: .infinity)
             }
-            .controlSize(.small)
-            .disabled(appState.isAutoPaused && !appState.isRecording)
+            .vocaGlassButton()
+            .controlSize(.regular)
+            .help("Try dictation here. The result stays in this window.")
+            .disabled(appState.appStatus == .processing || (appState.isAutoPaused && !appState.isRecording))
         }
-        .padding(12)
-        .background(.bar)
+        .padding(8)
     }
 
     private var statusLabel: String {
@@ -313,69 +300,74 @@ struct DictationSettingsPage: View {
     @EnvironmentObject var appState: AppState
 
     var body: some View {
-        Form {
-            Section("Activation Mode") {
-                Picker("Mode", selection: $appState.activationMode) {
-                    ForEach(ActivationMode.allCases) { mode in
-                        Text(mode.displayName).tag(mode)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 22) {
+                VStack(alignment: .leading, spacing: 14) {
+                    Label("Start dictating", systemImage: "mic")
+                        .font(.headline)
+                    Picker("Activation mode", selection: $appState.activationMode) {
+                        ForEach(ActivationMode.allCases) { mode in
+                            Text(mode.displayName).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .onChange(of: appState.activationMode) { appState.syncHotKeyConfiguration() }
+                    Text(appState.activationMode.description)
+                        .font(.callout).foregroundStyle(.secondary)
+                    Divider()
+                    HotKeySelectionControl(
+                        pickerLabel: "Shortcut",
+                        footerText: "Choose a preset or record your own. This key is reserved while VocaMac is running."
+                    )
+                    if appState.activationMode == .doubleTapToggle {
+                        HStack {
+                            Text("Double-tap speed")
+                            Slider(value: $appState.doubleTapThreshold, in: 0.2...0.8, step: 0.05,
+                                   onEditingChanged: { editing in
+                                if !editing { appState.syncHotKeyConfiguration() }
+                            })
+                            Text("\(String(format: "%.2f", appState.doubleTapThreshold))s")
+                                .monospacedDigit().frame(width: 44)
+                        }
+                        Text("A longer interval makes double-tapping more forgiving.")
+                            .font(.caption).foregroundStyle(.secondary)
                     }
                 }
-                .pickerStyle(.radioGroup)
-                .onChange(of: appState.activationMode) {
-                    appState.syncHotKeyConfiguration()
-                }
+                .vocaCard()
 
-                Text(appState.activationMode.description)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Section("Hotkey") {
-                HotKeySelectionControl(
-                    pickerLabel: "Activation Key",
-                    footerText: "Choose a preset or record a key. VocaMac reserves this key while running."
-                )
-
-                if appState.activationMode == .doubleTapToggle {
+                VStack(alignment: .leading, spacing: 16) {
+                    Label("Your text", systemImage: "text.cursor")
+                        .font(.headline)
                     HStack {
-                        Text("Double-tap speed")
-                        Slider(
-                            value: $appState.doubleTapThreshold,
-                            in: 0.2...0.8,
-                            step: 0.05,
-                            onEditingChanged: { isEditing in
-                                if !isEditing {
-                                    appState.syncHotKeyConfiguration()
-                                }
-                            }
-                        )
-                        Text("\(String(format: "%.2f", appState.doubleTapThreshold))s")
-                            .monospacedDigit()
-                            .frame(width: 40)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Add a trailing space")
+                            Text("Keep consecutive dictations from running together.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer(minLength: 16)
+                        Toggle("Add a trailing space", isOn: $appState.appendTrailingSpace)
+                            .labelsHidden()
                     }
-
-                    Text("Shorter = faster double-tap required. Longer = more forgiving.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    Divider()
+                    HStack {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Capitalize sentences")
+                            Text("Capitalize the beginning of each sentence while preserving existing capitals.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer(minLength: 16)
+                        Toggle("Capitalize sentences", isOn: $appState.autoCapitalize)
+                            .labelsHidden()
+                    }
                 }
+                .toggleStyle(.switch)
+                .vocaCard()
             }
-
-            Section("Output") {
-                Toggle("Trailing Space After Dictation", isOn: $appState.appendTrailingSpace)
-
-                Text("Adds a space after each utterance so the next dictation does not stick to the previous one.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                Toggle("Auto-Capitalize Sentences", isOn: $appState.autoCapitalize)
-
-                Text("Capitalizes the start of each utterance and letters after . ! or ?. Skips text that is already capitalized.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+            .frame(maxWidth: 740)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(24)
+            .padding(.top, -8)
         }
-        .formStyle(.grouped)
-        .scrollContentBackground(.hidden)
     }
 }
 

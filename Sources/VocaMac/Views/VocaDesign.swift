@@ -16,9 +16,8 @@ enum VocaDesign {
 struct VocaCard: ViewModifier {
     func body(content: Content) -> some View {
         content
-            .padding(18)
+            .padding(16)
             .background(VocaDesign.surface, in: RoundedRectangle(cornerRadius: 16))
-            .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(VocaDesign.line))
     }
 }
 
@@ -31,15 +30,15 @@ struct VocaPageHeader: View {
     let subtitle: String
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(title).font(.system(size: 28, weight: .semibold, design: .rounded))
+            Text(title).font(.system(size: 25, weight: .semibold, design: .rounded))
                 .accessibilityAddTraits(.isHeader)
             Text(subtitle).font(.callout).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 24)
-        .padding(.top, 24)
-        .padding(.bottom, 12)
+        .padding(.top, 18)
+        .padding(.bottom, 8)
     }
 }
 
@@ -65,5 +64,55 @@ struct VocaGroupBoxStyle: GroupBoxStyle {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .vocaCard()
+    }
+}
+
+/// Glass belongs to navigation and actions; settings content stays on solid surfaces.
+struct VocaGlassSurface: ViewModifier {
+    var selected = false
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if reduceTransparency {
+            content.background(selected ? VocaDesign.accent.opacity(0.18) : VocaDesign.surface,
+                               in: RoundedRectangle(cornerRadius: 12))
+        } else if #available(macOS 26.0, *) {
+            content.glassEffect(.regular.tint(selected ? VocaDesign.accent.opacity(0.18) : .clear),
+                                in: RoundedRectangle(cornerRadius: 12))
+        } else {
+            content.background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+                .background(selected ? VocaDesign.accent.opacity(0.12) : .clear,
+                            in: RoundedRectangle(cornerRadius: 12))
+        }
+    }
+}
+
+extension View {
+    func vocaGlass(selected: Bool = false) -> some View {
+        modifier(VocaGlassSurface(selected: selected))
+    }
+
+    @ViewBuilder
+    func vocaGlassButton() -> some View {
+        if #available(macOS 26.0, *) {
+            self.buttonStyle(.glass)
+        } else {
+            self.buttonStyle(.bordered)
+        }
+    }
+}
+
+/// Native sidebar vibrancy for onboarding and older macOS releases.
+struct VocaSidebarMaterial: NSViewRepresentable {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        NSVisualEffectView()
+    }
+    func updateNSView(_ view: NSVisualEffectView, context: Context) {
+        view.material = .sidebar
+        view.blendingMode = .behindWindow
+        view.state = .followsWindowActiveState
+        view.wantsLayer = true
+        view.layer?.backgroundColor = reduceTransparency ? NSColor.windowBackgroundColor.cgColor : nil
     }
 }
