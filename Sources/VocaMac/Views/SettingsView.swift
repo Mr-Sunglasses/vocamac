@@ -1306,17 +1306,30 @@ struct ModelRow: View {
 
 struct AudioSettingsTab: View {
     @EnvironmentObject var appState: AppState
-    @State private var audioDevices: [AudioDevice] = []
+    @State private var audioCatalog = AudioDeviceCatalog.shared
+    private var audioDevices: [AudioDevice] { audioCatalog.devices }
 
     var body: some View {
-        Form {
-            Section("Recording") {
-                Picker("Max recording duration", selection: $appState.maxRecordingDuration) {
-                    Text("15 seconds").tag(15)
-                    Text("30 seconds").tag(30)
-                    Text("60 seconds").tag(60)
-                    Text("120 seconds").tag(120)
-                    Text("300 seconds (5 min)").tag(300)
+        VocaSettingsPageContent {
+            VocaSettingsGroup("Recording") {
+                LabeledContent("Max recording duration") {
+                    Menu(appState.maxRecordingDuration == 300 ? "300 seconds (5 min)" : "\(appState.maxRecordingDuration) seconds") {
+                        ForEach([15, 30, 60, 120, 300], id: \.self) { duration in
+                            Button {
+                                appState.maxRecordingDuration = duration
+                            } label: {
+                                let title = duration == 300 ? "300 seconds (5 min)" : "\(duration) seconds"
+                                if duration == appState.maxRecordingDuration {
+                                    Label(title, systemImage: "checkmark")
+                                } else {
+                                    Text(title)
+                                }
+                            }
+                        }
+                    }
+                    .fixedSize()
+                    .accessibilityLabel("Max recording duration")
+                    .accessibilityValue("\(appState.maxRecordingDuration) seconds")
                 }
                 .onChange(of: appState.maxRecordingDuration) {
                     appState.syncHotKeyConfiguration()
@@ -1327,7 +1340,7 @@ struct AudioSettingsTab: View {
                     .foregroundStyle(.secondary)
             }
 
-            Section("Silence Detection") {
+            VocaSettingsGroup("Silence Detection") {
                 HStack {
                     Text("Sensitivity")
                     Slider(
@@ -1363,13 +1376,26 @@ struct AudioSettingsTab: View {
                     .foregroundStyle(.secondary)
             }
 
-            Section("Sound Effects") {
+            VocaSettingsGroup("Sound Effects") {
                 Toggle("Enable sound effects", isOn: $appState.soundEffectsEnabled)
 
-                Picker("Dictation tone", selection: $appState.dictationTone) {
-                    ForEach(DictationTone.allCases) { tone in
-                        Text(tone.displayName).tag(tone)
+                LabeledContent("Dictation tone") {
+                    Menu(appState.dictationTone.displayName) {
+                        ForEach(DictationTone.allCases) { tone in
+                            Button {
+                                appState.dictationTone = tone
+                            } label: {
+                                if tone == appState.dictationTone {
+                                    Label(tone.displayName, systemImage: "checkmark")
+                                } else {
+                                    Text(tone.displayName)
+                                }
+                            }
+                        }
                     }
+                    .fixedSize()
+                    .accessibilityLabel("Dictation tone")
+                    .accessibilityValue(appState.dictationTone.displayName)
                 }
 
                 Button("Preview") {
@@ -1385,7 +1411,7 @@ struct AudioSettingsTab: View {
                     .foregroundStyle(.secondary)
             }
 
-            Section("Other Audio") {
+            VocaSettingsGroup("Other Audio") {
                 Toggle("Lower other audio while dictating", isOn: $appState.duckOtherAudioEnabled)
 
                 Text("Turns the system volume down while the microphone is open — like the built-in dictation — and back up when you stop. Speakers only: it does not affect outputs without a software volume, such as HDMI.")
@@ -1393,11 +1419,14 @@ struct AudioSettingsTab: View {
                     .foregroundStyle(.secondary)
             }
 
-            Section("Input Device") {
+            VocaSettingsGroup("Input Device") {
                 Picker("Microphone", selection: $appState.selectedAudioDeviceID) {
                     Text("System Default").tag("")
-                    if selectedAudioDeviceIsUnavailable {
-                        Text("\(selectedAudioDeviceDisplayName) (Unavailable)").tag(appState.selectedAudioDeviceID)
+                    if !appState.selectedAudioDeviceID.isEmpty && selectedAudioDevice == nil {
+                        Text(audioCatalog.hasLoaded
+                             ? "\(selectedAudioDeviceDisplayName) (Unavailable)"
+                             : selectedAudioDeviceDisplayName)
+                            .tag(appState.selectedAudioDeviceID)
                     }
                     ForEach(audioDevices) { device in
                         Text(device.name).tag(device.id)
@@ -1422,9 +1451,13 @@ struct AudioSettingsTab: View {
 
                 if audioDevices.isEmpty {
                     HStack {
-                        Image(systemName: "exclamationmark.triangle")
-                            .foregroundStyle(.orange)
-                        Text("No audio input devices found")
+                        if audioCatalog.hasLoaded {
+                            Image(systemName: "exclamationmark.triangle")
+                                .foregroundStyle(.orange)
+                        } else {
+                            ProgressView().controlSize(.small)
+                        }
+                        Text(audioCatalog.hasLoaded ? "No audio input devices found" : "Loading microphones…")
                             .foregroundStyle(.secondary)
                     }
                 } else if selectedAudioDeviceIsUnavailable {
@@ -1465,13 +1498,13 @@ struct AudioSettingsTab: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .formStyle(.grouped)
-        .scrollContentBackground(.hidden)
-        .onAppear {
-            refreshAudioDevices()
+        .toggleStyle(.switch)
+        .task {
+            await audioCatalog.refresh()
+            syncAudioDeviceSelection()
         }
-        .onReceive(NotificationCenter.default.publisher(for: .vocaAudioDevicesChanged)) { _ in
-            refreshAudioDevices()
+        .onChange(of: audioCatalog.devices) {
+            syncAudioDeviceSelection()
         }
     }
 
@@ -1492,7 +1525,7 @@ struct AudioSettingsTab: View {
     }
 
     private var selectedAudioDeviceIsUnavailable: Bool {
-        !appState.selectedAudioDeviceID.isEmpty && selectedAudioDevice == nil
+        audioCatalog.hasLoaded && !appState.selectedAudioDeviceID.isEmpty && selectedAudioDevice == nil
     }
 
     private var selectedAudioDeviceDisplayName: String {
@@ -1507,7 +1540,10 @@ struct AudioSettingsTab: View {
     }
 
     private func refreshAudioDevices() {
-        audioDevices = AudioEngine.availableInputDevices()
+        Task { await audioCatalog.refresh(force: true) }
+    }
+
+    private func syncAudioDeviceSelection() {
         syncSelectedAudioDeviceName()
         syncSelectedAudioChannel()
     }
