@@ -20,7 +20,6 @@ struct AboutTab: View {
         }
         .formStyle(.grouped)
         .scrollContentBackground(.hidden)
-        // Links are the last system-blue surface left in the app.
         .tint(VocaDesign.accent)
         .sheet(isPresented: $showingUpdateSheet) {
             if let info = updateInfoForSheet {
@@ -44,7 +43,10 @@ struct AboutTab: View {
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
 
+                // Link keeps NSColor.linkColor through .tint, so the accent
+                // has to be set on the link itself or it renders system blue.
                 Link("vocamac.com", destination: URL(string: "https://vocamac.com")!)
+                    .foregroundStyle(VocaDesign.accent)
 
                 Text("Version \(appVersionDisplay) · \(buildChannelLabel)")
                     .foregroundStyle(.secondary)
@@ -194,6 +196,7 @@ struct AboutTab: View {
                 Text("Made with ❤️ by ")
                     .foregroundStyle(.tertiary)
                 Link("Our contributors", destination: AboutLinks.contributors)
+                    .foregroundStyle(VocaDesign.accent)
             }
             .font(.caption2)
         }

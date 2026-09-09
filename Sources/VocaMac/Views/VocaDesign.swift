@@ -178,6 +178,9 @@ struct ActivationModeSelector: View {
                     Image(systemName: mode.systemImage)
                         .font(.system(size: 14, weight: .medium))
                         .foregroundStyle(isSelected ? VocaDesign.accent : .secondary)
+                        // The two glyphs have different heights; a fixed box
+                        // keeps both card titles on the same baseline.
+                        .frame(width: 18, height: 16)
                     Text(mode.shortName)
                         .font(.system(size: 13, weight: .semibold))
                     Spacer(minLength: 4)
