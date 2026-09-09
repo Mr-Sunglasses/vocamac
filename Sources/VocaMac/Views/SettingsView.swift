@@ -116,6 +116,10 @@ struct SettingsView: View {
             List(selection: $selectedPage) {
                 ForEach(visiblePages) { page in
                     Label(page.title, systemImage: page.systemImage)
+                        // Some glyphs here ship a multicolour variant — the
+                        // ladybug renders red and black by default, which made
+                        // Advanced the only coloured row in a monochrome list.
+                        .symbolRenderingMode(.monochrome)
                         .badge(hasSearchQuery ? (matchCounts[page] ?? 0) : 0)
                         .tag(page)
                 }

@@ -54,8 +54,7 @@ struct StatsSettingsTab: View {
                 GroupBox {
                     VStack(alignment: .leading, spacing: 12) {
                         HStack {
-                            Label("Lifetime Totals", systemImage: "chart.bar.fill")
-                                .font(.headline)
+                            StatsSectionLabel("Lifetime Totals", systemImage: "chart.bar.fill")
                             Spacer()
                             Menu {
                                 ForEach(StatsShareDestination.allCases) { destination in
@@ -78,20 +77,17 @@ struct StatsSettingsTab: View {
                             StatPill(
                                 icon: "text.word.spacing",
                                 label: "Total Words",
-                                value: StatsShareComposer.formatCount(appState.statsManager.stats.totalWords),
-                                color: VocaDesign.accent
+                                value: StatsShareComposer.formatCount(appState.statsManager.stats.totalWords)
                             )
                             StatPill(
                                 icon: "waveform",
                                 label: "Transcriptions",
-                                value: StatsShareComposer.formatCount(appState.statsManager.stats.totalTranscriptions),
-                                color: VocaDesign.accent
+                                value: StatsShareComposer.formatCount(appState.statsManager.stats.totalTranscriptions)
                             )
                             StatPill(
                                 icon: "timer",
                                 label: "Total Time",
-                                value: formatDuration(appState.statsManager.stats.totalAudioDurationSeconds),
-                                color: .orange
+                                value: formatDuration(appState.statsManager.stats.totalAudioDurationSeconds)
                             )
                         }
 
@@ -110,8 +106,7 @@ struct StatsSettingsTab: View {
                 HStack(spacing: 20) {
                     GroupBox {
                         VStack(alignment: .leading, spacing: 8) {
-                            Label("Speed", systemImage: "speedometer")
-                                .font(.headline)
+                            StatsSectionLabel("Speed", systemImage: "speedometer")
                                 .padding(.bottom, 4)
 
                             Text("\(String(format: "%.1f", appState.statsManager.stats.averageWPM))")
@@ -128,9 +123,7 @@ struct StatsSettingsTab: View {
 
                     GroupBox {
                         VStack(alignment: .leading, spacing: 8) {
-                            Label("Streak", systemImage: "flame.fill")
-                                .font(.headline)
-                                .foregroundStyle(.orange)
+                            StatsSectionLabel("Streak", systemImage: "flame.fill")
                                 .padding(.bottom, 4)
 
                             Text("\(appState.statsManager.stats.currentStreak)")
@@ -149,8 +142,7 @@ struct StatsSettingsTab: View {
                 // Daily Activity
                 GroupBox {
                     VStack(alignment: .leading, spacing: 12) {
-                        Label("Recent Activity", systemImage: "calendar")
-                            .font(.headline)
+                        StatsSectionLabel("Recent Activity", systemImage: "calendar")
                             .padding(.bottom, 4)
 
                         let days = recentDays()
@@ -294,17 +286,40 @@ struct StatsSettingsTab: View {
     }
 }
 
+/// Card heading: accent glyph, primary text. Matching the icon to the card's
+/// subject (orange flame, orange timer) made the page look like it had picked
+/// its colours at random.
+struct StatsSectionLabel: View {
+    let title: String
+    let systemImage: String
+
+    init(_ title: String, systemImage: String) {
+        self.title = title
+        self.systemImage = systemImage
+    }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: systemImage)
+                .symbolRenderingMode(.monochrome)
+                .foregroundStyle(VocaDesign.accent)
+            Text(title)
+        }
+        .font(.headline)
+    }
+}
+
 struct StatPill: View {
     let icon: String
     let label: String
     let value: String
-    let color: Color
 
     var body: some View {
         VStack(spacing: 8) {
             Image(systemName: icon)
                 .font(.title2)
-                .foregroundStyle(color)
+                .symbolRenderingMode(.monochrome)
+                .foregroundStyle(VocaDesign.accent)
 
             Text(value)
                 .font(.system(size: 28, weight: .semibold, design: .rounded))
