@@ -66,12 +66,12 @@ struct StatsShareCard: View {
                 shareMetric(
                     title: "Words",
                     value: StatsShareComposer.formatCount(snapshot.totalWords),
-                    accent: .blue
+                    accent: brandGreen
                 )
                 shareMetric(
                     title: "Sessions",
                     value: StatsShareComposer.formatCount(snapshot.totalTranscriptions),
-                    accent: .purple
+                    accent: brandGreen
                 )
                 shareMetric(
                     title: "Time",
@@ -105,11 +105,7 @@ struct StatsShareCard: View {
         .overlay {
             RoundedRectangle(cornerRadius: 22, style: .continuous)
                 .stroke(
-                    LinearGradient(
-                        colors: [brandGreen.opacity(0.55), Color.white.opacity(0.08)],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ),
+                    brandGreen.opacity(0.4),
                     lineWidth: 1.2
                 )
         }
