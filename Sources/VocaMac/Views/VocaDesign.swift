@@ -7,17 +7,33 @@ enum VocaDesign {
             ? NSColor(red: 0.47, green: 0.85, blue: 0.74, alpha: 1)
             : BrandAssets.brandGreen
     })
+    /// Fill for prominent buttons. The mint accent is tuned for icons and
+    /// selection on a dark surface; white button text needs a deeper green to
+    /// stay legible, so prominent fills use this instead.
+    static let accentSolid = Color(nsColor: NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(red: 0.090, green: 0.470, blue: 0.380, alpha: 1)
+            : BrandAssets.brandGreen
+    })
+
+    /// Success and "ready" states. The brand is already green, so a second
+    /// system green next to it reads as two different greens rather than one
+    /// meaning.
+    static var success: Color { accent }
     static let canvas = Color(nsColor: .windowBackgroundColor)
     static let surface = Color(nsColor: .controlBackgroundColor)
     static let line = Color.primary.opacity(0.10)
 }
 
 /// Consistent card treatment without overriding native control behavior.
+/// A 3.5% primary fill nearly vanishes on the dark window background, so the
+/// hairline carries the card edge in both appearances.
 struct VocaCard: ViewModifier {
     func body(content: Content) -> some View {
         content
             .padding(16)
-            .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 12))
+            .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 12))
+            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(VocaDesign.line))
     }
 }
 
@@ -28,6 +44,8 @@ extension View {
 struct VocaPageHeader: View {
     let title: String
     let subtitle: String
+    var horizontalPadding: CGFloat = 24
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title).font(.system(size: 25, weight: .semibold, design: .rounded))
@@ -36,22 +54,8 @@ struct VocaPageHeader: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 24)
+        .padding(.horizontal, horizontalPadding)
         .padding(.vertical, 20)
-    }
-}
-
-/// Native buttons keep keyboard focus, disabled states, and accessibility semantics.
-struct VocaPrimaryButtonStyle: ButtonStyle {
-    @Environment(\.isEnabled) private var isEnabled
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.body.weight(.semibold))
-            .padding(.horizontal, 20)
-            .padding(.vertical, 11)
-            .foregroundStyle(Color(nsColor: .windowBackgroundColor))
-            .background(VocaDesign.accent.opacity(isEnabled ? (configuration.isPressed ? 0.75 : 1) : 0.35),
-                        in: RoundedRectangle(cornerRadius: 10))
     }
 }
 
@@ -66,31 +70,7 @@ struct VocaGroupBoxStyle: GroupBoxStyle {
     }
 }
 
-/// Glass belongs to navigation and actions; settings content stays on solid surfaces.
-struct VocaGlassSurface: ViewModifier {
-    var selected = false
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    @ViewBuilder
-    func body(content: Content) -> some View {
-        if reduceTransparency {
-            content.background(selected ? VocaDesign.accent.opacity(0.18) : VocaDesign.surface,
-                               in: RoundedRectangle(cornerRadius: 12))
-        } else if #available(macOS 26.0, *) {
-            content.glassEffect(.regular.tint(selected ? VocaDesign.accent.opacity(0.18) : .clear),
-                                in: RoundedRectangle(cornerRadius: 12))
-        } else {
-            content.background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
-                .background(selected ? VocaDesign.accent.opacity(0.12) : .clear,
-                            in: RoundedRectangle(cornerRadius: 12))
-        }
-    }
-}
-
 extension View {
-    func vocaGlass(selected: Bool = false) -> some View {
-        modifier(VocaGlassSurface(selected: selected))
-    }
-
     @ViewBuilder
     func vocaGlassButton() -> some View {
         if #available(macOS 26.0, *) {
@@ -117,6 +97,9 @@ struct VocaSidebarMaterial: NSViewRepresentable {
 }
 
 /// Compact settings groups with a consistent heading and bounded row spacing.
+///
+/// The heading sits above the card so hand-built pages match the `Section`
+/// headers that `Form(.grouped)` draws on the pages still using a `Form`.
 struct VocaSettingsGroup<Content: View>: View {
     let title: String
     @ViewBuilder let content: Content
@@ -127,11 +110,38 @@ struct VocaSettingsGroup<Content: View>: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(title).font(.headline).accessibilityAddTraits(.isHeader)
-            content
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.headline)
+                .accessibilityAddTraits(.isHeader)
+                .padding(.leading, 8)
+            VStack(alignment: .leading, spacing: 12) {
+                content
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .vocaCard()
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .vocaCard()
+    }
+}
+
+/// Scroll container shared by the hand-built settings pages so their content
+/// insets match the `Form(.grouped)` pages either side of them in the sidebar.
+struct VocaSettingsPageContent<Content: View>: View {
+    var spacing: CGFloat = 20
+    @ViewBuilder let content: Content
+
+    init(spacing: CGFloat = 20, @ViewBuilder content: () -> Content) {
+        self.spacing = spacing
+        self.content = content()
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: spacing) {
+                content
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(20)
+        }
     }
 }

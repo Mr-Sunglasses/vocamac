@@ -170,7 +170,7 @@ struct UpdateDetailView: View {
         case .readyToInstall(let dmgPath):
             VStack(alignment: .leading, spacing: 10) {
                 Label("Download complete", systemImage: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
+                    .foregroundStyle(VocaDesign.success)
                 Text("Open the DMG and drag VocaMac to Applications to replace the existing app.")
                     .font(.caption)
                     .foregroundStyle(.secondary)

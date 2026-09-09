@@ -20,6 +20,8 @@ struct AboutTab: View {
         }
         .formStyle(.grouped)
         .scrollContentBackground(.hidden)
+        // Links are the last system-blue surface left in the app.
+        .tint(VocaDesign.accent)
         .sheet(isPresented: $showingUpdateSheet) {
             if let info = updateInfoForSheet {
                 UpdateDetailView(info: info, isPresented: $showingUpdateSheet)

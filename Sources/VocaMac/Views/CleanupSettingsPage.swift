@@ -21,138 +21,127 @@ struct CleanupSettingsPage: View {
         + "maybe after the review you know"
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                VocaSettingsGroup("Smart Cleanup") {
-                    HStack {
-                        Text("Clean up after transcription")
-                        Spacer(minLength: 16)
-                        Toggle("Clean up after transcription", isOn: $appState.transcriptCleanupEnabled)
-                            .labelsHidden()
-                            .onChange(of: appState.transcriptCleanupEnabled) {
-                                Task { @MainActor in
-                                    await appState.syncTranscriptCleanup()
-                                }
-                            }
+        VocaSettingsPageContent {
+            VocaSettingsGroup("Smart Cleanup") {
+                SettingsToggleRow(
+                    title: "Clean up after transcription",
+                    detail: "Remove filler words, false starts, and tidy punctuation on this Mac. If cleanup cannot produce a usable result, VocaMac keeps the original transcript.",
+                    isOn: $appState.transcriptCleanupEnabled
+                )
+                .onChange(of: appState.transcriptCleanupEnabled) {
+                    Task { @MainActor in
+                        await appState.syncTranscriptCleanup()
                     }
+                }
 
-                    Text("Remove filler words, false starts, and tidy punctuation on this Mac. If cleanup cannot produce a usable result, VocaMac keeps the original transcript.")
+                // Setup state belongs here rather than in the paragraph above,
+                // which kept telling people to download a model while the row
+                // below reported one ready.
+                if appState.transcriptCleanupEnabled && !appState.transcriptCleanup.isDownloaded(appState.selectedCleanupModelKind) {
+                    Text("Cleanup is on, but the selected model is not downloaded yet. Dictation will inject the raw transcript until you download one.")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                } else if !hasDownloadedModel {
+                    Text("Off until a model is downloaded — pick one below.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-
-                    // Setup state belongs here rather than in the paragraph above,
-                    // which kept telling people to download a model while the row
-                    // below reported one ready.
-                    if appState.transcriptCleanupEnabled && !appState.transcriptCleanup.isDownloaded(appState.selectedCleanupModelKind) {
-                        Text("Cleanup is on, but the selected model is not downloaded yet. Dictation will inject the raw transcript until you download one.")
-                            .font(.caption)
-                            .foregroundStyle(.orange)
-                    } else if !hasDownloadedModel {
-                        Text("Off until a model is downloaded — pick one below.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-
-                    statusRow
                 }
 
-                VocaSettingsGroup("Cleanup Model") {
-                    ForEach(CleanupModelKind.allCases) { kind in
-                        CleanupModelRow(kind: kind)
-                        if kind != CleanupModelKind.allCases.last { Divider() }
-                    }
-                }
-
-                VocaSettingsGroup("Try It") {
-                    Text("Try a sample transcript. The result stays in this window.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-
-                    TextEditor(text: $tryItInput)
-                        .font(.system(.caption, design: .monospaced))
-                        .frame(height: 76)
-                        .padding(8)
-                        .background(VocaDesign.canvas, in: RoundedRectangle(cornerRadius: 8))
-
-                    HStack {
-                        Button(tryItRunning ? "Cleaning…" : "Clean Up Sample") {
-                            runTryIt()
-                        }
-                        .disabled(tryItRunning || tryItInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-
-                        if tryItRunning {
-                            ProgressView().controlSize(.small)
-                        }
-
-                        Spacer()
-
-                        Button("Reset") {
-                            tryItInput = Self.sampleUtterance
-                            tryItResult = nil
-                        }
-                        .buttonStyle(.link)
-                    }
-
-                    if let result = tryItResult {
-                        tryItOutput(result)
-                    }
-                }
-
-                DisclosureGroup("Advanced: cleanup prompt") {
-                    Text("The model only sees this prompt plus the transcript. Leave the default unless you need a different voice.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-
-                    // A long prompt eats the context the transcript needs, and the
-                    // result is cleanup that silently never runs. Say so here
-                    // rather than let it look like the feature is broken.
-                    if promptBudget <= 0 {
-                        Text("This prompt fills the model's whole context, so cleanup will be skipped for every transcript. Shorten it.")
-                            .font(.caption)
-                            .foregroundStyle(.orange)
-                    } else if promptBudget < 1500 {
-                        Text("This prompt leaves room for only about \(promptBudget) characters of speech — longer dictations will skip cleanup.")
-                            .font(.caption)
-                            .foregroundStyle(.orange)
-                    }
-
-                    TextEditor(text: $promptDraft)
-                        .font(.system(.caption, design: .monospaced))
-                        .frame(height: 160)
-                        .onChange(of: promptDraft) {
-                            // Writing @AppStorage on every keystroke republishes
-                            // AppState and re-renders the whole settings tree for
-                            // a ~2 KB string. Settle first, then persist once.
-                            promptCommit?.cancel()
-                            let draft = promptDraft
-                            promptCommit = Task { @MainActor in
-                                try? await Task.sleep(for: .milliseconds(400))
-                                guard !Task.isCancelled else { return }
-                                commitPrompt(draft)
-                            }
-                        }
-                        .onDisappear {
-                            promptCommit?.cancel()
-                            commitPrompt(promptDraft)
-                        }
-
-                    HStack {
-                        Button("Reset to Default") {
-                            promptCommit?.cancel()
-                            promptDraft = TranscriptCleanup.defaultPrompt
-                            appState.transcriptCleanupPrompt = ""
-                        }
-                        .disabled(promptDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-                            == TranscriptCleanup.defaultPrompt.trimmingCharacters(in: .whitespacesAndNewlines))
-                        Spacer()
-                    }
-                }
-                .padding(16)
-                .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 12))
+                statusRow
             }
-            .frame(maxWidth: 740)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(24)
+
+            VocaSettingsGroup("Cleanup Model") {
+                ForEach(CleanupModelKind.allCases) { kind in
+                    CleanupModelRow(kind: kind)
+                    if kind != CleanupModelKind.allCases.last { Divider() }
+                }
+            }
+
+            VocaSettingsGroup("Try It") {
+                Text("Try a sample transcript. The result stays in this window.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                TextEditor(text: $tryItInput)
+                    .font(.system(.caption, design: .monospaced))
+                    .frame(height: 76)
+                    .padding(8)
+                    .background(VocaDesign.canvas, in: RoundedRectangle(cornerRadius: 8))
+
+                HStack {
+                    Button(tryItRunning ? "Cleaning…" : "Clean Up Sample") {
+                        runTryIt()
+                    }
+                    .disabled(tryItRunning || tryItInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+                    if tryItRunning {
+                        ProgressView().controlSize(.small)
+                    }
+
+                    Spacer()
+
+                    Button("Reset") {
+                        tryItInput = Self.sampleUtterance
+                        tryItResult = nil
+                    }
+                    .buttonStyle(.link)
+                }
+
+                if let result = tryItResult {
+                    tryItOutput(result)
+                }
+            }
+
+            DisclosureGroup("Advanced: cleanup prompt") {
+                Text("The model only sees this prompt plus the transcript. Leave the default unless you need a different voice.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                // A long prompt eats the context the transcript needs, and the
+                // result is cleanup that silently never runs. Say so here
+                // rather than let it look like the feature is broken.
+                if promptBudget <= 0 {
+                    Text("This prompt fills the model's whole context, so cleanup will be skipped for every transcript. Shorten it.")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                } else if promptBudget < 1500 {
+                    Text("This prompt leaves room for only about \(promptBudget) characters of speech — longer dictations will skip cleanup.")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+
+                TextEditor(text: $promptDraft)
+                    .font(.system(.caption, design: .monospaced))
+                    .frame(height: 160)
+                    .onChange(of: promptDraft) {
+                        // Writing @AppStorage on every keystroke republishes
+                        // AppState and re-renders the whole settings tree for
+                        // a ~2 KB string. Settle first, then persist once.
+                        promptCommit?.cancel()
+                        let draft = promptDraft
+                        promptCommit = Task { @MainActor in
+                            try? await Task.sleep(for: .milliseconds(400))
+                            guard !Task.isCancelled else { return }
+                            commitPrompt(draft)
+                        }
+                    }
+                    .onDisappear {
+                        promptCommit?.cancel()
+                        commitPrompt(promptDraft)
+                    }
+
+                HStack {
+                    Button("Reset to Default") {
+                        promptCommit?.cancel()
+                        promptDraft = TranscriptCleanup.defaultPrompt
+                        appState.transcriptCleanupPrompt = ""
+                    }
+                    .disabled(promptDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+                        == TranscriptCleanup.defaultPrompt.trimmingCharacters(in: .whitespacesAndNewlines))
+                    Spacer()
+                }
+            }
+            .vocaCard()
         }
         .toggleStyle(.switch)
         .onAppear {
@@ -168,7 +157,7 @@ struct CleanupSettingsPage: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
                 Image(systemName: result.didChangeText ? "checkmark.circle.fill" : "info.circle")
-                    .foregroundStyle(result.didChangeText ? Color.green : .orange)
+                    .foregroundStyle(result.didChangeText ? VocaDesign.success : .orange)
                 Text(result.summary)
                     .font(.caption)
                     .foregroundStyle(result.didChangeText ? .primary : .secondary)
@@ -254,7 +243,7 @@ struct CleanupSettingsPage: View {
         case .ready:
             Label("Cleanup model ready", systemImage: "checkmark.circle.fill")
                 .font(.caption)
-                .foregroundStyle(.green)
+                .foregroundStyle(VocaDesign.success)
         case .error(let message):
             Text(message)
                 .font(.caption)
@@ -284,7 +273,7 @@ struct CleanupModelRow: View {
     var body: some View {
         HStack {
             Image(systemName: isSelected && appState.transcriptCleanup.modelState == .ready ? "checkmark.circle.fill" : "circle")
-                .foregroundStyle(isSelected && appState.transcriptCleanup.modelState == .ready ? .green : .secondary)
+                .foregroundStyle(isSelected && appState.transcriptCleanup.modelState == .ready ? VocaDesign.success : .secondary)
                 .frame(width: 20)
 
             VStack(alignment: .leading, spacing: 2) {
@@ -338,7 +327,7 @@ struct CleanupModelRow: View {
                 if isSelected, appState.transcriptCleanup.modelState == .ready {
                     Label("Active", systemImage: "checkmark")
                         .font(.caption)
-                        .foregroundStyle(.green)
+                        .foregroundStyle(VocaDesign.success)
                 } else {
                     Button("Load") {
                         Task { @MainActor in
@@ -384,7 +373,7 @@ struct CleanupModelRow: View {
         switch descriptor.recommendation {
         case .compact: return .secondary
         case .recommended: return VocaDesign.accent
-        case .quality: return .purple
+        case .quality: return .primary
         }
     }
 }

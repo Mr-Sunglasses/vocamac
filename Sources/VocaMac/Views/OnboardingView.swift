@@ -109,7 +109,9 @@ struct OnboardingView: View {
                             Image(systemName: currentStep == .complete ? "checkmark" : "arrow.right")
                         }
                     }
-                    .buttonStyle(VocaPrimaryButtonStyle())
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                    .tint(VocaDesign.accentSolid)
                     .keyboardShortcut(.defaultAction)
                     .disabled(currentStep == .permissions && !permissionsReady)
                 }
@@ -117,7 +119,7 @@ struct OnboardingView: View {
                 .padding(22)
             }
         }
-        .frame(width: 840, height: 650)
+        .frame(minWidth: 780, idealWidth: 840, minHeight: 600, idealHeight: 650)
         .background(VocaDesign.canvas)
         .tint(VocaDesign.accent)
         .onAppear {
@@ -265,12 +267,6 @@ struct PermissionsStep: View {
 
     var body: some View {
         VStack(spacing: 16) {
-            Text("VocaMac needs a few permissions to work properly.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal)
-
             VStack(spacing: 12) {
                 OnboardingPermissionRow(
                     icon: "mic.fill",
@@ -296,9 +292,6 @@ struct PermissionsStep: View {
                     action: { appState.requestInputMonitoringPermission() }
                 )
             }
-            .padding()
-
-            Spacer()
 
             if !allPermissionsGranted {
                 HStack(spacing: 8) {
@@ -310,10 +303,7 @@ struct PermissionsStep: View {
                         .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding()
-                .background(Color.yellow.opacity(0.05))
-                .cornerRadius(8)
-                .padding(.horizontal)
+                .vocaCard()
             }
 
             HStack(spacing: 8) {
@@ -325,14 +315,9 @@ struct PermissionsStep: View {
                     .foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding()
-            .background(VocaDesign.accent.opacity(0.05))
-            .cornerRadius(8)
-            .padding(.horizontal)
-
-            Spacer()
+            .vocaCard()
         }
-        .padding()
+        .padding(16)
     }
 }
 
@@ -390,9 +375,9 @@ struct OnboardingPermissionRow: View {
 
     private var statusColor: Color {
         switch status {
-        case .granted: return .green
+        case .granted: return VocaDesign.accent
         case .denied: return .red
-        case .notDetermined: return .gray
+        case .notDetermined: return .secondary
         }
     }
 }
@@ -403,16 +388,10 @@ struct HotkeyConfigStep: View {
 
     var body: some View {
         VStack(spacing: 16) {
-            Text("Choose how to activate VocaMac.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal)
-
-            VStack(spacing: 16) {
+            VStack(alignment: .leading, spacing: 16) {
                 // Activation Mode
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Activation Mode")
+                    Text("Activation mode")
                         .font(.caption)
                         .fontWeight(.semibold)
                         .foregroundStyle(.secondary)
@@ -426,6 +405,7 @@ struct HotkeyConfigStep: View {
                         }
                     }
                     .pickerStyle(.radioGroup)
+                    .labelsHidden()
 
                     Text(appState.activationMode.description)
                         .font(.caption)
@@ -436,7 +416,7 @@ struct HotkeyConfigStep: View {
 
                 // Hotkey Selection
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Hotkey")
+                    Text("Shortcut")
                         .font(.caption)
                         .fontWeight(.semibold)
                         .foregroundStyle(.secondary)
@@ -451,7 +431,7 @@ struct HotkeyConfigStep: View {
                     Divider()
 
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("Double-tap Speed")
+                        Text("Double-tap speed")
                             .font(.caption)
                             .fontWeight(.semibold)
                             .foregroundStyle(.secondary)
@@ -478,13 +458,10 @@ struct HotkeyConfigStep: View {
                     }
                 }
             }
-            .padding()
-            .background(VocaDesign.surface, in: RoundedRectangle(cornerRadius: 16))
-            .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(VocaDesign.line))
-
-            Spacer()
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .vocaCard()
         }
-        .padding()
+        .padding(16)
         // Keep the live listener aligned with wizard fields.
         // Completion syncs the full persisted config.
         .onChange(of: appState.activationMode) {
@@ -514,14 +491,6 @@ struct QuickTestStep: View {
 
     var body: some View {
         VStack(spacing: 16) {
-            Text("Let's test your setup with a quick recording.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal)
-
-            Spacer()
-
             VStack(spacing: 16) {
                 // Recording button
                 Button(action: toggleRecording) {
@@ -567,8 +536,8 @@ struct QuickTestStep: View {
                     VStack(alignment: .leading, spacing: 8) {
                         HStack(spacing: 8) {
                             Image(systemName: "checkmark.circle.fill")
-                                .foregroundStyle(.green)
-                            Text("Transcription Result")
+                                .foregroundStyle(VocaDesign.accent)
+                            Text("Transcription result")
                                 .font(.caption)
                                 .fontWeight(.semibold)
                         }
@@ -576,9 +545,10 @@ struct QuickTestStep: View {
                         Text(result)
                             .font(.subheadline)
                             .textSelection(.enabled)
-                            .padding()
-                            .background(Color.green.opacity(0.1))
-                            .cornerRadius(6)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(12)
+                            .background(VocaDesign.accent.opacity(0.12),
+                                        in: RoundedRectangle(cornerRadius: 8))
 
                         // Only offered when the transcript actually shows the
                         // problem. A clean first dictation is no argument for
@@ -598,25 +568,21 @@ struct QuickTestStep: View {
                 }
             }
             .frame(maxWidth: .infinity)
-            .padding()
-            .background(VocaDesign.surface, in: RoundedRectangle(cornerRadius: 16))
-            .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(VocaDesign.line))
+            .vocaCard()
 
-            Spacer()
-
-            HStack(spacing: 8) {
+            HStack(alignment: .top, spacing: 8) {
                 Image(systemName: "info.circle.fill")
                     .font(.caption)
                     .foregroundStyle(VocaDesign.accent)
                 Text("Try: “Today is a good day to try something new.” Use the button above; this practice stays here and is not pasted into another app.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-
-            Spacer()
+            .padding(.horizontal, 4)
         }
-        .padding()
+        .padding(16)
         .onChange(of: appState.settingsTestResultText) { _, result in
             testResult = result
         }
@@ -656,7 +622,7 @@ struct QuickTestStep: View {
                     } else {
                         Image(systemName: "checkmark.circle.fill")
                             .font(.caption)
-                            .foregroundStyle(.green)
+                            .foregroundStyle(VocaDesign.accent)
                         Text("Cleanup is on. You can carry on — it finishes in the background.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -734,23 +700,21 @@ struct CompleteStep: View {
     }
 
     var body: some View {
-        VStack(spacing: 24) {
-            Spacer()
-
-            // Success icon
-            Image(systemName: permissionsReady ? "checkmark.circle.fill" : "exclamationmark.circle")
-                .font(.system(size: 64))
-                .foregroundStyle(permissionsReady ? VocaDesign.accent : Color.orange)
-
-            // Heading
-            VStack(spacing: 8) {
-                Text(permissionsReady ? "Your voice has a new home." : "Finish permissions to start.")
-                    .font(.title)
-                    .fontWeight(.bold)
-
-                Text("Find the microphone in your menu bar")
-                    .font(.title3)
-                    .foregroundStyle(.secondary)
+        // The wizard header already carries this step's title, so the panel
+        // states the outcome once, on the same left margin as every other step.
+        VStack(alignment: .leading, spacing: 20) {
+            HStack(spacing: 12) {
+                Image(systemName: permissionsReady ? "checkmark.circle.fill" : "exclamationmark.circle")
+                    .font(.system(size: 30))
+                    .foregroundStyle(permissionsReady ? VocaDesign.accent : Color.orange)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(permissionsReady ? "Your voice has a new home." : "Finish permissions to start.")
+                        .font(.title3.weight(.semibold))
+                    Text("Find the microphone in your menu bar.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
             }
 
             // Summary
@@ -776,9 +740,7 @@ struct CompleteStep: View {
                 SummaryItem(icon: "keyboard", text: "Hotkey: \(KeyCodeReference.displayName(for: HotKeyCombo(keyCode: appState.hotKeyCode, modifiers: appState.hotKeyModifiers)))")
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding()
-            .background(Color.green.opacity(0.05))
-            .cornerRadius(8)
+            .vocaCard()
 
             // Launch at Login option
             Toggle(isOn: Binding(
@@ -787,7 +749,7 @@ struct CompleteStep: View {
             )) {
                 HStack(spacing: 10) {
                     Image(systemName: "sunrise.fill")
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(VocaDesign.accent)
                         .frame(width: 20)
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Launch at Login")
@@ -796,13 +758,12 @@ struct CompleteStep: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
+                    Spacer(minLength: 16)
                 }
             }
             .toggleStyle(.switch)
-            .controlSize(.small)
-            .padding()
-            .background(VocaDesign.accent.opacity(0.05))
-            .cornerRadius(8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .vocaCard()
 
             if !appState.transcriptCleanupEnabled {
                 HStack(spacing: 8) {
@@ -816,16 +777,11 @@ struct CompleteStep: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
 
-            Spacer()
-
             Text("You can adjust settings anytime from the VocaMac menu.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-
-            Spacer()
         }
-        .padding()
+        .padding(16)
     }
 }
 
@@ -837,7 +793,7 @@ struct SummaryItem: View {
         HStack(spacing: 12) {
             Image(systemName: icon)
                 .font(.caption)
-                .foregroundStyle(.green)
+                .foregroundStyle(VocaDesign.accent)
                 .frame(width: 20)
 
             Text(text)

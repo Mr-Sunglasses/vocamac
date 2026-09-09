@@ -570,6 +570,7 @@ struct MenuBarView: View {
             } label: {
                 HStack {
                     Image(systemName: "gear")
+                        .frame(width: 16)
                     Text("Settings")
                     Spacer()
                     Text("⌘,")
@@ -592,6 +593,7 @@ struct MenuBarView: View {
             } label: {
                 HStack {
                     Image(systemName: "power")
+                        .frame(width: 16)
                     Text("Quit VocaMac")
                     Spacer()
                     Text("⌘Q")
@@ -629,7 +631,7 @@ struct MenuBarView: View {
     private var statusColor: Color {
         if appState.isAutoPaused { return .orange }
         switch appState.appStatus {
-        case .idle:       return .green
+        case .idle:       return VocaDesign.success
         case .recording:  return Color(nsColor: BrandAssets.brandGreen)
         case .processing: return .yellow
         case .error:      return .orange

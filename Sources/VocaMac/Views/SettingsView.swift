@@ -43,22 +43,33 @@ struct SettingsView: View {
                 Divider()
             }
             VStack(spacing: 0) {
-                HStack(alignment: .center, spacing: 12) {
-                    VocaPageHeader(title: (selectedPage ?? .dictation).title,
-                                   subtitle: (selectedPage ?? .dictation).subtitle)
+                // The toggle leads the header the way a split-view control does
+                // in the toolbar. Borderless keeps a utility control from
+                // outranking the page it sits above.
+                HStack(alignment: .top, spacing: 8) {
                     Button {
                         withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
                             isSidebarVisible.toggle()
                         }
                     } label: {
                         Image(systemName: "sidebar.left")
+                            .font(.system(size: 15, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 24, height: 24)
+                            .contentShape(Rectangle())
                     }
-                    .vocaGlassButton()
+                    .buttonStyle(.plain)
+                    .padding(.top, 20)
                     .accessibilityLabel(isSidebarVisible ? "Hide sidebar" : "Show sidebar")
                     .help(isSidebarVisible ? "Hide sidebar" : "Show sidebar")
-                    .padding(.trailing, 24)
+
+                    VocaPageHeader(title: (selectedPage ?? .dictation).title,
+                                   subtitle: (selectedPage ?? .dictation).subtitle,
+                                   horizontalPadding: 0)
                 }
-                Divider().padding(.horizontal, 24)
+                .padding(.leading, 18)
+                .padding(.trailing, 20)
+                Divider().padding(.horizontal, 20)
                 settingsDetail
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
@@ -99,40 +110,24 @@ struct SettingsView: View {
             .padding(16)
             SettingsSidebarSearchField(text: $searchText)
 
-            ScrollView {
-                VStack(spacing: 3) {
-                    ForEach(visiblePages) { page in
-                        Button {
-                            selectedPage = page
-                        } label: {
-                            HStack(spacing: 10) {
-                                Image(systemName: page.systemImage)
-                                    .font(.system(size: 15, weight: .medium))
-                                    .foregroundStyle(selectedPage == page ? VocaDesign.accent : .secondary)
-                                    .frame(width: 22)
-                                Text(page.title)
-                                    .font(.system(size: 13, weight: selectedPage == page ? .semibold : .regular))
-                                Spacer(minLength: 0)
-                                if hasSearchQuery {
-                                    Text("\(matchCounts[page] ?? 0)").font(.caption).foregroundStyle(.secondary)
-                                }
-                            }
-                            .foregroundStyle(.primary)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                            .contentShape(RoundedRectangle(cornerRadius: 12))
-                            .modifier(SidebarSelectionSurface(isSelected: selectedPage == page))
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityAddTraits(selectedPage == page ? [.isSelected] : [])
-                    }
-                    if hasSearchQuery && visiblePages.isEmpty {
-                        ContentUnavailableView.search(text: searchText)
-                    }
+            // A real List keeps arrow-key navigation, type-select, the focus
+            // ring, and the system's active/inactive selection colours. Rolling
+            // the rows by hand as buttons loses all four.
+            List(selection: $selectedPage) {
+                ForEach(visiblePages) { page in
+                    Label(page.title, systemImage: page.systemImage)
+                        .badge(hasSearchQuery ? (matchCounts[page] ?? 0) : 0)
+                        .tag(page)
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
             }
+            .listStyle(.sidebar)
+            .scrollContentBackground(.hidden)
+            .overlay {
+                if hasSearchQuery && visiblePages.isEmpty {
+                    ContentUnavailableView.search(text: searchText)
+                }
+            }
+            Divider()
             SettingsSidebarFooter()
                 .padding(12)
         }
@@ -206,14 +201,6 @@ struct SettingsSidebarSearchField: View {
         .padding(.horizontal, 12)
         .padding(.top, 8)
         .padding(.bottom, 6)
-    }
-}
-
-private struct SidebarSelectionSurface: ViewModifier {
-    let isSelected: Bool
-    @ViewBuilder
-    func body(content: Content) -> some View {
-        if isSelected { content.vocaGlass(selected: true) } else { content }
     }
 }
 
@@ -319,9 +306,11 @@ struct SettingsSidebarFooter: View {
     private var statusColor: Color {
         if appState.isAutoPaused { return .orange }
         switch appState.appStatus {
-        case .idle: return .green
+        case .idle: return VocaDesign.success
         case .recording: return Color(nsColor: BrandAssets.brandGreen)
-        case .processing: return .purple
+        // Matches MenuBarView.statusColor; the same state must not change hue
+        // between the menu bar and the settings footer.
+        case .processing: return .yellow
         case .error: return .orange
         }
     }
@@ -333,73 +322,73 @@ struct DictationSettingsPage: View {
     @EnvironmentObject var appState: AppState
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
-                VStack(alignment: .leading, spacing: 14) {
-                    Label("Start dictating", systemImage: "mic")
-                        .font(.headline)
-                    Picker("Activation mode", selection: $appState.activationMode) {
-                        ForEach(ActivationMode.allCases) { mode in
-                            Text(mode.displayName).tag(mode)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .onChange(of: appState.activationMode) { appState.syncHotKeyConfiguration() }
-                    Text(appState.activationMode.description)
-                        .font(.callout).foregroundStyle(.secondary)
-                    Divider()
-                    HotKeySelectionControl(
-                        pickerLabel: "Shortcut",
-                        footerText: "Choose a preset or record your own. This key is reserved while VocaMac is running."
-                    )
-                    if appState.activationMode == .doubleTapToggle {
-                        HStack {
-                            Text("Double-tap speed")
-                            Slider(value: $appState.doubleTapThreshold, in: 0.2...0.8, step: 0.05,
-                                   onEditingChanged: { editing in
-                                if !editing { appState.syncHotKeyConfiguration() }
-                            })
-                            Text("\(String(format: "%.2f", appState.doubleTapThreshold))s")
-                                .monospacedDigit().frame(width: 44)
-                        }
-                        Text("A longer interval makes double-tapping more forgiving.")
-                            .font(.caption).foregroundStyle(.secondary)
+        VocaSettingsPageContent {
+            VocaSettingsGroup("Start Dictating") {
+                Picker("Activation mode", selection: $appState.activationMode) {
+                    ForEach(ActivationMode.allCases) { mode in
+                        Text(mode.displayName).tag(mode)
                     }
                 }
-                .vocaCard()
-
-                VStack(alignment: .leading, spacing: 16) {
-                    Label("Your text", systemImage: "text.cursor")
-                        .font(.headline)
+                .pickerStyle(.segmented)
+                .onChange(of: appState.activationMode) { appState.syncHotKeyConfiguration() }
+                Text(appState.activationMode.description)
+                    .font(.callout).foregroundStyle(.secondary)
+                Divider()
+                HotKeySelectionControl(
+                    pickerLabel: "Shortcut",
+                    footerText: "Choose a preset or record your own. This key is reserved while VocaMac is running."
+                )
+                if appState.activationMode == .doubleTapToggle {
                     HStack {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Add a trailing space")
-                            Text("Keep consecutive dictations from running together.")
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
-                        Spacer(minLength: 16)
-                        Toggle("Add a trailing space", isOn: $appState.appendTrailingSpace)
-                            .labelsHidden()
+                        Text("Double-tap speed")
+                        Slider(value: $appState.doubleTapThreshold, in: 0.2...0.8, step: 0.05,
+                               onEditingChanged: { editing in
+                            if !editing { appState.syncHotKeyConfiguration() }
+                        })
+                        Text("\(String(format: "%.2f", appState.doubleTapThreshold))s")
+                            .monospacedDigit().frame(width: 44)
                     }
-                    Divider()
-                    HStack {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Capitalize sentences")
-                            Text("Capitalize the beginning of each sentence while preserving existing capitals.")
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
-                        Spacer(minLength: 16)
-                        Toggle("Capitalize sentences", isOn: $appState.autoCapitalize)
-                            .labelsHidden()
-                    }
+                    Text("A longer interval makes double-tapping more forgiving.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
-                .toggleStyle(.switch)
-                .vocaCard()
             }
-            .frame(maxWidth: 740)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(24)
-            .padding(.top, -4)
+
+            VocaSettingsGroup("Your Text") {
+                SettingsToggleRow(
+                    title: "Add a trailing space",
+                    detail: "Keep consecutive dictations from running together.",
+                    isOn: $appState.appendTrailingSpace
+                )
+                Divider()
+                SettingsToggleRow(
+                    title: "Capitalize sentences",
+                    detail: "Capitalize the beginning of each sentence while preserving existing capitals.",
+                    isOn: $appState.autoCapitalize
+                )
+            }
+        }
+    }
+}
+
+/// A label-plus-explanation row with the switch on the trailing edge, used by
+/// the hand-built settings pages so their toggle rows stay identical.
+struct SettingsToggleRow: View {
+    let title: String
+    let detail: String
+    @Binding var isOn: Bool
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                Text(detail)
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 16)
+            Toggle(title, isOn: $isOn)
+                .labelsHidden()
+                .toggleStyle(.switch)
         }
     }
 }
@@ -656,7 +645,7 @@ struct PermissionRow: View {
             case .granted:
                 Text("Granted")
                     .font(.caption)
-                    .foregroundStyle(.green)
+                    .foregroundStyle(VocaDesign.success)
             case .notDetermined:
                 Button("Grant") { action() }
                     .controlSize(.small)
@@ -677,7 +666,7 @@ struct PermissionRow: View {
 
     private var statusColor: Color {
         switch status {
-        case .granted: return .green
+        case .granted: return VocaDesign.success
         case .notDetermined: return .orange
         case .denied: return .red
         }
@@ -707,7 +696,7 @@ struct PerformanceSettingsTab: View {
                         appState.whisperService.isModelLoaded ? "Model loaded" : "Model unloaded",
                         systemImage: appState.whisperService.isModelLoaded ? "checkmark.circle.fill" : "memorychip"
                     )
-                    .foregroundStyle(appState.whisperService.isModelLoaded ? .green : .orange)
+                    .foregroundStyle(appState.whisperService.isModelLoaded ? VocaDesign.success : .orange)
                     Spacer()
                     if appState.whisperService.isModelLoaded {
                         Text(loadedModelLabel)
@@ -937,7 +926,7 @@ struct ModelSettingsTab: View {
                     GroupBox {
                         HStack {
                             Image(systemName: "checkmark.seal.fill")
-                                .foregroundStyle(.green)
+                                .foregroundStyle(VocaDesign.success)
                                 .font(.title3)
                             VStack(alignment: .leading) {
                                 Text("Active Model: \(current.size.displayName)")
@@ -1169,7 +1158,7 @@ struct ModelRow: View {
         HStack {
             // Status icon
             Image(systemName: model.statusIconName)
-                .foregroundStyle(model.isActive ? .green : .secondary)
+                .foregroundStyle(model.isActive ? VocaDesign.success : .secondary)
                 .frame(width: 20)
 
             // Model info
@@ -1244,7 +1233,7 @@ struct ModelRow: View {
             if model.isActive {
                 Label("Active", systemImage: "checkmark")
                     .font(.caption)
-                    .foregroundStyle(.green)
+                    .foregroundStyle(VocaDesign.success)
             } else if !model.isSupported {
                 if model.isLoading || model.downloadProgress != nil {
                     EmptyView()
