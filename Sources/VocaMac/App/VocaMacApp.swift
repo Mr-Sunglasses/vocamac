@@ -32,8 +32,9 @@ final class SettingsWindowManager: ObservableObject {
             defer: false
         )
         window.title = "VocaMac Settings"
-        window.titlebarAppearsTransparent = true
-        window.toolbarStyle = .unified
+        // Keep a normal title bar. The settings shell owns its sidebar control;
+        // a SwiftUI split-view toolbar can move Form pages under AppKit chrome.
+        window.titlebarAppearsTransparent = false
         window.backgroundColor = .windowBackgroundColor
         window.contentView = NSHostingView(rootView: settingsView)
         window.center()

@@ -17,7 +17,8 @@ struct SettingsView: View {
     @State private var selectedPage: SettingsPage? = .dictation
     @State private var searchText = ""
     @State private var pageBeforeSearch: SettingsPage = .dictation
-    @State private var columnVisibility: NavigationSplitViewVisibility = .all
+    @State private var isSidebarVisible = true
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var matchCounts: [SettingsPage: Int] {
         SettingsSearchIndex.matchCounts(query: searchText)
@@ -35,19 +36,34 @@ struct SettingsView: View {
     }
 
     var body: some View {
-        NavigationSplitView(columnVisibility: $columnVisibility) {
-            settingsSidebar
-                .navigationSplitViewColumnWidth(min: 210, ideal: 224, max: 260)
-        } detail: {
+        HStack(spacing: 0) {
+            if isSidebarVisible {
+                settingsSidebar
+                    .frame(width: 216)
+                Divider()
+            }
             VStack(spacing: 0) {
-                VocaPageHeader(title: (selectedPage ?? .dictation).title,
-                               subtitle: (selectedPage ?? .dictation).subtitle)
+                HStack(alignment: .center, spacing: 12) {
+                    VocaPageHeader(title: (selectedPage ?? .dictation).title,
+                                   subtitle: (selectedPage ?? .dictation).subtitle)
+                    Button {
+                        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
+                            isSidebarVisible.toggle()
+                        }
+                    } label: {
+                        Image(systemName: "sidebar.left")
+                    }
+                    .vocaGlassButton()
+                    .accessibilityLabel(isSidebarVisible ? "Hide sidebar" : "Show sidebar")
+                    .help(isSidebarVisible ? "Hide sidebar" : "Show sidebar")
+                    .padding(.trailing, 24)
+                }
+                Divider().padding(.horizontal, 24)
                 settingsDetail
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
             .background(VocaDesign.canvas)
         }
-        .navigationSplitViewStyle(.balanced)
         .onChange(of: searchText) { _, newValue in
             let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
             if trimmed.isEmpty {
@@ -65,7 +81,7 @@ struct SettingsView: View {
                 pageBeforeSearch = newValue
             }
         }
-        .frame(minWidth: 760, minHeight: 560)
+        .frame(minWidth: 760, minHeight: 580)
         .tint(VocaDesign.accent)
         .groupBoxStyle(VocaGroupBoxStyle())
     }
@@ -103,7 +119,7 @@ struct SettingsView: View {
                             }
                             .foregroundStyle(.primary)
                             .padding(.horizontal, 12)
-                            .padding(.vertical, 10)
+                            .padding(.vertical, 8)
                             .contentShape(RoundedRectangle(cornerRadius: 12))
                             .modifier(SidebarSelectionSurface(isSelected: selectedPage == page))
                         }
@@ -121,6 +137,7 @@ struct SettingsView: View {
                 .padding(12)
         }
         .background(VocaSidebarMaterial())
+        .clipped()
     }
 
     @ViewBuilder
@@ -382,7 +399,7 @@ struct DictationSettingsPage: View {
             .frame(maxWidth: 740)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(24)
-            .padding(.top, -8)
+            .padding(.top, -4)
         }
     }
 }

@@ -17,7 +17,7 @@ struct VocaCard: ViewModifier {
     func body(content: Content) -> some View {
         content
             .padding(16)
-            .background(VocaDesign.surface, in: RoundedRectangle(cornerRadius: 16))
+            .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 12))
     }
 }
 
@@ -37,8 +37,7 @@ struct VocaPageHeader: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 24)
-        .padding(.top, 18)
-        .padding(.bottom, 8)
+        .padding(.vertical, 20)
     }
 }
 
@@ -114,5 +113,25 @@ struct VocaSidebarMaterial: NSViewRepresentable {
         view.state = .followsWindowActiveState
         view.wantsLayer = true
         view.layer?.backgroundColor = reduceTransparency ? NSColor.windowBackgroundColor.cgColor : nil
+    }
+}
+
+/// Compact settings groups with a consistent heading and bounded row spacing.
+struct VocaSettingsGroup<Content: View>: View {
+    let title: String
+    @ViewBuilder let content: Content
+
+    init(_ title: String, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(title).font(.headline).accessibilityAddTraits(.isHeader)
+            content
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .vocaCard()
     }
 }
