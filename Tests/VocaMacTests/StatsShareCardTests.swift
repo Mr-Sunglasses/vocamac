@@ -187,6 +187,62 @@ final class StatsShareCardTests: XCTestCase {
         }
     }
 
+    func testPluralizedCountsUseSingularAndGroupedPluralForms() {
+        XCTAssertEqual(StatsShareComposer.pluralized(1, "day"), "1 day")
+        XCTAssertEqual(StatsShareComposer.pluralized(12_500, "word"), "12,500 words")
+    }
+
+    @MainActor
+    func testFailedComposerOpenDoesNotAttemptToReplaceClipboard() {
+        var copied = false
+
+        let outcome = StatsShareExporter.share(
+            makeSnapshot(),
+            to: .x,
+            openURL: { _ in false },
+            copyCard: { _ in
+                copied = true
+                return true
+            }
+        )
+
+        XCTAssertEqual(outcome, .failed)
+        XCTAssertFalse(copied)
+    }
+
+    @MainActor
+    func testSuccessfulComposerOpenCopiesCardAfterOpening() {
+        var events: [String] = []
+
+        let outcome = StatsShareExporter.share(
+            makeSnapshot(),
+            to: .linkedIn,
+            openURL: { _ in
+                events.append("opened")
+                return true
+            },
+            copyCard: { _ in
+                events.append("copied")
+                return true
+            }
+        )
+
+        XCTAssertEqual(outcome, .shared)
+        XCTAssertEqual(events, ["opened", "copied"])
+    }
+
+    @MainActor
+    func testOpenComposerReportsWhenCardCopyFails() {
+        let outcome = StatsShareExporter.share(
+            makeSnapshot(),
+            to: .x,
+            openURL: { _ in true },
+            copyCard: { _ in false }
+        )
+
+        XCTAssertEqual(outcome, .sharedWithoutCard)
+    }
+
     /// The encoder's actual guarantee, exercised with separators the generated
     /// post text does not happen to contain.
     func testEncoderEscapesSeparatorsInsideValues() throws {

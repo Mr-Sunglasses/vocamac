@@ -20,7 +20,9 @@ final class StatsManagerTests: XCTestCase {
         cancellables = []
     }
 
+    @MainActor
     override func tearDown() {
+        statsManager?.flushPendingSaves()
         try? FileManager.default.removeItem(at: tempFileURL)
         super.tearDown()
     }
@@ -102,6 +104,12 @@ final class StatsManagerTests: XCTestCase {
         let calendar = Calendar.current
         let today = Date()
         let threeDaysAgo = calendar.date(byAdding: .day, value: -3, to: today)!
+        var currentDate = threeDaysAgo
+        statsManager = StatsManager(
+            statsFileURL: tempFileURL,
+            calendar: calendar,
+            now: { currentDate }
+        )
 
         // 1. Record for 3 days ago
         let t1 = VocaTranscription(
@@ -116,6 +124,7 @@ final class StatsManagerTests: XCTestCase {
         XCTAssertEqual(statsManager.stats.currentStreak, 1)
 
         // 2. Record for today (2 day gap)
+        currentDate = today
         let t2 = VocaTranscription(
             text: "Today transcription",
             duration: 1.0,
@@ -154,10 +163,14 @@ final class StatsManagerTests: XCTestCase {
     func testStreakUsesTranscriptionDateRatherThanCurrentDate() {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!
-        statsManager = StatsManager(statsFileURL: tempFileURL, calendar: calendar)
 
         let firstDay = Date(timeIntervalSince1970: 946_684_800) // 2000-01-01 00:00:00 UTC
         let secondDay = Date(timeIntervalSince1970: 946_771_200) // 2000-01-02 00:00:00 UTC
+        statsManager = StatsManager(
+            statsFileURL: tempFileURL,
+            calendar: calendar,
+            now: { secondDay }
+        )
 
         statsManager.recordTranscription(VocaTranscription(
             text: "first day",
@@ -184,10 +197,10 @@ final class StatsManagerTests: XCTestCase {
     func testSameDayTranscriptionsDoNotIncrementStreak() {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!
-        statsManager = StatsManager(statsFileURL: tempFileURL, calendar: calendar)
 
         let first = Date(timeIntervalSince1970: 946_684_800) // 2000-01-01 00:00:00 UTC
         let second = Date(timeIntervalSince1970: 946_728_000) // 2000-01-01 12:00:00 UTC
+        statsManager = StatsManager(statsFileURL: tempFileURL, calendar: calendar, now: { second })
 
         statsManager.recordTranscription(VocaTranscription(
             text: "morning words",
@@ -252,5 +265,169 @@ final class StatsManagerTests: XCTestCase {
         XCTAssertEqual(decoded.currentStreak, 0)
         XCTAssertNil(decoded.lastUsageDate)
         XCTAssertTrue(decoded.dailyWordCounts.isEmpty)
+    }
+
+    func testStatsDecodeSalvagesValidFieldsAndRepairsInvalidValues() throws {
+        let json = Data("""
+        {
+          "totalWords": 42,
+          "totalTranscriptions": "broken",
+          "totalAudioDurationSeconds": -10,
+          "currentStreak": -3,
+          "bestStreak": 4,
+          "dailyWordCounts": {"2026-09-10": -8}
+        }
+        """.utf8)
+
+        let decoded = try JSONDecoder().decode(UserStats.self, from: json)
+
+        XCTAssertEqual(decoded.totalWords, 42)
+        XCTAssertEqual(decoded.totalTranscriptions, 0)
+        XCTAssertEqual(decoded.totalAudioDurationSeconds, 0)
+        XCTAssertEqual(decoded.currentStreak, 0)
+        XCTAssertEqual(decoded.bestStreak, 4)
+        XCTAssertEqual(decoded.dailyWordCounts["2026-09-10"], 0)
+    }
+
+    @MainActor
+    func testNonGregorianSystemCalendarStillWritesGregorianDayKeys() {
+        var calendar = Calendar(identifier: .buddhist)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let date = Date(timeIntervalSince1970: 1_704_067_200) // 2024-01-01 00:00:00 UTC
+        statsManager = StatsManager(statsFileURL: tempFileURL, calendar: calendar, now: { date })
+
+        statsManager.recordTranscription(VocaTranscription(
+            text: "calendar test",
+            duration: 1,
+            detectedLanguage: "en",
+            audioLengthSeconds: 1,
+            modelUsed: .tiny,
+            timestamp: date
+        ))
+
+        XCTAssertEqual(statsManager.stats.dailyWordCounts["2024-01-01"], 2)
+        XCTAssertNil(statsManager.stats.dailyWordCounts["2567-01-01"])
+    }
+
+    @MainActor
+    func testOutOfOrderTranscriptionsRebuildStreakWithoutRegressingLastUsage() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let firstDay = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 9, day: 8)))
+        let secondDay = try XCTUnwrap(calendar.date(byAdding: .day, value: 1, to: firstDay))
+        let thirdDay = try XCTUnwrap(calendar.date(byAdding: .day, value: 2, to: firstDay))
+        statsManager = StatsManager(statsFileURL: tempFileURL, calendar: calendar, now: { thirdDay })
+
+        for date in [firstDay, thirdDay, secondDay] {
+            statsManager.recordTranscription(VocaTranscription(
+                text: "out of order",
+                duration: 1,
+                detectedLanguage: "en",
+                audioLengthSeconds: 1,
+                modelUsed: .tiny,
+                timestamp: date
+            ))
+        }
+
+        XCTAssertEqual(statsManager.stats.currentStreak, 3)
+        XCTAssertEqual(statsManager.stats.bestStreak, 3)
+        XCTAssertEqual(statsManager.stats.lastUsageDate, thirdDay)
+    }
+
+    @MainActor
+    func testRefreshingStreakExpiresItButPreservesBest() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let firstDay = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 9, day: 1)))
+        let secondDay = try XCTUnwrap(calendar.date(byAdding: .day, value: 1, to: firstDay))
+        let fifthDay = try XCTUnwrap(calendar.date(byAdding: .day, value: 4, to: firstDay))
+        var currentDate = secondDay
+        statsManager = StatsManager(statsFileURL: tempFileURL, calendar: calendar, now: { currentDate })
+
+        for date in [firstDay, secondDay] {
+            statsManager.recordTranscription(VocaTranscription(
+                text: "streak words",
+                duration: 1,
+                detectedLanguage: "en",
+                audioLengthSeconds: 1,
+                modelUsed: .tiny,
+                timestamp: date
+            ))
+        }
+        XCTAssertEqual(statsManager.stats.currentStreak, 2)
+
+        currentDate = fifthDay
+        statsManager.refreshCurrentStreak()
+
+        XCTAssertEqual(statsManager.stats.currentStreak, 0)
+        XCTAssertEqual(statsManager.stats.bestStreak, 2)
+    }
+
+    @MainActor
+    func testInvalidAudioDurationsDoNotPoisonTotalsOrPersistence() {
+        let transcription = VocaTranscription(
+            text: "valid words",
+            duration: 1,
+            detectedLanguage: "en",
+            audioLengthSeconds: .nan,
+            modelUsed: .tiny
+        )
+
+        statsManager.recordTranscription(transcription)
+        statsManager.flushPendingSaves()
+
+        XCTAssertEqual(statsManager.stats.totalAudioDurationSeconds, 0)
+        XCTAssertEqual(statsManager.stats.averageWPM, 0)
+        XCTAssertNoThrow(try Data(contentsOf: tempFileURL))
+
+        let reloaded = StatsManager(statsFileURL: tempFileURL)
+        XCTAssertEqual(reloaded.stats.totalTranscriptions, 1)
+        XCTAssertEqual(reloaded.stats.totalWords, 2)
+        XCTAssertEqual(reloaded.stats.totalAudioDurationSeconds, 0)
+    }
+
+    @MainActor
+    func testSaveCreatesMissingParentDirectory() throws {
+        let parent = FileManager.default.temporaryDirectory
+            .appendingPathComponent("stats_test_dir_\(UUID().uuidString)", isDirectory: true)
+        let nestedURL = parent.appendingPathComponent("nested/stats.json")
+        defer { try? FileManager.default.removeItem(at: parent) }
+        statsManager = StatsManager(statsFileURL: nestedURL)
+
+        statsManager.recordTranscription(VocaTranscription(
+            text: "persist me",
+            duration: 1,
+            detectedLanguage: "en",
+            audioLengthSeconds: 1,
+            modelUsed: .tiny
+        ))
+        statsManager.flushPendingSaves()
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: nestedURL.path))
+        let decoded = try JSONDecoder().decode(UserStats.self, from: Data(contentsOf: nestedURL))
+        XCTAssertEqual(decoded.totalTranscriptions, 1)
+    }
+
+    @MainActor
+    func testCountsSaturateInsteadOfOverflowing() throws {
+        let date = Date(timeIntervalSince1970: 1_789_000_000)
+        var savedStats = UserStats()
+        savedStats.totalWords = Int.max
+        savedStats.totalTranscriptions = Int.max
+        savedStats.dailyWordCounts = ["2026-09-10": Int.max]
+        try JSONEncoder().encode(savedStats).write(to: tempFileURL)
+        statsManager = StatsManager(statsFileURL: tempFileURL, now: { date })
+
+        statsManager.recordTranscription(VocaTranscription(
+            text: "one more",
+            duration: 1,
+            detectedLanguage: "en",
+            audioLengthSeconds: 1,
+            modelUsed: .tiny,
+            timestamp: date
+        ))
+
+        XCTAssertEqual(statsManager.stats.totalWords, Int.max)
+        XCTAssertEqual(statsManager.stats.totalTranscriptions, Int.max)
     }
 }
