@@ -109,7 +109,8 @@ struct MenuBarView: View {
     @ObservedObject var settingsManager: SettingsWindowManager
     @ObservedObject var updateWindowManager: UpdateWindowManager
     @StateObject private var processMonitor = ProcessMonitor(useTimer: false)
-    @State private var audioDevices: [AudioDevice] = []
+    @State private var audioCatalog = AudioDeviceCatalog.shared
+    private var audioDevices: [AudioDevice] { audioCatalog.devices }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -367,7 +368,7 @@ struct MenuBarView: View {
                 }
 
                 if audioDevices.isEmpty {
-                    Text("No audio input devices found")
+                    Text(audioCatalog.hasLoaded ? "No audio input devices found" : "Loading microphones…")
                 }
             } label: {
                 HStack(spacing: 8) {
@@ -404,11 +405,12 @@ struct MenuBarView: View {
                     .foregroundStyle(.orange)
             }
         }
-        .onAppear {
-            refreshAudioDevices()
+        .task {
+            await audioCatalog.refresh()
+            syncAudioDeviceSelection()
         }
-        .onReceive(NotificationCenter.default.publisher(for: .vocaAudioDevicesChanged)) { _ in
-            refreshAudioDevices()
+        .onChange(of: audioCatalog.devices) {
+            syncAudioDeviceSelection()
         }
     }
 
@@ -430,7 +432,7 @@ struct MenuBarView: View {
     }
 
     private var selectedAudioDeviceIsUnavailable: Bool {
-        !appState.selectedAudioDeviceID.isEmpty && selectedAudioDevice == nil
+        audioCatalog.hasLoaded && !appState.selectedAudioDeviceID.isEmpty && selectedAudioDevice == nil
     }
 
     private var selectedAudioDeviceDisplayName: String {
@@ -443,11 +445,14 @@ struct MenuBarView: View {
         let storedName = appState.selectedAudioDeviceName.isEmpty
             ? "Selected microphone"
             : appState.selectedAudioDeviceName
-        return "\(storedName) (Unavailable)"
+        return audioCatalog.hasLoaded ? "\(storedName) (Unavailable)" : storedName
     }
 
     private func refreshAudioDevices() {
-        audioDevices = AudioEngine.availableInputDevices()
+        Task { await audioCatalog.refresh(force: true) }
+    }
+
+    private func syncAudioDeviceSelection() {
         if let selectedAudioDevice {
             appState.selectedAudioDeviceName = selectedAudioDevice.name
         }
