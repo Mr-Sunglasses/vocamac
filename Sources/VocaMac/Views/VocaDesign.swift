@@ -96,25 +96,66 @@ struct VocaSidebarMaterial: NSViewRepresentable {
     }
 }
 
+/// The heading that sits above every settings card.
+///
+/// It carries an icon only where the heading has siblings it must be told
+/// apart from — the speech engines. A heading that is unique on its page
+/// ("Behavior", "Your Text", "Streak") stays text-only, which is also what
+/// `Form(.grouped)` draws for its own `Section` headers.
+struct VocaSectionHeader: View {
+    let title: String
+    var systemImage: String?
+    var subtitle: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 6) {
+                if let systemImage {
+                    Image(systemName: systemImage)
+                        .symbolRenderingMode(.monochrome)
+                        .foregroundStyle(VocaDesign.accent)
+                }
+                Text(title)
+            }
+            .font(.headline)
+            .accessibilityAddTraits(.isHeader)
+
+            if let subtitle {
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(.leading, 8)
+    }
+}
+
 /// Compact settings groups with a consistent heading and bounded row spacing.
 ///
 /// The heading sits above the card so hand-built pages match the `Section`
 /// headers that `Form(.grouped)` draws on the pages still using a `Form`.
 struct VocaSettingsGroup<Content: View>: View {
     let title: String
+    var systemImage: String?
+    var subtitle: String?
     @ViewBuilder let content: Content
 
-    init(_ title: String, @ViewBuilder content: () -> Content) {
+    init(
+        _ title: String,
+        systemImage: String? = nil,
+        subtitle: String? = nil,
+        @ViewBuilder content: () -> Content
+    ) {
         self.title = title
+        self.systemImage = systemImage
+        self.subtitle = subtitle
         self.content = content()
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(title)
-                .font(.headline)
-                .accessibilityAddTraits(.isHeader)
-                .padding(.leading, 8)
+            VocaSectionHeader(title: title, systemImage: systemImage, subtitle: subtitle)
             VStack(alignment: .leading, spacing: 12) {
                 content
             }

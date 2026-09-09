@@ -51,28 +51,29 @@ struct StatsSettingsTab: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 // Key Metrics
-                GroupBox {
-                    VStack(alignment: .leading, spacing: 12) {
-                        HStack {
-                            StatsSectionLabel("Lifetime Totals", systemImage: "chart.bar.fill")
-                            Spacer()
-                            Menu {
-                                ForEach(StatsShareDestination.allCases) { destination in
-                                    Button("Share on \(destination.displayName)") {
-                                        share(to: destination)
-                                    }
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(alignment: .firstTextBaseline) {
+                        VocaSectionHeader(title: "Lifetime Totals")
+                        Spacer()
+                        Menu {
+                            ForEach(StatsShareDestination.allCases) { destination in
+                                Button("Share on \(destination.displayName)") {
+                                    share(to: destination)
                                 }
-                                Divider()
-                                Button("Copy Card Image") { copyCardImage() }
-                            } label: {
-                                Label(shareLabel, systemImage: shareIcon)
                             }
-                            .menuStyle(.borderlessButton)
-                            .fixedSize()
-                            .controlSize(.small)
-                            .help("Post your stats card, or copy it to the clipboard")
+                            Divider()
+                            Button("Copy Card Image") { copyCardImage() }
+                        } label: {
+                            Label(shareLabel, systemImage: shareIcon)
                         }
+                        .menuStyle(.borderlessButton)
+                        .fixedSize()
+                        .controlSize(.small)
+                        .help("Post your stats card, or copy it to the clipboard")
+                        .padding(.trailing, 8)
+                    }
 
+                    VStack(alignment: .leading, spacing: 12) {
                         HStack(spacing: 0) {
                             StatPill(
                                 icon: "text.word.spacing",
@@ -98,90 +99,70 @@ struct StatsSettingsTab: View {
                                 .transition(.opacity)
                         }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .animation(.easeInOut(duration: 0.2), value: shareState)
-                    .padding(8)
+                    .vocaCard()
                 }
 
                 // Performance & Streaks
-                HStack(spacing: 20) {
-                    GroupBox {
-                        VStack(alignment: .leading, spacing: 8) {
-                            StatsSectionLabel("Speed", systemImage: "speedometer")
-                                .padding(.bottom, 4)
+                HStack(alignment: .top, spacing: 20) {
+                    VocaSettingsGroup("Speed") {
+                        Text("\(String(format: "%.1f", appState.statsManager.stats.averageWPM))")
+                            .font(.system(size: 32, weight: .bold, design: .rounded))
+                        + Text(" WPM").font(.headline).foregroundColor(.secondary)
 
-                            Text("\(String(format: "%.1f", appState.statsManager.stats.averageWPM))")
-                                .font(.system(size: 32, weight: .bold, design: .rounded))
-                            + Text(" WPM").font(.headline).foregroundColor(.secondary)
-
-                            Text("Speaking Speed")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(8)
+                        Text("Speaking Speed")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
 
-                    GroupBox {
-                        VStack(alignment: .leading, spacing: 8) {
-                            StatsSectionLabel("Streak", systemImage: "flame.fill")
-                                .padding(.bottom, 4)
+                    VocaSettingsGroup("Streak") {
+                        Text("\(appState.statsManager.stats.currentStreak)")
+                            .font(.system(size: 32, weight: .bold, design: .rounded))
+                        + Text(" days").font(.headline).foregroundColor(.secondary)
 
-                            Text("\(appState.statsManager.stats.currentStreak)")
-                                .font(.system(size: 32, weight: .bold, design: .rounded))
-                            + Text(" days").font(.headline).foregroundColor(.secondary)
-
-                            Text("Best: \(appState.statsManager.stats.bestStreak) days")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(8)
+                        Text("Best: \(appState.statsManager.stats.bestStreak) days")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                 }
 
                 // Daily Activity
-                GroupBox {
-                    VStack(alignment: .leading, spacing: 12) {
-                        StatsSectionLabel("Recent Activity", systemImage: "calendar")
-                            .padding(.bottom, 4)
-
-                        let days = recentDays()
-                        if days.isEmpty {
-                            Text("No activity recorded yet. Start transcribing to see your progress!")
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                                .frame(maxWidth: .infinity, alignment: .center)
-                                .padding(.vertical, 20)
-                        } else {
-                            VStack(spacing: 8) {
-                                ForEach(days, id: \.self) { day in
-                                    HStack {
-                                        Text(formatDateString(day))
-                                            .font(.subheadline)
-                                        Spacer()
-                                        Text("\(appState.statsManager.stats.dailyWordCounts[day] ?? 0) words")
-                                            .font(.subheadline)
-                                            .fontWeight(.medium)
-                                    }
-                                    if day != days.last {
-                                        Divider()
-                                    }
+                VocaSettingsGroup("Recent Activity") {
+                    let days = recentDays()
+                    if days.isEmpty {
+                        Text("No activity recorded yet. Start transcribing to see your progress!")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .center)
+                            .padding(.vertical, 20)
+                    } else {
+                        VStack(spacing: 8) {
+                            ForEach(days, id: \.self) { day in
+                                HStack {
+                                    Text(formatDateString(day))
+                                        .font(.subheadline)
+                                    Spacer()
+                                    Text("\(appState.statsManager.stats.dailyWordCounts[day] ?? 0) words")
+                                        .font(.subheadline)
+                                        .fontWeight(.medium)
+                                }
+                                if day != days.last {
+                                    Divider()
                                 }
                             }
                         }
                     }
-                    .padding(8)
-                }
+            }
 
-                // Reset Button
+                // Reset Button — left-aligned like every other control here.
                 Button(role: .destructive) {
                     showingResetConfirmation = true
                 } label: {
                     Label("Reset All Statistics", systemImage: "trash")
                 }
                 .controlSize(.small)
-                .frame(maxWidth: .infinity, alignment: .center)
-                .padding(.top, 20)
+                .padding(.top, 8)
             }
             .padding()
         }
@@ -283,29 +264,6 @@ struct StatsSettingsTab: View {
         if Calendar.current.isDateInYesterday(date) { return "Yesterday" }
 
         return Self.displayDateFormatter.string(from: date)
-    }
-}
-
-/// Card heading: accent glyph, primary text. Matching the icon to the card's
-/// subject (orange flame, orange timer) made the page look like it had picked
-/// its colours at random.
-struct StatsSectionLabel: View {
-    let title: String
-    let systemImage: String
-
-    init(_ title: String, systemImage: String) {
-        self.title = title
-        self.systemImage = systemImage
-    }
-
-    var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: systemImage)
-                .symbolRenderingMode(.monochrome)
-                .foregroundStyle(VocaDesign.accent)
-            Text(title)
-        }
-        .font(.headline)
     }
 }
 

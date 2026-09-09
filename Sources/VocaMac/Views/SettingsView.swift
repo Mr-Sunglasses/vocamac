@@ -966,28 +966,18 @@ struct ModelSettingsTab: View {
 
                 // Model list, grouped by engine
                 ForEach(modelsByEngine, id: \.engine) { group in
-                    GroupBox {
-                        VStack(alignment: .leading, spacing: 0) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Label(group.engine.displayName, systemImage: engineIconName(group.engine))
-                                    .font(.headline)
-                                Text(group.engine.summary)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            .padding(.bottom, 8)
-                            .padding(.horizontal, 4)
+                    VocaSettingsGroup(
+                        group.engine.displayName,
+                        systemImage: engineIconName(group.engine),
+                        subtitle: group.engine.summary
+                    ) {
+                        ForEach(group.models) { model in
+                            ModelRow(model: model, appState: appState)
 
-                            ForEach(group.models) { model in
-                                ModelRow(model: model, appState: appState)
-
-                                if model.id != group.models.last?.id {
-                                    Divider()
-                                        .padding(.horizontal, 4)
-                                }
+                            if model.id != group.models.last?.id {
+                                Divider()
                             }
                         }
-                        .padding(4)
                     }
                 }
 
@@ -1032,81 +1022,75 @@ struct ModelSettingsTab: View {
     }
 
     private var languageAndHintsSection: some View {
-        GroupBox {
-            VStack(alignment: .leading, spacing: 12) {
-                Label("Language & Hints", systemImage: "globe")
-                    .font(.headline)
+        VocaSettingsGroup("Language & Hints") {
+            TextField("Search languages", text: $languageSearch)
+                .textFieldStyle(.roundedBorder)
 
-                TextField("Search languages", text: $languageSearch)
-                    .textFieldStyle(.roundedBorder)
-
-                Picker("Language", selection: $appState.selectedLanguage) {
-                    ForEach(filteredLanguages) { language in
-                        Text(language.code == "auto"
-                             ? language.displayName
-                             : "\(language.displayName) (\(language.code))")
-                            .tag(language.code)
-                    }
-                }
-
-                if !filteredLanguages.contains(where: { $0.code == appState.selectedLanguage }),
-                   let current = TranscriptionLanguage.catalog.first(where: { $0.code == appState.selectedLanguage }) {
-                    Text("Current: \(current.displayName)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                Text("Auto-detect works well for most cases. Set a specific language for better accuracy.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                if let model = appState.currentModel?.size, model.bindsLanguageAtLoadTime {
-                    Text("\(model.displayName) applies the language when it loads, so changing it reloads the model.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                if activeEngine?.supportsTranslation == true {
-                    Divider()
-
-                    Toggle("Enable translation", isOn: $appState.translationEnabled)
-
-                    Text(appState.translationEnabled
-                         ? "Speech is translated to the selected language (or English if set to Auto-detect)."
-                         : "Speech is transcribed as spoken. The language setting is only a recognition hint.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                if activeEngine?.supportsCustomVocabulary == true {
-                    Divider()
-
-                    Text("Custom Vocabulary")
-                        .font(.subheadline.weight(.semibold))
-
-                    TextEditor(text: $appState.customVocabulary)
-                        .font(.body)
-                        .frame(minHeight: 90)
-                        .overlay(alignment: .topLeading) {
-                            if appState.customVocabulary.isEmpty {
-                                Text("kubectl, PostgreSQL, nginx, Grafana")
-                                    .foregroundStyle(.tertiary)
-                                    .padding(.top, 8)
-                                    .padding(.leading, 5)
-                                    .allowsHitTesting(false)
-                            }
-                        }
-
-                    let count = WhisperService.vocabularyTerms(from: appState.customVocabulary).count
-                    Text(count == 0
-                         ? "Add names, jargon, or proper nouns (one per line or comma-separated) that get mis-transcribed."
-                         : "\(count) term\(count == 1 ? "" : "s"). Keep the list short; the model can only use the first 50 to 100 words as a hint.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+            Picker("Language", selection: $appState.selectedLanguage) {
+                ForEach(filteredLanguages) { language in
+                    Text(language.code == "auto"
+                         ? language.displayName
+                         : "\(language.displayName) (\(language.code))")
+                        .tag(language.code)
                 }
             }
-            .padding(4)
-        }
+
+            if !filteredLanguages.contains(where: { $0.code == appState.selectedLanguage }),
+               let current = TranscriptionLanguage.catalog.first(where: { $0.code == appState.selectedLanguage }) {
+                Text("Current: \(current.displayName)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Text("Auto-detect works well for most cases. Set a specific language for better accuracy.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if let model = appState.currentModel?.size, model.bindsLanguageAtLoadTime {
+                Text("\(model.displayName) applies the language when it loads, so changing it reloads the model.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if activeEngine?.supportsTranslation == true {
+                Divider()
+
+                Toggle("Enable translation", isOn: $appState.translationEnabled)
+
+                Text(appState.translationEnabled
+                     ? "Speech is translated to the selected language (or English if set to Auto-detect)."
+                     : "Speech is transcribed as spoken. The language setting is only a recognition hint.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if activeEngine?.supportsCustomVocabulary == true {
+                Divider()
+
+                Text("Custom Vocabulary")
+                    .font(.subheadline.weight(.semibold))
+
+                TextEditor(text: $appState.customVocabulary)
+                    .font(.body)
+                    .frame(minHeight: 90)
+                    .overlay(alignment: .topLeading) {
+                        if appState.customVocabulary.isEmpty {
+                            Text("kubectl, PostgreSQL, nginx, Grafana")
+                                .foregroundStyle(.tertiary)
+                                .padding(.top, 8)
+                                .padding(.leading, 5)
+                                .allowsHitTesting(false)
+                        }
+                    }
+
+                let count = WhisperService.vocabularyTerms(from: appState.customVocabulary).count
+                Text(count == 0
+                     ? "Add names, jargon, or proper nouns (one per line or comma-separated) that get mis-transcribed."
+                     : "\(count) term\(count == 1 ? "" : "s"). Keep the list short; the model can only use the first 50 to 100 words as a hint.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+    }
         .onChange(of: appState.selectedLanguage) {
             Task { @MainActor in
                 await appState.reloadModelForLanguageChangeIfNeeded()
