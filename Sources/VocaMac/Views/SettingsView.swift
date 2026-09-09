@@ -882,6 +882,7 @@ struct AutoPauseAppPickerSheet: View {
 struct ModelSettingsTab: View {
     @EnvironmentObject var appState: AppState
     @State private var languageSearch = ""
+    @State private var isLanguageSectionExpanded = false
 
     /// When true, show language / translation / vocabulary below the catalog.
     var showsLanguageHints: Bool = false
@@ -1022,7 +1023,15 @@ struct ModelSettingsTab: View {
     }
 
     private var languageAndHintsSection: some View {
-        VocaSettingsGroup("Language & Hints") {
+        // Collapsed by default: building this section's controls costs about
+        // 80ms of the Speech Model page's load, and picking a model is what
+        // the page is for. Language is a second, rarer errand.
+        VocaDisclosureCard(
+            title: "Language & Hints",
+            subtitle: "Recognition language, translation, and custom vocabulary.",
+            systemImage: "globe",
+            isExpanded: $isLanguageSectionExpanded
+        ) {
             TextField("Search languages", text: $languageSearch)
                 .textFieldStyle(.roundedBorder)
 
