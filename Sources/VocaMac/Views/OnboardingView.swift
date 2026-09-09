@@ -389,27 +389,15 @@ struct HotkeyConfigStep: View {
     var body: some View {
         VStack(spacing: 16) {
             VStack(alignment: .leading, spacing: 16) {
-                // Activation Mode
+                // Activation Mode — the same control the Dictation settings
+                // page uses, so the choice looks the same in both places.
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Activation mode")
                         .font(.caption)
                         .fontWeight(.semibold)
                         .foregroundStyle(.secondary)
 
-                    Picker("Mode", selection: $appState.activationMode) {
-                        ForEach(ActivationMode.allCases) { mode in
-                            VStack(alignment: .leading) {
-                                Text(mode.displayName)
-                            }
-                            .tag(mode)
-                        }
-                    }
-                    .pickerStyle(.radioGroup)
-                    .labelsHidden()
-
-                    Text(appState.activationMode.description)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    ActivationModeSelector(selection: $appState.activationMode)
                 }
 
                 Divider()

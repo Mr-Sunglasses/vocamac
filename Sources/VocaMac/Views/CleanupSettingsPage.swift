@@ -13,6 +13,7 @@ struct CleanupSettingsPage: View {
     @State private var tryItInput = CleanupSettingsPage.sampleUtterance
     @State private var tryItResult: CleanupAttempt?
     @State private var tryItRunning = false
+    @State private var isPromptExpanded = false
 
     /// Seeded with something that exercises the behaviours the models differ
     /// on: fillers, a stutter, and dictated punctuation.
@@ -92,56 +93,73 @@ struct CleanupSettingsPage: View {
                 }
             }
 
-            DisclosureGroup("Advanced: cleanup prompt") {
-                Text("The model only sees this prompt plus the transcript. Leave the default unless you need a different voice.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                // A long prompt eats the context the transcript needs, and the
-                // result is cleanup that silently never runs. Say so here
-                // rather than let it look like the feature is broken.
-                if promptBudget <= 0 {
-                    Text("This prompt fills the model's whole context, so cleanup will be skipped for every transcript. Shorten it.")
+            VocaSettingsGroup("Advanced") {
+                VocaDisclosureCard(
+                    title: "Cleanup prompt",
+                    subtitle: "The only thing the model sees besides your transcript.",
+                    systemImage: "text.quote",
+                    badge: isPromptCustomised ? "Customised" : "Default",
+                    isExpanded: $isPromptExpanded
+                ) {
+                    // A long prompt eats the context the transcript needs, and
+                    // the result is cleanup that silently never runs. Say so
+                    // here rather than let it look like the feature is broken.
+                    if promptBudget <= 0 {
+                        Label(
+                            "This prompt fills the model's whole context, so cleanup will be skipped for every transcript. Shorten it.",
+                            systemImage: "exclamationmark.triangle.fill"
+                        )
                         .font(.caption)
                         .foregroundStyle(.orange)
-                } else if promptBudget < 1500 {
-                    Text("This prompt leaves room for only about \(promptBudget) characters of speech — longer dictations will skip cleanup.")
+                    } else if promptBudget < 1500 {
+                        Label(
+                            "This prompt leaves room for only about \(promptBudget) characters of speech — longer dictations will skip cleanup.",
+                            systemImage: "exclamationmark.triangle.fill"
+                        )
                         .font(.caption)
                         .foregroundStyle(.orange)
-                }
+                    }
 
-                TextEditor(text: $promptDraft)
-                    .font(.system(.caption, design: .monospaced))
-                    .frame(height: 160)
-                    .onChange(of: promptDraft) {
-                        // Writing @AppStorage on every keystroke republishes
-                        // AppState and re-renders the whole settings tree for
-                        // a ~2 KB string. Settle first, then persist once.
-                        promptCommit?.cancel()
-                        let draft = promptDraft
-                        promptCommit = Task { @MainActor in
-                            try? await Task.sleep(for: .milliseconds(400))
-                            guard !Task.isCancelled else { return }
-                            commitPrompt(draft)
+                    TextEditor(text: $promptDraft)
+                        .font(.system(.caption, design: .monospaced))
+                        .scrollContentBackground(.hidden)
+                        .frame(height: 190)
+                        .padding(8)
+                        .background(VocaDesign.canvas, in: RoundedRectangle(cornerRadius: 8))
+                        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(VocaDesign.line))
+                        .onChange(of: promptDraft) {
+                            // Writing @AppStorage on every keystroke republishes
+                            // AppState and re-renders the whole settings tree for
+                            // a ~2 KB string. Settle first, then persist once.
+                            promptCommit?.cancel()
+                            let draft = promptDraft
+                            promptCommit = Task { @MainActor in
+                                try? await Task.sleep(for: .milliseconds(400))
+                                guard !Task.isCancelled else { return }
+                                commitPrompt(draft)
+                            }
                         }
-                    }
-                    .onDisappear {
-                        promptCommit?.cancel()
-                        commitPrompt(promptDraft)
-                    }
+                        .onDisappear {
+                            promptCommit?.cancel()
+                            commitPrompt(promptDraft)
+                        }
 
-                HStack {
-                    Button("Reset to Default") {
-                        promptCommit?.cancel()
-                        promptDraft = TranscriptCleanup.defaultPrompt
-                        appState.transcriptCleanupPrompt = ""
+                    HStack(spacing: 12) {
+                        Text("Room for about \(max(0, promptBudget)) characters of speech")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                        Spacer(minLength: 8)
+                        Button("Reset to Default") {
+                            promptCommit?.cancel()
+                            promptDraft = TranscriptCleanup.defaultPrompt
+                            appState.transcriptCleanupPrompt = ""
+                        }
+                        .controlSize(.small)
+                        .disabled(!isPromptCustomised)
                     }
-                    .disabled(promptDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-                        == TranscriptCleanup.defaultPrompt.trimmingCharacters(in: .whitespacesAndNewlines))
-                    Spacer()
                 }
             }
-            .vocaCard()
         }
         .toggleStyle(.switch)
         .onAppear {
@@ -199,6 +217,11 @@ struct CleanupSettingsPage: View {
     }
 
     /// Characters of transcript that still fit alongside the drafted prompt.
+    private var isPromptCustomised: Bool {
+        promptDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+            != TranscriptCleanup.defaultPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     private var promptBudget: Int {
         let draft = promptDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         return appState.transcriptCleanup.inputBudget(

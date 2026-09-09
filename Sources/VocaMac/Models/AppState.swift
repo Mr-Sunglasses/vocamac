@@ -34,6 +34,22 @@ enum ActivationMode: String, CaseIterable, Codable, Identifiable {
         }
     }
 
+    /// Title for the option cards, where the gesture is spelled out underneath
+    /// and the parenthetical in `displayName` would only repeat it.
+    var shortName: String {
+        switch self {
+        case .pushToTalk:      return "Push to Talk"
+        case .doubleTapToggle: return "Double-Tap Toggle"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .pushToTalk:      return "hand.point.up.left.fill"
+        case .doubleTapToggle: return "hand.tap.fill"
+        }
+    }
+
     var description: String {
         switch self {
         case .pushToTalk:

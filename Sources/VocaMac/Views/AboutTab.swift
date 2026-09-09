@@ -98,6 +98,11 @@ struct AboutTab: View {
             }
             LabeledContent("Engine", value: activeEngineLabel)
             LabeledContent("Model", value: appState.whisperService.loadedModelName ?? "Not loaded")
+            // Cleanup is opt-in and runs a second model, so it only earns a row
+            // once it is actually part of what this Mac is doing.
+            if let cleanupModelLabel {
+                LabeledContent("Cleanup Model", value: cleanupModelLabel)
+            }
             LabeledContent("Storage", value: appState.modelManager.diskUsageDescription())
 
             Button {
@@ -192,6 +197,17 @@ struct AboutTab: View {
             }
             .font(.caption2)
         }
+    }
+
+    /// The cleanup model, named only when cleanup is switched on and the model
+    /// it would use is on disk. Enabled-but-undownloaded is not "active", and
+    /// the Cleanup page already explains that case.
+    private var cleanupModelLabel: String? {
+        guard appState.transcriptCleanupEnabled else { return nil }
+        let kind = appState.selectedCleanupModelKind
+        guard appState.transcriptCleanup.isDownloaded(kind) else { return nil }
+        let descriptor = kind.descriptor
+        return "\(descriptor.displayName) · \(descriptor.sizeDescription)"
     }
 
     private var activeEngineLabel: String {

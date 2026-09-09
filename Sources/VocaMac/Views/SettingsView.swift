@@ -324,15 +324,9 @@ struct DictationSettingsPage: View {
     var body: some View {
         VocaSettingsPageContent {
             VocaSettingsGroup("Start Dictating") {
-                Picker("Activation mode", selection: $appState.activationMode) {
-                    ForEach(ActivationMode.allCases) { mode in
-                        Text(mode.displayName).tag(mode)
-                    }
+                ActivationModeSelector(selection: $appState.activationMode) {
+                    appState.syncHotKeyConfiguration()
                 }
-                .pickerStyle(.segmented)
-                .onChange(of: appState.activationMode) { appState.syncHotKeyConfiguration() }
-                Text(appState.activationMode.description)
-                    .font(.callout).foregroundStyle(.secondary)
                 Divider()
                 HotKeySelectionControl(
                     pickerLabel: "Shortcut",

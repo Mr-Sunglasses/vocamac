@@ -145,3 +145,142 @@ struct VocaSettingsPageContent<Content: View>: View {
         }
     }
 }
+
+/// Side-by-side option cards for picking the activation gesture.
+///
+/// A segmented control can only show two short labels, so the gesture itself
+/// had to be explained in a caption underneath that changed as you switched —
+/// you could not compare the two without toggling between them. Cards show
+/// both descriptions at once.
+struct ActivationModeSelector: View {
+    @Binding var selection: ActivationMode
+    var onChange: () -> Void = {}
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            ForEach(ActivationMode.allCases) { mode in
+                card(for: mode)
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Activation mode")
+    }
+
+    private func card(for mode: ActivationMode) -> some View {
+        let isSelected = selection == mode
+        return Button {
+            guard selection != mode else { return }
+            selection = mode
+            onChange()
+        } label: {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Image(systemName: mode.systemImage)
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(isSelected ? VocaDesign.accent : .secondary)
+                    Text(mode.shortName)
+                        .font(.system(size: 13, weight: .semibold))
+                    Spacer(minLength: 4)
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 13))
+                        .foregroundStyle(VocaDesign.accent)
+                        .opacity(isSelected ? 1 : 0)
+                }
+                Text(mode.description)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            // maxHeight lets the shorter card stretch to the taller one, so a
+            // one-line description does not leave the pair ragged.
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .padding(12)
+            .background(
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(isSelected ? VocaDesign.accent.opacity(0.12) : Color.primary.opacity(0.04))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10)
+                    .strokeBorder(
+                        isSelected ? VocaDesign.accent.opacity(0.55) : VocaDesign.line,
+                        lineWidth: isSelected ? 1.5 : 1
+                    )
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 10))
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+        .accessibilityLabel(mode.shortName)
+        .accessibilityHint(mode.description)
+        .help(mode.description)
+    }
+}
+
+/// A card that hides secondary controls behind a labelled row.
+///
+/// `DisclosureGroup`'s bare label leaves a collapsed row reading as an empty
+/// box with a stray chevron; this gives it a title, a subtitle, and a status
+/// badge so the row says something while it is shut.
+struct VocaDisclosureCard<Content: View>: View {
+    let title: String
+    let subtitle: String
+    let systemImage: String
+    var badge: String?
+    @Binding var isExpanded: Bool
+    @ViewBuilder let content: Content
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
+                    isExpanded.toggle()
+                }
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: systemImage)
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(VocaDesign.accent)
+                        .frame(width: 20)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(title).font(.headline)
+                        Text(subtitle)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 8)
+                    if let badge {
+                        Text(badge)
+                            .font(.caption2.weight(.medium))
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(Color.primary.opacity(0.08), in: Capsule())
+                            .foregroundStyle(.secondary)
+                    }
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(title)
+            .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
+            .accessibilityHint(subtitle)
+
+            if isExpanded {
+                Divider().padding(.vertical, 12)
+                VStack(alignment: .leading, spacing: 12) {
+                    content
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .vocaCard()
+    }
+}
