@@ -63,6 +63,8 @@ final class AppState: ObservableObject {
 
     /// Whether the app is actively recording audio
     private var recordingGeneration = UUID()
+    /// Practice sessions keep their output local even when a hotkey stops them.
+    private var recordingInjectsResult = true
     private var recordingTranscription: RecordingTranscription?
     private var finishingTranscription: RecordingTranscription?
     private var isStoppingAudio = false
@@ -985,7 +987,7 @@ final class AppState: ObservableObject {
 
     // MARK: - Recording Flow
 
-    func startRecording() async {
+    func startRecording(injectResult: Bool = true) async {
         let interval = PerformanceTrace.begin("RecordingStart")
         defer { PerformanceTrace.end(interval) }
         // If we're already recording, this is a recovery attempt — the user
@@ -1034,6 +1036,7 @@ final class AppState: ObservableObject {
         }
 
         recordingGeneration = UUID()
+        recordingInjectsResult = injectResult
         appStatus = .recording
         isRecording = true
         errorMessage = nil
@@ -1111,6 +1114,7 @@ final class AppState: ObservableObject {
     }
 
     func stopRecordingAndTranscribe(injectResult: Bool = true) async {
+        let injectResult = injectResult && recordingInjectsResult
         let interval = PerformanceTrace.begin("StopToResultQueued")
         defer { PerformanceTrace.end(interval) }
         // Accept stop if we're recording OR if the audio engine thinks
@@ -1717,8 +1721,8 @@ final class AppState: ObservableObject {
         checkPermissions()
         VocaLogger.info(.appState, "Mic permission: \(micPermission.rawValue) | Accessibility: \(accessibilityPermission.rawValue) | Input Monitoring: \(inputMonitoringPermission.rawValue)")
 
-        // Auto-prompt for microphone permission on first launch
-        if micPermission == .notDetermined {
+        // First-run setup explains microphone access before the user requests it.
+        if hasCompletedOnboarding && micPermission == .notDetermined {
             VocaLogger.info(.appState, "Mic permission not determined — requesting...")
             requestMicrophonePermission()
         }

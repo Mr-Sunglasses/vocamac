@@ -140,6 +140,7 @@ struct CleanupSettingsPage: View {
             }
         }
         .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
         .onAppear {
             if !didLoadPrompt {
                 promptDraft = appState.effectiveCleanupPrompt

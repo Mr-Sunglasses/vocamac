@@ -14,6 +14,8 @@ extension Notification.Name {
 struct SettingsView: View {
     @EnvironmentObject var appState: AppState
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     @State private var selectedPage: SettingsPage? = .dictation
     @State private var searchText = ""
     @State private var pageBeforeSearch: SettingsPage = .dictation
@@ -40,19 +42,24 @@ struct SettingsView: View {
             HStack(spacing: 0) {
                 if isSidebarVisible {
                     settingsSidebar
-                        .frame(width: 220)
+                        .frame(width: 236)
                         .transition(.move(edge: .leading).combined(with: .opacity))
 
                     Divider()
                 }
 
-                settingsDetail
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                VStack(spacing: 0) {
+                    VocaPageHeader(title: (selectedPage ?? .dictation).title,
+                                   subtitle: (selectedPage ?? .dictation).subtitle)
+                    settingsDetail
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                }
+                .background(VocaDesign.canvas)
             }
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
                     Button {
-                        withAnimation(.snappy(duration: 0.2)) {
+                        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
                             isSidebarVisible.toggle()
                         }
                     } label: {
@@ -80,16 +87,34 @@ struct SettingsView: View {
                 }
             }
         }
-        .frame(minWidth: 720, minHeight: 520)
+        .frame(minWidth: 780, minHeight: 600)
+        .tint(VocaDesign.accent)
+        .groupBoxStyle(VocaGroupBoxStyle())
     }
 
     private var settingsSidebar: some View {
         VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                BrandLogoView(size: 34)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("VocaMac").font(.headline)
+                    Text("Your voice. On your Mac.").font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+            .padding(18)
             SettingsSidebarSearchField(text: $searchText)
 
             List(selection: $selectedPage) {
                 ForEach(visiblePages) { page in
-                    Label(page.title, systemImage: page.systemImage)
+                    Label {
+                        Text(page.title).font(.system(size: 13, weight: selectedPage == page ? .semibold : .regular))
+                    } icon: {
+                        Image(systemName: page.systemImage)
+                            .foregroundStyle(selectedPage == page ? Color.white : VocaDesign.accent)
+                            .frame(width: 22, height: 26)
+                    }
+                        .padding(.vertical, 2)
                         .badge(hasSearchQuery ? (matchCounts[page] ?? 0) : 0)
                         .tag(page)
                 }
@@ -105,7 +130,7 @@ struct SettingsView: View {
             Divider()
             SettingsSidebarFooter()
         }
-        .background(.background)
+        .background(VocaDesign.surface)
     }
 
     @ViewBuilder
@@ -149,7 +174,7 @@ struct SettingsSidebarSearchField: View {
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(.secondary)
 
-            TextField("Search", text: $text)
+            TextField("Search settings", text: $text)
                 .textFieldStyle(.plain)
                 .font(.body)
 
@@ -230,7 +255,7 @@ struct SettingsSidebarFooter: View {
                         .lineLimit(3)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 } else if !isActiveSession {
-                    Text("Results appear here")
+                    Text("Try dictation here. Your text stays in this window.")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -244,7 +269,7 @@ struct SettingsSidebarFooter: View {
                         await appState.stopRecordingAndTranscribe(injectResult: false)
                     } else {
                         appState.settingsTestResultText = nil
-                        await appState.startRecording()
+                        await appState.startRecording(injectResult: false)
                     }
                 }
             } label: {
@@ -350,6 +375,7 @@ struct DictationSettingsPage: View {
             }
         }
         .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
     }
 }
 
@@ -398,6 +424,7 @@ struct ApplicationSettingsPage: View {
             }
         }
         .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
     }
 }
 
@@ -437,6 +464,7 @@ struct SnippetsSettingsTab: View {
             }
         }
         .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
         .sheet(isPresented: $showingAddSnippet) {
             AddSnippetView(isPresented: $showingAddSnippet)
         }
@@ -546,6 +574,7 @@ struct AddSnippetView: View {
                 TextField("Expansion Text", text: $expansion, prompt: Text("e.g. me@example.com"))
             }
             .formStyle(.grouped)
+            .scrollContentBackground(.hidden)
             .frame(height: 120)
 
             Text("VocaMac will listen for the trigger phrase and replace it with the expansion text.")
@@ -758,6 +787,7 @@ struct PerformanceSettingsTab: View {
             }
         }
         .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
         .sheet(isPresented: $showingAppPicker) {
             AutoPauseAppPickerSheet { entry in
                 var apps = appState.autoPauseApps
@@ -962,7 +992,7 @@ struct ModelSettingsTab: View {
                    let recommendedSize = appState.modelManager.modelSize(from: recommended) {
                     HStack {
                         Image(systemName: "sparkles")
-                            .foregroundStyle(.blue)
+                            .foregroundStyle(VocaDesign.accent)
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Recommended for your device: **\(recommendedSize.displayName)**")
                                 .font(.callout)
@@ -1131,8 +1161,8 @@ struct ModelRow: View {
                                 .font(.caption2)
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 1)
-                                .background(.blue.opacity(0.2))
-                                .foregroundStyle(.blue)
+                                .background(VocaDesign.accent.opacity(0.12))
+                                .foregroundStyle(VocaDesign.accent)
                                 .cornerRadius(4)
                         }
                     }
@@ -1154,9 +1184,9 @@ struct ModelRow: View {
                     Text("•")
                     Text(model.size.qualityDescription)
                     Text("•")
-                    Text("~\(String(format: "%.0f", model.size.ramRequiredGB)) GB RAM")
+                    Text("~\(String(format: "%.1f", model.size.ramRequiredGB)) GB RAM")
                     Text("•")
-                    Text("Speed: \(String(repeating: "⚡", count: max(1, 6 - model.size.relativeSpeed)))")
+                    Label("Speed \(max(1, 6 - model.size.relativeSpeed))/5", systemImage: "bolt")
                 }
                 .font(.caption2)
                 .foregroundStyle(.secondary)
@@ -1402,7 +1432,7 @@ struct AudioSettingsTab: View {
                 } else if let selectedAudioDevice {
                     HStack {
                         Image(systemName: "mic.circle.fill")
-                            .foregroundStyle(.blue)
+                            .foregroundStyle(VocaDesign.accent)
                         Text("VocaMac will record from \(selectedAudioDevice.name) without changing macOS' system default input.")
                             .foregroundStyle(.secondary)
                     }
@@ -1431,6 +1461,7 @@ struct AudioSettingsTab: View {
             }
         }
         .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
         .onAppear {
             refreshAudioDevices()
         }
@@ -1625,7 +1656,7 @@ struct DebugTab: View {
 
                 HStack(alignment: .top, spacing: 8) {
                     Image(systemName: "info.circle.fill")
-                        .foregroundStyle(.blue)
+                        .foregroundStyle(VocaDesign.accent)
                         .font(.caption)
                     Text("**Upgrading?** Permissions now persist across updates since VocaMac is signed with a Developer ID. If permissions ever appear stuck, use the Reset button above.")
                         .font(.caption)
@@ -1700,6 +1731,7 @@ struct DebugTab: View {
             }
         }
         .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
         .onAppear { processMonitor.start() }
         .onDisappear { processMonitor.stop() }
     }

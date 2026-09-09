@@ -79,13 +79,13 @@ struct StatsSettingsTab: View {
                                 icon: "text.word.spacing",
                                 label: "Total Words",
                                 value: StatsShareComposer.formatCount(appState.statsManager.stats.totalWords),
-                                color: .blue
+                                color: VocaDesign.accent
                             )
                             StatPill(
                                 icon: "waveform",
                                 label: "Transcriptions",
                                 value: StatsShareComposer.formatCount(appState.statsManager.stats.totalTranscriptions),
-                                color: .purple
+                                color: VocaDesign.accent
                             )
                             StatPill(
                                 icon: "timer",
@@ -307,8 +307,10 @@ struct StatPill: View {
                 .foregroundStyle(color)
 
             Text(value)
-                .font(.title3)
-                .fontWeight(.bold)
+                .font(.system(size: 28, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
 
             Text(label)
                 .font(.caption2)

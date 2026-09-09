@@ -26,7 +26,7 @@ final class SettingsWindowManager: ObservableObject {
 
         // Create a new window
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 760, height: 560),
+            contentRect: NSRect(x: 0, y: 0, width: 920, height: 680),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
@@ -93,7 +93,7 @@ final class UpdateWindowManager: ObservableObject {
         let updateView = detailView(appState: appState, info: info)
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 480, height: 420),
+            contentRect: NSRect(x: 0, y: 0, width: 520, height: 420),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -167,7 +167,7 @@ final class OnboardingWindowManager: ObservableObject {
 
         // Create a new window
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 600, height: 580),
+            contentRect: NSRect(x: 0, y: 0, width: 840, height: 650),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false

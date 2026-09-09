@@ -125,6 +125,7 @@ struct MenuBarView: View {
 
             // Status & Recording
             statusSection
+                .vocaCard()
 
             Divider()
 
@@ -135,6 +136,7 @@ struct MenuBarView: View {
             if let transcription = appState.lastTranscription {
                 Divider()
                 transcriptionSection(transcription)
+                    .vocaCard()
             }
 
             // Permissions Warning
@@ -149,7 +151,9 @@ struct MenuBarView: View {
             actionsSection
         }
         .padding(20)
-        .frame(width: 380)
+        .frame(width: 420)
+        .background(VocaDesign.canvas)
+        .tint(VocaDesign.accent)
         .onAppear { processMonitor.start() }
         .onDisappear { processMonitor.stop() }
     }
@@ -158,7 +162,7 @@ struct MenuBarView: View {
 
     private var headerSection: some View {
         HStack {
-            BrandLogoView(size: 28)
+            BrandLogoView(size: 36)
 
             VStack(alignment: .leading, spacing: 3) {
                 Text("VocaMac")
@@ -166,7 +170,7 @@ struct MenuBarView: View {
                     .fontWeight(.semibold)
 
                 if let model = appState.currentModel {
-                    Text("Model: \(model.size.displayName) (~\(String(format: "%.1f", model.size.ramRequiredGB)) GB)")
+                    Text(model.size.displayName)
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 } else if appState.whisperService.isModelLoaded {
@@ -705,7 +709,7 @@ struct ResourceBadge: View {
                 HStack(spacing: 4) {
                     Image(systemName: icon)
                         .font(.subheadline)
-                        .foregroundStyle(.blue)
+                        .foregroundStyle(VocaDesign.accent)
                     Text(value)
                         .font(.subheadline)
                         .fontWeight(.semibold)

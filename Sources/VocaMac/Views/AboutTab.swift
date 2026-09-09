@@ -19,6 +19,7 @@ struct AboutTab: View {
             contributorsSection
         }
         .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
         .sheet(isPresented: $showingUpdateSheet) {
             if let info = updateInfoForSheet {
                 UpdateDetailView(info: info, isPresented: $showingUpdateSheet)
