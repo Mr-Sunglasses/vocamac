@@ -139,6 +139,18 @@ final class AppStateDuckingTests: XCTestCase {
         NotificationCenter.default.post(name: NSApplication.willTerminateNotification, object: nil)
 
         XCTAssertEqual(mocks.audioDucker.restoreCallCount, 1)
+        XCTAssertEqual(mocks.statsManager.flushPendingSavesCallCount, 1)
         XCTAssertTrue(appState.isRecording, "Quit does not flip isRecording; restore runs from willTerminate")
+    }
+
+    func testCalendarChangesRefreshStatsStreak() {
+        let (appState, mocks) = makeDuckingState()
+
+        withExtendedLifetime(appState) {
+            NotificationCenter.default.post(name: .NSCalendarDayChanged, object: nil)
+            NotificationCenter.default.post(name: .NSSystemTimeZoneDidChange, object: nil)
+        }
+
+        XCTAssertEqual(mocks.statsManager.refreshCurrentStreakCallCount, 2)
     }
 }

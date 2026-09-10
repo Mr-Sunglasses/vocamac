@@ -560,6 +560,8 @@ final class MockStatsManager: StatsManaging, ObservableObject {
 
     var recordCallCount = 0
     var resetCallCount = 0
+    var refreshCurrentStreakCallCount = 0
+    var flushPendingSavesCallCount = 0
 
     var objectWillChangePublisher: AnyPublisher<Void, Never> {
         objectWillChange.eraseToAnyPublisher()
@@ -567,6 +569,14 @@ final class MockStatsManager: StatsManaging, ObservableObject {
 
     func recordTranscription(_ transcription: VocaTranscription) {
         recordCallCount += 1
+    }
+
+    func refreshCurrentStreak() {
+        refreshCurrentStreakCallCount += 1
+    }
+
+    func flushPendingSaves() {
+        flushPendingSavesCallCount += 1
     }
 
     func resetStats() {

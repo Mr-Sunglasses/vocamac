@@ -5,7 +5,7 @@
 
 import Foundation
 
-struct UserStats: Codable {
+struct UserStats: Codable, Equatable {
     /// Total number of words transcribed across all sessions
     var totalWords: Int = 0
 
@@ -28,12 +28,24 @@ struct UserStats: Codable {
     /// Key is date string in "yyyy-MM-dd" format
     var dailyWordCounts: [String: Int] = [:]
 
+    /// Daily successful-transcription counts used to distinguish activity from
+    /// a corrupt or legitimately zero-word daily bucket.
+    /// Key is date string in "yyyy-MM-dd" format.
+    var dailyTranscriptionCounts: [String: Int] = [:]
+
+    /// Time-zone identifier used to create and interpret daily buckets.
+    /// Keeping this stable prevents travel from reinterpreting historical keys.
+    var timeZoneIdentifier: String?
+
     /// Calculated average Words Per Minute (WPM).
     /// Note: This is "words-per-minute-of-audio", dividing total words by total audio duration.
     var averageWPM: Double {
-        guard totalAudioDurationSeconds > 0 else { return 0 }
+        guard totalWords > 0,
+              totalAudioDurationSeconds.isFinite,
+              totalAudioDurationSeconds > 0 else { return 0 }
         let minutes = totalAudioDurationSeconds / 60.0
-        return Double(totalWords) / minutes
+        let wordsPerMinute = Double(totalWords) / minutes
+        return wordsPerMinute.isFinite ? wordsPerMinute : 0
     }
 }
 
@@ -46,12 +58,46 @@ extension UserStats {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.init()
-        totalWords = try container.decodeIfPresent(Int.self, forKey: .totalWords) ?? totalWords
-        totalTranscriptions = try container.decodeIfPresent(Int.self, forKey: .totalTranscriptions) ?? totalTranscriptions
-        totalAudioDurationSeconds = try container.decodeIfPresent(Double.self, forKey: .totalAudioDurationSeconds) ?? totalAudioDurationSeconds
-        lastUsageDate = try container.decodeIfPresent(Date.self, forKey: .lastUsageDate)
-        currentStreak = try container.decodeIfPresent(Int.self, forKey: .currentStreak) ?? currentStreak
-        bestStreak = try container.decodeIfPresent(Int.self, forKey: .bestStreak) ?? bestStreak
-        dailyWordCounts = try container.decodeIfPresent([String: Int].self, forKey: .dailyWordCounts) ?? dailyWordCounts
+        totalWords = max(0, container.decodeLossily(Int.self, forKey: .totalWords) ?? totalWords)
+        totalTranscriptions = max(
+            0,
+            container.decodeLossily(Int.self, forKey: .totalTranscriptions) ?? totalTranscriptions
+        )
+
+        let decodedDuration = container.decodeLossily(
+            Double.self,
+            forKey: .totalAudioDurationSeconds
+        ) ?? totalAudioDurationSeconds
+        totalAudioDurationSeconds = decodedDuration.isFinite && decodedDuration > 0 ? decodedDuration : 0
+
+        lastUsageDate = container.decodeLossily(Date.self, forKey: .lastUsageDate)
+        currentStreak = max(0, container.decodeLossily(Int.self, forKey: .currentStreak) ?? currentStreak)
+        bestStreak = max(
+            currentStreak,
+            max(0, container.decodeLossily(Int.self, forKey: .bestStreak) ?? bestStreak)
+        )
+
+        let decodedDailyCounts = container.decodeLossily(
+            [String: Int].self,
+            forKey: .dailyWordCounts
+        ) ?? dailyWordCounts
+        // Negative buckets are corrupt, not zero-word activity. Drop them so
+        // the legacy migration can safely treat retained zero buckets as real.
+        dailyWordCounts = decodedDailyCounts.filter { $0.value >= 0 }
+
+        let decodedDailyTranscriptionCounts = container.decodeLossily(
+            [String: Int].self,
+            forKey: .dailyTranscriptionCounts
+        ) ?? dailyTranscriptionCounts
+        dailyTranscriptionCounts = decodedDailyTranscriptionCounts.mapValues { max(0, $0) }
+
+        timeZoneIdentifier = container.decodeLossily(String.self, forKey: .timeZoneIdentifier)
+    }
+}
+
+private extension KeyedDecodingContainer {
+    /// A malformed field must not make every other valid statistic unreadable.
+    func decodeLossily<Value: Decodable>(_ type: Value.Type, forKey key: Key) -> Value? {
+        try? decode(Value.self, forKey: key)
     }
 }

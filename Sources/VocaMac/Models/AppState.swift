@@ -795,6 +795,21 @@ final class AppState: ObservableObject {
         NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)
             .sink { [weak self] _ in
                 self?.audioDucker.restore()
+                self?.statsManager.flushPendingSaves()
+            }
+            .store(in: &cancellables)
+
+        // `currentStreak` is a cached, persisted value. Refresh it when the
+        // local calendar context changes so an inactive streak does not stay visible.
+        NotificationCenter.default.publisher(for: .NSCalendarDayChanged)
+            .sink { [weak self] _ in
+                self?.statsManager.refreshCurrentStreak()
+            }
+            .store(in: &cancellables)
+
+        NotificationCenter.default.publisher(for: .NSSystemTimeZoneDidChange)
+            .sink { [weak self] _ in
+                self?.statsManager.refreshCurrentStreak()
             }
             .store(in: &cancellables)
 

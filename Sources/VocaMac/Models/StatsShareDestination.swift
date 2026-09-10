@@ -137,7 +137,7 @@ enum StatsShareComposer {
     }
 
     /// "1 session", not "1 sessions" — the post is public.
-    private static func pluralized(_ count: Int, _ noun: String) -> String {
+    static func pluralized(_ count: Int, _ noun: String) -> String {
         "\(formatCount(count)) \(count == 1 ? noun : noun + "s")"
     }
 

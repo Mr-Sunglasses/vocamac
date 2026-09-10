@@ -34,15 +34,19 @@ struct StatsSettingsTab: View {
 
     private static let dateFormatter: DateFormatter = {
         let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd"
         // Fixed locale so the "yyyy-MM-dd" keys (written with a Gregorian calendar)
         // parse back correctly regardless of the user's default calendar/locale.
         formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.timeZone = .autoupdatingCurrent
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.isLenient = false
         return formatter
     }()
 
     private static let displayDateFormatter: DateFormatter = {
         let formatter = DateFormatter()
+        formatter.timeZone = .autoupdatingCurrent
         formatter.dateFormat = "MMM d, yyyy"
         return formatter
     }()
@@ -69,6 +73,7 @@ struct StatsSettingsTab: View {
                         .menuStyle(.borderlessButton)
                         .fixedSize()
                         .controlSize(.small)
+                        .disabled(!hasStats)
                         .help("Post your stats card, or copy it to the clipboard")
                         .padding(.trailing, 8)
                     }
@@ -117,11 +122,19 @@ struct StatsSettingsTab: View {
                     }
 
                     VocaSettingsGroup("Streak") {
-                        Text("\(appState.statsManager.stats.currentStreak)")
+                        let currentStreak = appState.statsManager.stats.currentStreak
+                        Text(StatsShareComposer.formatCount(currentStreak))
                             .font(.system(size: 32, weight: .bold, design: .rounded))
-                        + Text(" days").font(.headline).foregroundColor(.secondary)
+                        + Text(currentStreak == 1 ? " day" : " days")
+                            .font(.headline)
+                            .foregroundColor(.secondary)
 
-                        Text("Best: \(appState.statsManager.stats.bestStreak) days")
+                        Text(
+                            "Best: " + StatsShareComposer.pluralized(
+                                appState.statsManager.stats.bestStreak,
+                                "day"
+                            )
+                        )
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -143,7 +156,12 @@ struct StatsSettingsTab: View {
                                     Text(formatDateString(day))
                                         .font(.subheadline)
                                     Spacer()
-                                    Text("\(appState.statsManager.stats.dailyWordCounts[day] ?? 0) words")
+                                    Text(
+                                        StatsShareComposer.pluralized(
+                                            appState.statsManager.stats.dailyWordCounts[day] ?? 0,
+                                            "word"
+                                        )
+                                    )
                                         .font(.subheadline)
                                         .fontWeight(.medium)
                                 }
@@ -162,6 +180,7 @@ struct StatsSettingsTab: View {
                     Label("Reset All Statistics", systemImage: "trash")
                 }
                 .controlSize(.small)
+                .disabled(!hasStats)
                 .padding(.top, 8)
             }
             .padding()
@@ -169,10 +188,14 @@ struct StatsSettingsTab: View {
         .alert("Reset All Statistics?", isPresented: $showingResetConfirmation) {
             Button("Reset", role: .destructive) {
                 appState.statsManager.resetStats()
+                clearShareState()
             }
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("This permanently deletes all your usage statistics. This action cannot be undone.")
+        }
+        .onAppear {
+            appState.statsManager.refreshCurrentStreak()
         }
     }
 
@@ -225,6 +248,11 @@ struct StatsSettingsTab: View {
         }
     }
 
+    private func clearShareState() {
+        shareStateToken += 1
+        shareState = .idle
+    }
+
     /// Social composers cannot take an attachment, so the card lands on the
     /// clipboard and the user pastes it into the prefilled post.
     private func share(to destination: StatsShareDestination) {
@@ -249,12 +277,25 @@ struct StatsSettingsTab: View {
     }
 
     private func formatDuration(_ seconds: Double) -> String {
-        return Self.durationFormatter.string(from: seconds) ?? "\(Int(seconds))s"
+        guard seconds.isFinite, seconds > 0 else { return "0s" }
+        return Self.durationFormatter.string(from: seconds) ?? String(format: "%.0fs", seconds)
     }
 
     private func recentDays() -> [String] {
         let keys = Array(appState.statsManager.stats.dailyWordCounts.keys)
-        return keys.sorted(by: >).prefix(7).map { String($0) }
+        return keys
+            .filter { Self.dateFormatter.date(from: $0) != nil }
+            .sorted(by: >)
+            .prefix(7)
+            .map { String($0) }
+    }
+
+    private var hasStats: Bool {
+        let stats = appState.statsManager.stats
+        return stats.totalTranscriptions > 0
+            || stats.totalWords > 0
+            || stats.totalAudioDurationSeconds > 0
+            || !stats.dailyWordCounts.isEmpty
     }
 
     private func formatDateString(_ dateString: String) -> String {

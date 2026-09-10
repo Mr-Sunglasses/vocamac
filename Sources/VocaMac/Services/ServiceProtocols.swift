@@ -235,7 +235,14 @@ protocol StatsManaging: AnyObject {
     var stats: UserStats { get }
     var objectWillChangePublisher: AnyPublisher<Void, Never> { get }
     func recordTranscription(_ transcription: VocaTranscription)
+    func refreshCurrentStreak()
+    func flushPendingSaves()
     func resetStats()
+}
+
+extension StatsManaging {
+    func refreshCurrentStreak() {}
+    func flushPendingSaves() {}
 }
 
 // MARK: - SnippetExpanding

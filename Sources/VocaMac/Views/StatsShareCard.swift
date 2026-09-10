@@ -161,8 +161,8 @@ enum StatsShareExporter {
         return pasteboard.setData(png, forType: .png)
     }
 
-    /// Copies the card image, then opens the destination's composer with the
-    /// post text prefilled so the user can paste the image in.
+    /// Opens the destination's composer with prefilled text, then copies the
+    /// card image so the user can paste it in.
     ///
     /// Web share intents cannot carry an attachment, so the clipboard copy is
     /// how the image gets there. A failed copy is reported separately rather
@@ -170,20 +170,41 @@ enum StatsShareExporter {
     /// still holds their previous content would put that content in a public
     /// post.
     @MainActor
-    static func share(_ snapshot: StatsShareSnapshot, to destination: StatsShareDestination) -> StatsShareOutcome {
+    static func share(
+        _ snapshot: StatsShareSnapshot,
+        to destination: StatsShareDestination
+    ) -> StatsShareOutcome {
+        share(
+            snapshot,
+            to: destination,
+            openURL: { NSWorkspace.shared.open($0) },
+            copyCard: { copyImage(toClipboard: $0) }
+        )
+    }
+
+    @MainActor
+    static func share(
+        _ snapshot: StatsShareSnapshot,
+        to destination: StatsShareDestination,
+        openURL: (URL) -> Bool,
+        copyCard: (StatsShareSnapshot) -> Bool
+    ) -> StatsShareOutcome {
         guard let url = StatsShareComposer.composerURL(for: snapshot, destination: destination) else {
             VocaLogger.error(.general, "Stats share: could not build a \(destination.displayName) composer URL")
             return .failed
         }
 
-        let copiedImage = copyImage(toClipboard: snapshot)
-        if !copiedImage {
-            VocaLogger.warning(.general, "Stats share: card image could not be copied")
-        }
-
-        guard NSWorkspace.shared.open(url) else {
+        // Do not overwrite the clipboard when the destination cannot open.
+        // Copy immediately after a successful open request, before the user can
+        // reach the composer and paste.
+        guard openURL(url) else {
             VocaLogger.error(.general, "Stats share: could not open the \(destination.displayName) composer")
             return .failed
+        }
+
+        let copiedImage = copyCard(snapshot)
+        if !copiedImage {
+            VocaLogger.warning(.general, "Stats share: card image could not be copied")
         }
 
         return copiedImage ? .shared : .sharedWithoutCard
