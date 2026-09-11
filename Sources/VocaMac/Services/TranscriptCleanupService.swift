@@ -17,6 +17,7 @@ final class TranscriptCleanupService: ObservableObject, TranscriptCleaning {
     }
 
     var isLoaded: Bool { activeLLM != nil }
+    var loadedKind: CleanupModelKind? { activeLLM == nil ? nil : activeKind }
 
     /// Characters of transcript that still fit alongside `prompt`. Zero means
     /// the prompt has eaten the whole context and cleanup will never run.
@@ -82,6 +83,15 @@ final class TranscriptCleanupService: ObservableObject, TranscriptCleaning {
     /// for llama.cpp to wind down.
     private static let timeoutSeconds: TimeInterval = 12
 
+    /// Command Mode edits can be as long as the selection and the user is
+    /// explicitly waiting for them, so they get a longer ceiling. Escape still
+    /// stops one early through `cancelTransform`.
+    private static let transformTimeoutSeconds: TimeInterval = 60
+
+    /// Set while a Command Mode transform owns the model, so a cancel only
+    /// stops that generation and never a dictation's cleanup.
+    private var transformInProgress = false
+
     /// How long a straggler from a previous deadline gets to finish before
     /// this utterance gives up on cleanup entirely.
     private static let drainSeconds: TimeInterval = 3
@@ -100,23 +110,35 @@ final class TranscriptCleanupService: ObservableObject, TranscriptCleaning {
     }
 
     func clean(_ text: String, prompt: String) async -> String {
-        await attemptClean(text, prompt: prompt, recordingFailures: true).output
+        await attemptClean(text, prompt: prompt, recordingFailures: true, allowsTransform: false).output
     }
 
     func attempt(_ text: String, prompt: String) async -> CleanupAttempt {
-        await attemptClean(text, prompt: prompt, recordingFailures: true)
+        await attemptClean(text, prompt: prompt, recordingFailures: true, allowsTransform: false)
     }
 
     /// Same pass as `clean`, but reporting what happened and without letting a
     /// hand-typed experiment trip the give-up counter that guards dictation.
     func preview(_ text: String, prompt: String) async -> CleanupAttempt {
-        await attemptClean(text, prompt: prompt, recordingFailures: false)
+        await attemptClean(text, prompt: prompt, recordingFailures: false, allowsTransform: false)
+    }
+
+    func transform(_ text: String, prompt: String) async -> CleanupAttempt {
+        transformInProgress = true
+        defer { transformInProgress = false }
+        return await attemptClean(text, prompt: prompt, recordingFailures: false, allowsTransform: true)
+    }
+
+    func cancelTransform() {
+        guard transformInProgress else { return }
+        activeLLM?.stop()
     }
 
     private func attemptClean(
         _ text: String,
         prompt: String,
-        recordingFailures: Bool
+        recordingFailures: Bool,
+        allowsTransform: Bool
     ) async -> CleanupAttempt {
         let started = Date()
         func result(_ output: String, _ outcome: CleanupAttempt.Outcome) -> CleanupAttempt {
@@ -165,8 +187,14 @@ final class TranscriptCleanupService: ObservableObject, TranscriptCleaning {
         let formatted = TranscriptCleanup.formatInput(trimmed)
 
         do {
-            let raw = try await runInference(llm: llm, prompt: activePrompt, input: formatted)
-            if let accepted = TranscriptCleanup.acceptedOutput(raw, original: trimmed) {
+            let raw = try await runInference(
+                llm: llm, prompt: activePrompt, input: formatted,
+                timeout: allowsTransform ? Self.transformTimeoutSeconds : Self.timeoutSeconds
+            )
+            let accepted = allowsTransform
+                ? TranscriptCleanup.acceptedTransformOutput(raw, original: trimmed)
+                : TranscriptCleanup.acceptedOutput(raw, original: trimmed)
+            if let accepted {
                 if recordingFailures { consecutiveFailures = 0 }
                 VocaLogger.info(.transcriptCleanup, "Cleanup produced \(accepted.count) characters")
                 return result(accepted, accepted == trimmed ? .unchanged : .cleaned)
@@ -175,12 +203,17 @@ final class TranscriptCleanupService: ObservableObject, TranscriptCleaning {
             if recordingFailures {
                 recordFailure(reason: raw.isEmpty || raw == "..." ? "produced no output" : "produced unusable output")
             }
-            return result(text, .rejected(why))
+            let sanitized = TranscriptCleanup.sanitize(raw)
+            return CleanupAttempt(
+                output: text, outcome: .rejected(why), duration: Date().timeIntervalSince(started),
+                rejectedCandidate: sanitized.isEmpty || sanitized == "..." ? nil : sanitized
+            )
         } catch CleanupInferenceError.deadlineExceeded {
+            let limit = Int(allowsTransform ? Self.transformTimeoutSeconds : Self.timeoutSeconds)
             if recordingFailures {
-                recordFailure(reason: "did not answer within \(Int(Self.timeoutSeconds))s")
+                recordFailure(reason: "did not answer within \(limit)s")
             }
-            return result(text, .rejected("the model ran past its \(Int(Self.timeoutSeconds))s deadline"))
+            return result(text, .rejected("the model ran past its \(limit)s deadline"))
         } catch CleanupInferenceError.modelBusy {
             VocaLogger.warning(.transcriptCleanup, "Previous cleanup still winding down — using raw transcript")
             return result(text, .skipped("the previous cleanup is still finishing"))
@@ -505,7 +538,9 @@ final class TranscriptCleanupService: ObservableObject, TranscriptCleaning {
         return fileSize(at: url) == descriptor.expectedByteCount
     }
 
-    private func runInference(llm: LLM, prompt: String, input: String) async throws -> String {
+    private func runInference(
+        llm: LLM, prompt: String, input: String, timeout: TimeInterval
+    ) async throws -> String {
         // A generation abandoned at an earlier deadline still owns the model.
         // `LLM.respond` silently no-ops while the model is busy and leaves the
         // *previous* utterance's text in `output`, so reading it back would
@@ -531,7 +566,7 @@ final class TranscriptCleanupService: ObservableObject, TranscriptCleaning {
         }
         pendingGeneration = generation
 
-        guard let output = await Self.value(of: generation, within: Self.timeoutSeconds) else {
+        guard let output = await Self.value(of: generation, within: timeout) else {
             // Hand control back now: ask llama.cpp to wind down and drain the
             // task on the next call. Awaiting it here — which is what a task
             // group would do on its way out — is what makes a deadline soft.

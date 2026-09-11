@@ -67,6 +67,66 @@ enum PermissionStatus: String {
     case denied
 }
 
+/// What the menu bar, its icon, and the overlay show while Command Mode runs.
+struct CommandModeSession: Equatable {
+    enum Phase: Equatable {
+        /// Recording the spoken instruction.
+        case listening
+        /// The model is producing the replacement.
+        case rewriting
+    }
+
+    var phase: Phase
+    /// The start of the selection on one line, for "Editing “…”".
+    let selectionPreview: String
+    let characterCount: Int
+    let appName: String?
+    let engineName: String
+    /// The transcribed instruction, once known.
+    var instruction: String?
+
+    init(
+        phase: Phase = .listening,
+        selection: String,
+        appName: String?,
+        engineName: String,
+        instruction: String? = nil
+    ) {
+        self.phase = phase
+        let oneLine = selection.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        self.selectionPreview = oneLine.count > 80 ? String(oneLine.prefix(79)) + "…" : oneLine
+        self.characterCount = selection.count
+        self.appName = appName
+        self.engineName = engineName
+        self.instruction = instruction
+    }
+}
+
+/// What Settings → Cleanup → Try It shows.
+struct CleanupTryResult: Equatable {
+    let input: String
+    let text: String
+    let summary: String
+    let duration: TimeInterval
+
+    var changedText: Bool {
+        text.trimmingCharacters(in: .whitespacesAndNewlines) != input.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+/// One completed Command Mode edit.
+struct CommandModeEdit: Equatable {
+    let instruction: String
+    let original: String
+    let replacement: String
+    let engineName: String
+}
+
+enum ScratchpadOutputDestination {
+    case settingsTest
+    case scratchpad
+}
+
 // MARK: - AppState
 
 @MainActor
@@ -83,7 +143,7 @@ final class AppState: ObservableObject {
     private var recordingInjectsResult = true
     /// Whether the active recording belongs to an in-window practice control.
     var isPracticeRecording: Bool {
-        (isRecording || appStatus == .recording) && !recordingInjectsResult
+        (isRecording || appStatus == .recording) && !recordingInjectsResult && activeCommandSelection == nil
     }
 
     private var recordingTranscription: RecordingTranscription?
@@ -117,9 +177,20 @@ final class AppState: ObservableObject {
 
     /// The most recent transcription result
     @Published var lastTranscription: VocaTranscription?
+    @Published private(set) var liveTranscript: String = ""
+    /// The most recent Command Mode edit, so its original can be copied back.
+    /// Cleared by the next dictation.
+    @Published private(set) var lastCommandEdit: CommandModeEdit?
+    /// The Command Mode session in progress, from capture to replacement.
+    @Published private(set) var commandModeSession: CommandModeSession? {
+        didSet { cursorOverlay.setCommandSession(commandModeSession) }
+    }
+    /// A file or system-audio capture is being transcribed.
+    @Published private(set) var isTranscribingMedia = false
 
     /// Last Settings → Test Dictation result (shown in the sidebar footer; not injected).
     @Published var settingsTestResultText: String?
+    @AppStorage("vocamac.scratchpad.text") var scratchpadText: String = ""
 
     /// Error message to display, if any
     @Published var errorMessage: String?
@@ -185,6 +256,8 @@ final class AppState: ObservableObject {
     @AppStorage(PreferenceKey.transcriptCleanupEnabled) var transcriptCleanupEnabled: Bool = false
     @AppStorage(PreferenceKey.transcriptCleanupModel) var transcriptCleanupModel: String = CleanupModelKind.defaultKind.rawValue
     @AppStorage(PreferenceKey.transcriptCleanupPrompt) var transcriptCleanupPrompt: String = ""
+    @AppStorage(PreferenceKey.transcriptCleanupLevel) var transcriptCleanupLevel: CleanupLevel = .medium
+    @AppStorage(PreferenceKey.cleanupEndpoint) var cleanupEndpointJSON: String = ""
     @AppStorage(PreferenceKey.historyEnabled) var historyEnabled: Bool = true
     @AppStorage(PreferenceKey.historyKeepsAudio) var historyKeepsAudio: Bool = false
     @AppStorage(PreferenceKey.historyRetention) var historyRetention: HistoryRetention = .defaultRetention
@@ -193,9 +266,29 @@ final class AppState: ObservableObject {
     @AppStorage(PreferenceKey.pasteLastShortcut) var pasteLastShortcut: String = HotKeyCombo.defaultPasteLast.storageString
     /// `HotKeyCombo.storageString`, or empty for no shortcut.
     @AppStorage(PreferenceKey.handsFreeShortcut) var handsFreeShortcut: String = ""
+    @AppStorage(PreferenceKey.commandModeShortcut) var commandModeShortcut: String = ""
+    /// `CommandModeEngine.storageValue`, or empty to pick automatically.
+    @AppStorage(PreferenceKey.commandModeEngine) var commandModeEngineStorage: String = ""
+    /// Opt-in: let Command Mode copy a selection an app won't share through
+    /// Accessibility. Off by default; see `AccessibilitySelectedTextService`.
+    @AppStorage(PreferenceKey.commandModeClipboardFallback) var commandModeClipboardFallback: Bool = false
     @AppStorage(PreferenceKey.mouseTriggerButton) var mouseTriggerButton: Int = MouseTriggerButton.off.rawValue
     @AppStorage(PreferenceKey.learnCorrectionsMode) var learnCorrectionsMode: LearnCorrectionsMode = .defaultMode
     @AppStorage(PreferenceKey.useScreenContext) var useScreenContext: Bool = true
+    @AppStorage(PreferenceKey.externalMicWhenLidClosed) var externalMicWhenLidClosed: Bool = false
+
+    var cleanupEndpoint: CleanupEndpointConfiguration {
+        get { CleanupEndpointConfiguration.decode(cleanupEndpointJSON) }
+        set { cleanupEndpointJSON = newValue.encoded(); objectWillChange.send() }
+    }
+
+    var websiteStyleBindings: [WebsiteStyleBinding] {
+        get { WebsiteStyleBindingStore.decode(UserDefaults.standard.string(forKey: PreferenceKey.websiteStyleBindings)) }
+        set {
+            UserDefaults.standard.set(WebsiteStyleBindingStore.encode(newValue), forKey: PreferenceKey.websiteStyleBindings)
+            objectWillChange.send()
+        }
+    }
 
     /// JSON-encoded `[AutoPauseAppEntry]` list (complex value not stored via `@AppStorage`).
     var autoPauseAppsJSON: String {
@@ -354,7 +447,9 @@ final class AppState: ObservableObject {
             format: binding?.style ?? settingsPreviewStyle,
             rules: settingsPreviewRules,
             intent: binding?.intent ?? writingIntent,
-            cleanup: binding?.cleanup ?? .inherit
+            cleanup: binding?.cleanup ?? .inherit,
+            cleanupLevel: binding?.cleanupLevel,
+            cleanupPrompt: binding?.cleanupPrompt
         )
     }
 
@@ -363,13 +458,20 @@ final class AppState: ObservableObject {
             text, profile: settingsPreviewProfile, snippetList: snippets,
             cleanupEnabled: transcriptCleanupEnabled, rewritingEnabled: writingRewriteEnabled,
             model: selectedCleanupModelKind, customPrompt: effectiveCleanupPrompt,
+            cleanupLevel: transcriptCleanupLevel,
             language: RewriteValidation.detectedLanguage(text), autoCapitalize: autoCapitalize,
             trailingSpace: appendTrailingSpace, preview: true
         )
     }
 
     private var outputPipeline: DictationOutputPipeline {
-        DictationOutputPipeline(cleaner: transcriptCleanup, snippets: snippetExpander)
+        DictationOutputPipeline(cleaner: activeCleanupService, snippets: snippetExpander)
+    }
+
+    private var activeCleanupService: TranscriptCleaning {
+        let endpoint = cleanupEndpoint
+        guard !endpoint.isLocal else { return transcriptCleanup }
+        return RemoteCleanupService(configuration: endpoint)
     }
 
     /// Approximate process RSS (MB) sampled just before the last unload.
@@ -456,6 +558,30 @@ final class AppState: ObservableObject {
 
     /// Names and identifiers read from the screen when recording started.
     private var screenContextTask: Task<[String], Never>?
+    private var screenDocumentURLTask: Task<URL?, Never>?
+
+    /// Selection captured before Command Mode starts recording its instruction.
+    private var activeCommandSelection: SelectedTextSnapshot?
+    private var commandModePressStartedAt: Date?
+    /// Engine chosen when the current Command Mode session began.
+    private var activeCommandEngine: CommandModeEngine?
+    /// App whose selection is being edited, for the history entry.
+    private var commandTargetApp: RunningAppSnapshot?
+    /// A held shortcut came up while the selection was still being read.
+    private var commandModeReleasedBeforeRecording = false
+    static let commandReleasedEarlyMessage = "Command Mode stopped: the shortcut was released before the microphone was ready. Hold it until you hear the double chime, or tap it once to start and again to finish."
+    /// The transform in flight, so Escape can stop it.
+    private var activeCommandTransformer: TextTransforming?
+    /// A local Command Mode model loading while the user speaks.
+    private var commandModelWarmup: Task<Void, Never>?
+    /// Frees a large Command Mode model a while after its last use.
+    private var commandModelIdleUnload: Task<Void, Never>?
+    static let commandModelIdleSeconds: TimeInterval = 300
+    private lazy var appleIntelligenceService = AppleIntelligenceTextService()
+    /// A quick press toggles Command Mode; holding past this point stops on
+    /// release. Internal so flow tests can exercise both gestures instantly.
+    var commandModeHoldThreshold: TimeInterval = 0.35
+    private var nonInjectedOutputDestination: ScratchpadOutputDestination = .settingsTest
 
     /// Suggestions the user dismissed, so the same fix isn't offered again.
     private var dismissedSuggestionKeys: Set<String> = []
@@ -486,6 +612,7 @@ final class AppState: ObservableObject {
     let screenContextReader: (any ScreenContextReading)?
     /// Notices the user fixing dictated words; nil when disabled.
     let correctionObserver: (any CorrectionObserving)?
+    let selectedTextService: (any SelectedTextAccessing)?
 
     /// Polls configured apps and pauses dictation while they run.
     let autoPauseMonitor = AutoPauseMonitor()
@@ -562,6 +689,10 @@ final class AppState: ObservableObject {
     /// Pre-load memory gate. Production defaults to SystemInfo; tests stub this
     /// so CI free+inactive pages cannot flake medium/large mock loads.
     var modelFitsInMemory: (ModelSize) -> Bool = { SystemInfo.canFitModelInMemory($0) }
+    var availableInputDevices: () -> [AudioDevice] = { AudioEngine.availableInputDevices() }
+    var isLidClosed: () -> Bool = { LidStateReader.isClosed() }
+    /// Seam for tests, which must not depend on the host's Apple Intelligence.
+    var appleIntelligenceAvailable: () -> Bool = { AppleIntelligenceTextService.isAvailable }
 
     // MARK: - Initialization
 
@@ -585,6 +716,7 @@ final class AppState: ObservableObject {
         historyStore: DictationHistoryStore? = nil,
         screenContextReader: (any ScreenContextReading)? = nil,
         correctionObserver: (any CorrectionObserving)? = nil,
+        selectedTextService: (any SelectedTextAccessing)? = nil,
         skipSystemIntegration: Bool = false
     ) {
         self.audioEngine = audioEngine
@@ -607,6 +739,8 @@ final class AppState: ObservableObject {
             ?? DictationHistoryStore(directory: skipSystemIntegration ? nil : DictationHistoryStore.defaultDirectory)
         self.screenContextReader = screenContextReader ?? (skipSystemIntegration ? nil : ScreenContextReader())
         self.correctionObserver = correctionObserver ?? (skipSystemIntegration ? nil : CorrectionObserver())
+        self.selectedTextService = selectedTextService
+            ?? (skipSystemIntegration ? nil : AccessibilitySelectedTextService(textInjector: textInjector))
         self.isKnownWord = { word, language in
             MainActor.assumeIsolated { SpellingOracle.shared.isKnownWord(word, language: language) }
         }
@@ -849,6 +983,11 @@ final class AppState: ObservableObject {
             shortcutMonitor.onShortcut = { [weak self] action in
                 Task { @MainActor in
                     await self?.handleShortcut(action)
+                }
+            }
+            shortcutMonitor.onShortcutReleased = { [weak self] action in
+                Task { @MainActor in
+                    await self?.handleShortcutReleased(action)
                 }
             }
             shortcutMonitor.onCancel = { [weak self] in
@@ -1231,13 +1370,16 @@ final class AppState: ObservableObject {
     // MARK: - Writing Styles
 
     /// Resolve the style for a target app using the current preferences.
-    func resolveWritingStyle(for target: RunningAppSnapshot?) -> ResolvedWritingStyle {
-        WritingStyleResolver.resolve(
+    func resolveWritingStyle(for target: RunningAppSnapshot?, documentURL: URL? = nil) -> ResolvedWritingStyle {
+        let appRule = WritingStyleResolver.resolve(
             target: target,
             bindings: writingStyleBindings,
             defaultStyle: writingStyleDefault,
             isEnabled: writingStyleEnabled,
             defaultIntent: writingIntent
+        )
+        return WritingStyleResolver.applyingWebsiteRule(
+            appRule, url: documentURL, bindings: websiteStyleBindings
         )
     }
 
@@ -1273,6 +1415,8 @@ final class AppState: ObservableObject {
         var binding = AppStyleBinding.from(snapshot: target, style: style)
         binding.intent = existing?.intent ?? .preserve
         binding.cleanup = existing?.cleanup ?? .inherit
+        binding.cleanupLevel = existing?.cleanupLevel
+        binding.cleanupPrompt = existing?.cleanupPrompt
         bindings.append(binding)
         writingStyleBindings = bindings
         VocaLogger.info(.appState, "Bound \(target.displayName) to writing style '\(style.rawValue)'")
@@ -1424,6 +1568,8 @@ final class AppState: ObservableObject {
         appStatus = .idle
         errorMessage = nil
         isTranscribing = false
+        resetCommandModeState()
+        liveTranscript = ""
         screenContextTask?.cancel()
         screenContextTask = nil
         if let id = activeHistoryEntryID {
@@ -1440,7 +1586,10 @@ final class AppState: ObservableObject {
 
     // MARK: - Recording Flow
 
-    func startRecording(injectResult: Bool = true) async {
+    func startRecording(
+        injectResult: Bool = true,
+        outputDestination: ScratchpadOutputDestination = .settingsTest
+    ) async {
         let interval = PerformanceTrace.begin("RecordingStart")
         defer { PerformanceTrace.end(interval) }
         // If we're already recording, this is a recovery attempt — the user
@@ -1466,6 +1615,19 @@ final class AppState: ObservableObject {
 
         // Starting another dictation means the user is done fixing the last one.
         correctionObserver?.flush()
+
+        // A file or system-audio transcription owns the speech model and shows
+        // as processing. Treating that as a stuck state would force-recover
+        // mid-job and run two decodes on one model.
+        if isTranscribingMedia {
+            VocaLogger.info(.appState, "Dictation ignored while a file or system-audio transcription is running")
+            errorMessage = "VocaMac is transcribing audio. Dictation is available when it finishes."
+            let message = errorMessage
+            DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
+                if self?.errorMessage == message { self?.errorMessage = nil }
+            }
+            return
+        }
 
         guard appStatus == .idle else {
             // If stuck in .processing or .error for too long, force recovery
@@ -1499,8 +1661,10 @@ final class AppState: ObservableObject {
         recordingGeneration = UUID()
         let generation = recordingGeneration
         recordingInjectsResult = injectResult
+        nonInjectedOutputDestination = outputDestination
         startScreenContextCapture(injectResult: injectResult)
         appStatus = .recording
+        liveTranscript = ""
         isRecording = true
         errorMessage = nil
         inputDeviceFallbackNotice = nil
@@ -1511,6 +1675,7 @@ final class AppState: ObservableObject {
         // not captured by anyone.
         if showCursorIndicator && overlayStyle != .off {
             cursorOverlay.show(style: overlayStyle, position: overlayPosition)
+            cursorOverlay.setCommandSession(commandModeSession)
         }
 
         // Start recording immediately for instant responsiveness.
@@ -1518,21 +1683,43 @@ final class AppState: ObservableObject {
         // mic buffer is negligible and handled well by WhisperKit's noise model.
         isStartingAudio = true
         pendingStopDuringStart = nil
-        let session = whisperService.startStreaming(language: selectedLanguage == "auto" ? nil : selectedLanguage)
+        let partialHandler: (@Sendable (String) -> Void)?
+        if overlayStyle == .live {
+            partialHandler = { [weak self] text in
+                _ = Task<Void, Never> { @MainActor [weak self] in
+                    guard let self, self.isRecording else { return }
+                    self.liveTranscript = text
+                    self.cursorOverlay.updateTranscript(text)
+                }
+            }
+        } else {
+            partialHandler = nil
+        }
+        let session = whisperService.startStreaming(
+            language: selectedLanguage == "auto" ? nil : selectedLanguage,
+            vocabulary: customVocabulary,
+            onPartial: partialHandler
+        )
+        // Only promise live words when an engine will actually send them:
+        // Whisper and Parakeet decode partial snapshots; the Apple Speech
+        // session streams audio but reports text only when it finishes.
+        let engineSendsPartials = [.whisperKit, .parakeet].contains(ModelSize(rawValue: selectedModelSize)?.engine)
+        cursorOverlay.setLiveWordsAvailable(session != nil && partialHandler != nil && engineSendsPartials)
         recordingTranscription = session
         audioEngine.onAudioSamples = session.map { session in
             { samples, offset in session.append(samples, at: offset) }
         }
+        let automaticExternal = automaticExternalInputIfNeeded()
         let didStartRecording = await startAudioEngine(
             silenceThreshold: Float(silenceThreshold),
             silenceDuration: silenceDuration,
             maxDuration: TimeInterval(maxRecordingDuration),
-            preferredInputDeviceID: selectedAudioDeviceID.isEmpty ? nil : selectedAudioDeviceID,
-            preferredInputChannel: selectedAudioChannel,
-            preferredInputChannelDeviceID: selectedAudioChannelDeviceID.isEmpty
-                ? nil
-                : selectedAudioChannelDeviceID,
-            preferredInputChannelCount: selectedAudioChannelCount
+            preferredInputDeviceID: automaticExternal?.id
+                ?? (selectedAudioDeviceID.isEmpty ? nil : selectedAudioDeviceID),
+            preferredInputChannel: automaticExternal == nil ? selectedAudioChannel : 0,
+            preferredInputChannelDeviceID: automaticExternal?.id
+                ?? (selectedAudioChannelDeviceID.isEmpty ? nil : selectedAudioChannelDeviceID),
+            preferredInputChannelCount: automaticExternal?.channelCount ?? selectedAudioChannelCount
         )
         isStartingAudio = false
 
@@ -1549,6 +1736,8 @@ final class AppState: ObservableObject {
             VocaLogger.warning(.appState, "Audio engine failed to start — resetting recording state")
             isRecording = false
             audioLevel = 0.0
+            resetCommandModeState()
+            liveTranscript = ""
             cursorOverlay.hide()
             hotKeyManager.resetKeyState()
             // Silently dropping back to idle looks like the hotkey did nothing.
@@ -1567,10 +1756,13 @@ final class AppState: ObservableObject {
         // Muting other audio would silence the cue too, so when that is on,
         // let the cue finish first.
         if soundEffectsEnabled && isRecording && appStatus == .recording {
+            let isCommand = activeCommandSelection != nil
             if duckOtherAudioEnabled {
-                await soundManager.playStartSoundAsync()
+                if isCommand { await soundManager.playCommandStartSoundAsync() }
+                else { await soundManager.playStartSoundAsync() }
             } else {
-                soundManager.playStartSound()
+                if isCommand { soundManager.playCommandStartSound() }
+                else { soundManager.playStartSound() }
             }
         }
 
@@ -1582,6 +1774,21 @@ final class AppState: ObservableObject {
             && recordingGeneration == generation {
             audioDucker.duck()
         }
+    }
+
+    private func automaticExternalInputIfNeeded() -> AudioDevice? {
+        guard externalMicWhenLidClosed, isLidClosed() else { return nil }
+        let devices = availableInputDevices()
+        if let selected = devices.first(where: { $0.id == selectedAudioDeviceID }), !selected.isBuiltIn {
+            return nil
+        }
+        let external = devices.filter { !$0.isBuiltIn }
+            .sorted { lhs, rhs in lhs.isDefault && !rhs.isDefault }
+            .first
+        if let external {
+            inputDeviceFallbackNotice = "MacBook lid is closed — recording from \(external.name)."
+        }
+        return external
     }
 
     func stopRecordingAndTranscribe(injectResult: Bool = true) async {
@@ -1632,12 +1839,15 @@ final class AppState: ObservableObject {
         cursorOverlay.transitionToProcessing()
 
         guard !audioData.isEmpty else {
+            resetCommandModeState()
+            liveTranscript = ""
             cursorOverlay.hide()
             appStatus = .idle
             return
         }
 
         guard audioData.contains(where: { abs($0) >= 0.0001 }) else {
+            resetCommandModeState()
             cursorOverlay.hide()
             // Don't keep a route warm when it produced only silence.
             audioEngine.forceReset()
@@ -1655,6 +1865,8 @@ final class AppState: ObservableObject {
 
         let contextTask = screenContextTask
         screenContextTask = nil
+        let documentURLTask = screenDocumentURLTask
+        screenDocumentURLTask = nil
         // Saved before transcribing, so a crash or failure can't lose it.
         let historyID = injectResult ? await beginHistoryEntry(audio: audioData) : nil
         activeHistoryEntryID = historyID
@@ -1666,8 +1878,16 @@ final class AppState: ObservableObject {
 
         do {
             let language = selectedLanguage == "auto" ? nil : selectedLanguage
+            let contextTerms = await Self.awaitContextTerms(contextTask)
+            let capturedDocumentURL = await Self.awaitDocumentURL(documentURLTask)
+            let recognitionVocabulary = Self.recognitionVocabulary(
+                customVocabulary, contextTerms: contextTerms
+            )
             let result: VocaTranscription
-            if let session, session.language == language {
+            let selectedEngine = ModelSize(rawValue: selectedModelSize)?.engine
+            let contextNeedsWhisperBatch = selectedEngine == .whisperKit
+                && (!contextTerms.isEmpty || translationEnabled)
+            if let session, session.language == language, !contextNeedsWhisperBatch {
                 do {
                     result = try await session.finish(expectedSampleCount: audioData.count)
                 } catch {
@@ -1677,14 +1897,14 @@ final class AppState: ObservableObject {
                     VocaLogger.warning(.appState, "Live transcription unavailable; decoding the complete recording")
                     result = try await whisperService.transcribe(
                         audioData: audioData, language: language,
-                        translate: translationEnabled, vocabulary: customVocabulary
+                        translate: translationEnabled, vocabulary: recognitionVocabulary
                     )
                 }
             } else {
                 session?.cancel()
                 result = try await whisperService.transcribe(
                     audioData: audioData, language: language,
-                    translate: translationEnabled, vocabulary: customVocabulary
+                    translate: translationEnabled, vocabulary: recognitionVocabulary
                 )
             }
 
@@ -1692,26 +1912,53 @@ final class AppState: ObservableObject {
                 if let historyID { historyStore.markCancelled(historyID) }
                 return
             }
-            lastTranscription = result
+            liveTranscript = ""
 
-            // Update stats
+            // A spoken edit command isn't a dictation: it stays out of the
+            // last-dictation card and the dictated-words stats.
+            if let selection = activeCommandSelection {
+                activeCommandSelection = nil
+                commandModeSession?.phase = .rewriting
+                commandModeSession?.instruction = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                await finishCommandMode(
+                    instruction: result.text,
+                    transcription: result,
+                    selection: selection,
+                    engine: activeCommandEngine ?? commandModeEngine,
+                    generation: generation
+                )
+                return
+            }
+
+            lastTranscription = result
+            lastCommandEdit = nil
             statsManager.recordTranscription(result)
 
             let trimmedText = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
             if !trimmedText.isEmpty {
                 let target = frontmostAppResolver.currentFrontmostApp()
                     ?? pendingTargetApp ?? frontmostAppResolver.lastActiveApp()
-                let resolved = resolveWritingStyle(for: target)
-                let profile = injectResult ? (nextWritingProfile ?? resolved.profile) : settingsPreviewProfile
+                let documentURL = await revalidatedDocumentURL(capturedDocumentURL)
+                let resolved = resolveWritingStyle(for: target, documentURL: documentURL)
+                // The scratchpad is plain notes: format it with the default
+                // style, not whichever app the Settings preview was left on.
+                let profile: WritingProfile
+                if injectResult {
+                    profile = nextWritingProfile ?? resolved.profile
+                } else if nonInjectedOutputDestination == .scratchpad {
+                    profile = resolveWritingStyle(for: nil).profile
+                } else {
+                    profile = settingsPreviewProfile
+                }
                 if injectResult {
                     nextWritingProfile = nil
                     activeWritingStyle = resolved
                 }
-                let contextTerms = await Self.awaitContextTerms(contextTask)
                 let output = await outputPipeline.process(
                     result.text, profile: profile, snippetList: snippets,
                     cleanupEnabled: transcriptCleanupEnabled, rewritingEnabled: writingRewriteEnabled,
                     model: selectedCleanupModelKind, customPrompt: effectiveCleanupPrompt,
+                    cleanupLevel: transcriptCleanupLevel,
                     language: result.detectedLanguage, autoCapitalize: autoCapitalize,
                     trailingSpace: appendTrailingSpace, preview: !injectResult,
                     dictionary: dictionaryContext(contextTerms: contextTerms, language: result.detectedLanguage)
@@ -1741,7 +1988,12 @@ final class AppState: ObservableObject {
                     textInjector.inject(text: output.text, preserveClipboard: preserveClipboard)
                     observeCorrections(to: output.text)
                 } else {
-                    settingsTestResultText = output.text
+                    if nonInjectedOutputDestination == .scratchpad {
+                        if !scratchpadText.isEmpty, !scratchpadText.hasSuffix("\n") { scratchpadText += "\n" }
+                        scratchpadText += output.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    } else {
+                        settingsTestResultText = output.text
+                    }
                 }
             } else {
                 VocaLogger.info(.appState, "Transcription produced no usable text (silence or blank audio)")
@@ -1765,6 +2017,8 @@ final class AppState: ObservableObject {
                 return
             }
             cursorOverlay.hide()
+            resetCommandModeState()
+            liveTranscript = ""
             var message = "Transcription failed: \(error.localizedDescription)"
             if let historyID {
                 historyStore.markFailed(historyID, message: error.localizedDescription)
@@ -1785,6 +2039,14 @@ final class AppState: ObservableObject {
         }
     }
 
+    func toggleScratchpadRecording() async {
+        if isRecording || appStatus == .recording {
+            await stopRecordingAndTranscribe()
+        } else {
+            await startRecording(injectResult: false, outputDestination: .scratchpad)
+        }
+    }
+
     /// Cancels the active recording without sending its audio to a transcription
     /// engine. This is used by the overlay's cancel button.
     func cancelRecording() async {
@@ -1801,6 +2063,10 @@ final class AppState: ObservableObject {
         audioLevel = 0.0
         screenContextTask?.cancel()
         screenContextTask = nil
+        screenDocumentURLTask?.cancel()
+        screenDocumentURLTask = nil
+        resetCommandModeState()
+        liveTranscript = ""
         cursorOverlay.hide()
         hotKeyManager.resetKeyState()
         appStatus = .idle
@@ -1819,6 +2085,8 @@ final class AppState: ObservableObject {
         guard isTranscribing else { return }
         recordingGeneration = UUID()
         finishingTranscription?.cancel()
+        resetCommandModeState()
+        liveTranscript = ""
         isTranscribing = false
         if let id = activeHistoryEntryID {
             historyStore.markCancelled(id)
@@ -2384,7 +2652,12 @@ final class AppState: ObservableObject {
     }
 
     var selectedCleanupModelKind: CleanupModelKind {
-        get { CleanupModelKind.resolved(stored: transcriptCleanupModel) }
+        get {
+            // The larger Command Mode models are too slow to run after every
+            // dictation; an imported or stale preference naming one falls back.
+            let kind = CleanupModelKind.resolved(stored: transcriptCleanupModel)
+            return CleanupModelKind.cleanupChoices.contains(kind) ? kind : .defaultKind
+        }
         set { transcriptCleanupModel = newValue.rawValue }
     }
 
@@ -2394,6 +2667,10 @@ final class AppState: ObservableObject {
     }
 
     func syncTranscriptCleanup() async {
+        if !cleanupEndpoint.isLocal {
+            transcriptCleanup.unload()
+            return
+        }
         let kind = selectedCleanupModelKind
         if transcriptCleanupEnabled, transcriptCleanup.isDownloaded(kind) {
             await transcriptCleanup.load(kind)
@@ -2414,20 +2691,51 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// Run one cleanup pass on text the user typed into Settings, so they can
-    /// see what the model does before trusting it with a dictation. Loads the
-    /// model on demand — testing should not require enabling the feature first.
-    func previewCleanup(_ text: String, prompt: String) async -> CleanupAttempt {
-        let kind = selectedCleanupModelKind
-        guard transcriptCleanup.isDownloaded(kind) else {
-            return CleanupAttempt(
-                output: text,
-                outcome: .skipped("\(kind.descriptor.displayName) is not downloaded yet"),
-                duration: 0
-            )
-        }
-        await transcriptCleanup.load(kind)
-        return await transcriptCleanup.preview(text, prompt: prompt)
+    /// Run text the user typed into Settings through the same cleanup a
+    /// dictation gets — "um" removal, the model, and the safety checks — so
+    /// "Try It" shows what would actually be typed, not the model's raw
+    /// answer. Uses the default writing style, loads the model on demand, and
+    /// works before cleanup is switched on.
+    func tryCleanup(_ text: String, prompt: String) async -> CleanupTryResult {
+        let started = Date()
+        let output = await outputPipeline.process(
+            text, profile: resolveWritingStyle(for: nil).profile, snippetList: snippets,
+            cleanupEnabled: true, rewritingEnabled: writingRewriteEnabled,
+            model: selectedCleanupModelKind, customPrompt: prompt,
+            cleanupLevel: transcriptCleanupLevel,
+            // Like an engine that reports no language: the pipeline judges it.
+            language: selectedLanguage == "auto" ? nil : selectedLanguage, autoCapitalize: autoCapitalize,
+            trailingSpace: false, preview: true
+        )
+        return CleanupTryResult(
+            input: text, text: output.text, summary: output.summary,
+            duration: Date().timeIntervalSince(started)
+        )
+    }
+
+    var cleanupEndpointHasAPIKey: Bool {
+        CleanupCredentialStore().readAPIKey()?.isEmpty == false
+    }
+
+    func saveCleanupAPIKey(_ key: String) throws {
+        try CleanupCredentialStore().saveAPIKey(key)
+        objectWillChange.send()
+    }
+
+    func deleteCleanupAPIKey() throws {
+        try CleanupCredentialStore().deleteAPIKey()
+        objectWillChange.send()
+    }
+
+    func reloadImportedSettings() {
+        loadSnippets()
+        loadDictionary()
+        decodedBindingsCache = nil
+        syncHotKeyConfiguration()
+        syncShortcutConfiguration()
+        syncLaunchAtLogin()
+        refreshActiveWritingStyle()
+        objectWillChange.send()
     }
 
     /// Turn cleanup on from onboarding and fetch the model in the background.
@@ -2448,6 +2756,14 @@ final class AppState: ObservableObject {
         transcriptCleanup.cancelDownload()
     }
 
+    /// Download a Command Mode model and select it for Command Mode only. The
+    /// dictation cleanup model stays as it was.
+    func downloadCommandModeModel(_ kind: CleanupModelKind) async {
+        await transcriptCleanup.download(kind)
+        guard transcriptCleanup.isDownloaded(kind) else { return }
+        commandModeEngine = .local(kind)
+    }
+
     func loadCleanupModel(_ kind: CleanupModelKind) async {
         await transcriptCleanup.load(kind)
         // Same rule as downloading: adopt the selection only once the model is
@@ -2460,6 +2776,63 @@ final class AppState: ObservableObject {
 
     func deleteCleanupModel(_ kind: CleanupModelKind) {
         transcriptCleanup.delete(kind)
+    }
+
+    /// Transcribe a user-chosen media file without injecting it into another
+    /// app. The GUI shares the same router and model choice as the CLI.
+    func transcribeFile(at url: URL) async throws -> VocaTranscription {
+        guard !isRecording, appStatus == .idle else {
+            throw CLIError(.transcriptionFailed, "Finish the active dictation before transcribing a file.")
+        }
+        appStatus = .processing
+        isTranscribingMedia = true
+        defer {
+            isTranscribingMedia = false
+            if appStatus == .processing { appStatus = .idle }
+        }
+        if !whisperService.isModelLoaded {
+            await ensureModelLoaded()
+        }
+        guard whisperService.isModelLoaded else {
+            throw CLIError(.modelNotDownloaded, "The selected speech model could not be loaded.")
+        }
+        let loaded = try await Task.detached(priority: .userInitiated) {
+            try AudioFileLoader().loadAudio(at: url)
+        }.value
+        let language = selectedLanguage == "auto" ? nil : selectedLanguage
+        let result = try await whisperService.transcribe(
+            audioData: loaded.samples,
+            language: language,
+            translate: translationEnabled,
+            vocabulary: customVocabulary
+        )
+        statsManager.recordTranscription(result)
+        lastTranscription = result
+        return result
+    }
+
+    func transcribeCapturedAudio(_ samples: [Float]) async throws -> VocaTranscription {
+        guard !samples.isEmpty else { throw CLIError(.invalidAudio, "No audio was captured.") }
+        guard !isRecording, appStatus == .idle else {
+            throw CLIError(.transcriptionFailed, "Finish the active dictation first.")
+        }
+        appStatus = .processing
+        isTranscribingMedia = true
+        defer {
+            isTranscribingMedia = false
+            if appStatus == .processing { appStatus = .idle }
+        }
+        if !whisperService.isModelLoaded { await ensureModelLoaded() }
+        guard whisperService.isModelLoaded else { throw CLIError(.modelNotDownloaded, "The selected model could not be loaded.") }
+        let result = try await whisperService.transcribe(
+            audioData: samples,
+            language: selectedLanguage == "auto" ? nil : selectedLanguage,
+            translate: translationEnabled,
+            vocabulary: customVocabulary
+        )
+        statsManager.recordTranscription(result)
+        lastTranscription = result
+        return result
     }
 
     private static func sameOutputTarget(_ first: RunningAppSnapshot?, _ second: RunningAppSnapshot?) -> Bool {
@@ -2542,6 +2915,7 @@ extension AppState {
                     result.text, profile: profile, snippetList: snippets,
                     cleanupEnabled: transcriptCleanupEnabled, rewritingEnabled: writingRewriteEnabled,
                     model: selectedCleanupModelKind, customPrompt: effectiveCleanupPrompt,
+                    cleanupLevel: transcriptCleanupLevel,
                     language: result.detectedLanguage, autoCapitalize: autoCapitalize,
                     trailingSpace: appendTrailingSpace,
                     dictionary: dictionaryContext(contextTerms: [], language: result.detectedLanguage)
@@ -2611,6 +2985,9 @@ extension AppState {
         if let combo = HotKeyCombo(storageString: handsFreeShortcut) {
             shortcuts[.handsFreeToggle] = combo
         }
+        if let combo = HotKeyCombo(storageString: commandModeShortcut) {
+            shortcuts[.commandMode] = combo
+        }
         monitor.updateShortcuts(shortcuts)
         monitor.updateMouseTrigger(button: MouseTriggerButton.resolved(stored: mouseTriggerButton).rawValue)
         refreshCancelKeyArming()
@@ -2620,6 +2997,7 @@ extension AppState {
         switch action {
         case .pasteLastDictation: return HotKeyCombo(storageString: pasteLastShortcut)
         case .handsFreeToggle: return HotKeyCombo(storageString: handsFreeShortcut)
+        case .commandMode: return HotKeyCombo(storageString: commandModeShortcut)
         }
     }
 
@@ -2628,6 +3006,7 @@ extension AppState {
         switch action {
         case .pasteLastDictation: pasteLastShortcut = stored
         case .handsFreeToggle: handsFreeShortcut = stored
+        case .commandMode: commandModeShortcut = stored
         }
         syncShortcutConfiguration()
     }
@@ -2638,6 +3017,302 @@ extension AppState {
             pasteLastDictation()
         case .handsFreeToggle:
             await toggleHandsFreeDictation()
+        case .commandMode:
+            if activeCommandSelection != nil,
+               isRecording || appStatus == .recording {
+                // A second press completes a Command Mode session that was
+                // started with a quick press instead of a hold.
+                commandModePressStartedAt = nil
+                await stopRecordingAndTranscribe()
+            } else {
+                commandModePressStartedAt = Date()
+                commandModeReleasedBeforeRecording = false
+                await beginCommandMode()
+                if activeCommandSelection == nil {
+                    commandModePressStartedAt = nil
+                }
+            }
+        }
+    }
+
+    func handleShortcutReleased(_ action: HotKeyShortcutAction) async {
+        guard action == .commandMode,
+              let startedAt = commandModePressStartedAt else { return }
+        commandModePressStartedAt = nil
+
+        // Quick taps are treated as toggle-on. This is especially important
+        // while a microphone route or cleanup model is still warming up: the
+        // old hold-only behavior interpreted the key-up as an immediate stop
+        // and ended the command before any audio could exist.
+        guard Date().timeIntervalSince(startedAt) >= commandModeHoldThreshold else {
+            VocaLogger.debug(.appState, "Command Mode quick press — waiting for a second press")
+            return
+        }
+
+        // A hold released before the microphone was on — reading the
+        // selection can take most of a second in an Electron app. Nothing the
+        // user said while holding was recorded, and turning the session into
+        // a press-again one would record speech they meant as done. Call it
+        // off instead and say how to time it.
+        guard activeCommandSelection != nil,
+              isRecording || appStatus == .recording else {
+            commandModeReleasedBeforeRecording = true
+            VocaLogger.debug(.appState, "Command Mode released before recording began — cancelling")
+            return
+        }
+        await stopRecordingAndTranscribe()
+    }
+
+    // MARK: Command Mode
+
+    /// The engine Command Mode will use, after falling back from choices that
+    /// can no longer work (an endpoint that was switched off).
+    var commandModeEngine: CommandModeEngine {
+        get {
+            CommandModeEngine.resolve(
+                stored: commandModeEngineStorage,
+                endpointIsConfigured: !cleanupEndpoint.isLocal && cleanupEndpoint.validationProblem() == nil,
+                appleIntelligenceAvailable: appleIntelligenceAvailable()
+            )
+        }
+        set { commandModeEngineStorage = newValue.storageValue }
+    }
+
+    /// Why `engine` can't run an edit right now, worded for the error banner.
+    func commandModeProblem(for engine: CommandModeEngine) -> String? {
+        switch engine {
+        case .appleIntelligence:
+            guard !appleIntelligenceAvailable() else { return nil }
+            return AppleIntelligenceTextService.availabilityProblem()
+                ?? "Apple Intelligence is unavailable. Choose another Command Mode model in Settings → Cleanup."
+        case .endpoint:
+            if cleanupEndpoint.isLocal {
+                return "Command Mode is set to use the cleanup endpoint, but none is configured. Choose a model in Settings → Cleanup."
+            }
+            return cleanupEndpoint.validationProblem()
+        case .local(let kind):
+            guard transcriptCleanup.isDownloaded(kind) else {
+                return "Download \(kind.descriptor.displayName) in Settings → Cleanup → Command Mode first."
+            }
+            return nil
+        }
+    }
+
+    private func commandTransformer(for engine: CommandModeEngine) -> TextTransforming {
+        switch engine {
+        case .appleIntelligence: return appleIntelligenceService
+        case .endpoint: return RemoteCleanupService(configuration: cleanupEndpoint)
+        case .local: return transcriptCleanup
+        }
+    }
+
+    /// Capture the current selection before recording the spoken edit command.
+    func beginCommandMode() async {
+        guard appStatus == .idle, !isRecording else { return }
+        let engine = commandModeEngine
+        if let problem = commandModeProblem(for: engine) {
+            showTemporaryError(problem)
+            return
+        }
+        guard let selectedTextService else {
+            showTemporaryError(SelectionCaptureFailure.noFocusedApp.message)
+            return
+        }
+        let selection: SelectedTextSnapshot
+        switch await selectedTextService.captureSelection() {
+        case .success(let captured):
+            selection = captured
+        case .failure(let failure):
+            showTemporaryError(failure.message)
+            return
+        }
+        if commandModeReleasedBeforeRecording {
+            commandModeReleasedBeforeRecording = false
+            showTemporaryError(Self.commandReleasedEarlyMessage)
+            return
+        }
+        activeCommandSelection = selection
+        activeCommandEngine = engine
+        commandTargetApp = frontmostAppResolver.currentFrontmostApp()
+        commandModeSession = CommandModeSession(
+            selection: selection.text,
+            appName: commandTargetApp?.displayName,
+            engineName: engine.displayName
+        )
+        VocaLogger.info(
+            .appState,
+            "Command Mode captured a " + String(selection.text.count) + "-character selection"
+                + (selection.source == .clipboard ? " via the clipboard" : "")
+        )
+        // Load a local model while the user speaks, so its load time isn't
+        // added to the wait after they stop.
+        commandModelIdleUnload?.cancel()
+        if case .local(let kind) = engine {
+            let cleanup = transcriptCleanup
+            commandModelWarmup = Task { await cleanup.load(kind) }
+        }
+        await startRecording(injectResult: false)
+        // Released while the speech model was still loading for this session.
+        if commandModeReleasedBeforeRecording {
+            commandModeReleasedBeforeRecording = false
+            if isRecording || appStatus == .recording { await cancelRecording() }
+            resetCommandModeState()
+            showTemporaryError(Self.commandReleasedEarlyMessage)
+            return
+        }
+        if !isRecording, activeCommandSelection != nil, !isTranscribing {
+            // The microphone never started; nothing will finish this session.
+            resetCommandModeState()
+        }
+    }
+
+    private func finishCommandMode(
+        instruction: String,
+        transcription: VocaTranscription,
+        selection: SelectedTextSnapshot,
+        engine: CommandModeEngine,
+        generation: UUID
+    ) async {
+        defer {
+            commandModeSession = nil
+            finishCommandModelUse(engine)
+        }
+        var instruction = instruction.trimmingCharacters(in: .whitespacesAndNewlines)
+        // "um, make this shorter" — the model doesn't need the hesitation, and
+        // History and the Last Edit card shouldn't show it.
+        if DictationOutputPipeline.knownLanguage(transcription.detectedLanguage).map(DictationOutputPipeline.isEnglish)
+            ?? RewriteValidation.likelyEnglish(instruction) {
+            instruction = WritingStyleEngine.removeHesitations(instruction).text
+        }
+        guard !instruction.isEmpty else {
+            cursorOverlay.hide()
+            showTemporaryError("No editing command was detected. Your selection was not changed.")
+            return
+        }
+        if case .local(let kind) = engine {
+            await commandModelWarmup?.value
+            commandModelWarmup = nil
+            guard generation == recordingGeneration else { return }
+            // Joins or no-ops when the warm-up already loaded it.
+            await transcriptCleanup.load(kind)
+            // Check the kind, not just "something is loaded": a load refused
+            // before it starts leaves the cleanup model resident, and a 0.5B
+            // cleanup model must not be handed an editing command.
+            guard transcriptCleanup.loadedKind == kind else {
+                cursorOverlay.hide()
+                let detail: String
+                if case .error(let message) = transcriptCleanup.modelState { detail = message }
+                else { detail = "\(kind.descriptor.displayName) could not be loaded." }
+                showTemporaryError("Command Mode did not change the text: \(detail)")
+                return
+            }
+        }
+        guard generation == recordingGeneration else { return }
+
+        let transformer = commandTransformer(for: engine)
+        activeCommandTransformer = transformer
+        let attempt = await transformer.transform(
+            selection.text,
+            prompt: CommandModePrompt.make(instruction: instruction)
+        )
+        activeCommandTransformer = nil
+        // Escape while the model was running: the user no longer wants this
+        // edit, even if the model finished anyway.
+        guard generation == recordingGeneration else {
+            VocaLogger.info(.appState, "Command Mode cancelled; selection left unchanged")
+            return
+        }
+
+        let replacement = TranscriptCleanup.preservingOuterWhitespace(
+            of: selection.text, in: attempt.output
+        )
+        guard case .cleaned = attempt.outcome,
+              let selectedTextService,
+              await selectedTextService.replaceSelection(selection, with: replacement) else {
+            cursorOverlay.hide()
+            let reason: String
+            switch attempt.outcome {
+            case .rejected(let why), .skipped(let why): reason = why
+            case .unchanged: reason = "the model returned the selection unchanged"
+            case .cleaned: reason = "the selection changed or its app is no longer in front"
+            }
+            showTemporaryError("Command Mode did not change the text: \(reason).")
+            return
+        }
+        lastCommandEdit = CommandModeEdit(
+            instruction: instruction,
+            original: selection.text,
+            replacement: replacement,
+            engineName: engine.displayName
+        )
+        if historyEnabled {
+            // Same retention as dictations, applied now rather than at the
+            // next dictation, so a run of edits can't outlive the setting.
+            defer { historyStore.applyRetention(historyRetention) }
+            historyStore.recordCommandEdit(
+                instruction: instruction,
+                original: selection.text,
+                replacement: replacement,
+                summary: "Command Mode · \(engine.displayName)",
+                target: commandTargetApp,
+                modelID: selectedModelSize,
+                language: transcription.detectedLanguage,
+                audioSeconds: transcription.audioLengthSeconds
+            )
+        }
+        VocaLogger.info(
+            .appState,
+            "Command Mode queued a " + String(replacement.count) + "-character replacement"
+        )
+        cursorOverlay.hide()
+        appStatus = .idle
+        errorMessage = nil
+    }
+
+    /// Drop a Command Mode session that ended without an edit: stop its
+    /// model, and hand the llama.cpp slot back to cleanup.
+    private func resetCommandModeState() {
+        activeCommandSelection = nil
+        commandModeSession = nil
+        commandModePressStartedAt = nil
+        activeCommandTransformer?.cancelTransform()
+        activeCommandTransformer = nil
+        if let engine = activeCommandEngine { finishCommandModelUse(engine) }
+    }
+
+    /// Give the cleanup model back after a Command Mode model borrowed the
+    /// shared llama.cpp slot, or free a large model that nothing else needs.
+    private func finishCommandModelUse(_ engine: CommandModeEngine) {
+        activeCommandEngine = nil
+        guard case .local(let kind) = engine else { return }
+        commandModelIdleUnload?.cancel()
+        if cleanupUsesLocalModel {
+            // The next dictation needs its cleanup model resident.
+            if kind != selectedCleanupModelKind {
+                Task { await releaseCommandModelSlot() }
+            }
+            return
+        }
+        // Nothing else needs the slot: keep the model warm for a follow-up
+        // edit, then free its memory.
+        commandModelIdleUnload = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(Self.commandModelIdleSeconds * 1_000_000_000))
+            guard let self, !Task.isCancelled, self.activeCommandEngine == nil else { return }
+            await self.releaseCommandModelSlot()
+        }
+    }
+
+    private var cleanupUsesLocalModel: Bool {
+        transcriptCleanupEnabled && cleanupEndpoint.isLocal
+            && transcriptCleanup.isDownloaded(selectedCleanupModelKind)
+    }
+
+    /// Put the cleanup model back in the shared slot, or empty it.
+    private func releaseCommandModelSlot() async {
+        if cleanupUsesLocalModel {
+            await transcriptCleanup.load(selectedCleanupModelKind)
+        } else if transcriptCleanup.isLoaded {
+            transcriptCleanup.unload()
         }
     }
 
@@ -2720,6 +3395,9 @@ extension AppState {
 
     func dictionaryContext(contextTerms: [String], language: String?) -> DictionaryContext {
         let isKnownWord = self.isKnownWord
+        // "auto" from Parakeet or Apple Speech isn't a language; passed on, it
+        // made every word count as known and switched off name fixes.
+        let language = DictationOutputPipeline.knownLanguage(language)
         return DictionaryContext(
             vocabulary: vocabularyTerms,
             replacements: wordReplacements,
@@ -2793,11 +3471,20 @@ extension AppState {
     fileprivate func startScreenContextCapture(injectResult: Bool) {
         screenContextTask?.cancel()
         screenContextTask = nil
-        guard injectResult, useScreenContext, let reader = screenContextReader else { return }
-        let isKnownWord = self.isKnownWord
-        screenContextTask = Task { @MainActor in
-            guard let text = await reader.captureFrontmostContext(), !Task.isCancelled else { return [] }
-            return ScreenContextTerms.extract(from: text) { isKnownWord($0, "en") }
+        screenDocumentURLTask?.cancel()
+        screenDocumentURLTask = nil
+        guard injectResult, let reader = screenContextReader else { return }
+        if useScreenContext {
+            let isKnownWord = self.isKnownWord
+            screenContextTask = Task { @MainActor in
+                guard let text = await reader.captureFrontmostContext(), !Task.isCancelled else { return [] }
+                return ScreenContextTerms.extract(from: text) { isKnownWord($0, "en") }
+            }
+        }
+        if !websiteStyleBindings.isEmpty {
+            screenDocumentURLTask = Task { @MainActor in
+                await reader.captureFrontmostDocumentURL()
+            }
         }
     }
 
@@ -2816,6 +3503,64 @@ extension AppState {
             return first ?? []
         }
     }
+
+    fileprivate static func awaitDocumentURL(_ task: Task<URL?, Never>?) async -> URL? {
+        guard let task else { return nil }
+        return await withTaskGroup(of: URL?.self) { group in
+            group.addTask { await task.value }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                return nil
+            }
+            let first = await group.next() ?? nil
+            group.cancelAll()
+            return first
+        }
+    }
+
+    /// A browser can navigate while transcription runs. Apply a website rule
+    /// only when the output is still going to the host captured at recording
+    /// start; a failed refresh is safer than formatting for a stale page.
+    private func revalidatedDocumentURL(_ capturedURL: URL?) async -> URL? {
+        guard !websiteStyleBindings.isEmpty,
+              let capturedURL,
+              let reader = screenContextReader,
+              let currentURL = await reader.captureFrontmostDocumentURL(),
+              capturedURL.host?.lowercased() == currentURL.host?.lowercased() else {
+            if capturedURL != nil {
+                VocaLogger.warning(.appState, "Website changed before dictation output; skipping the captured website rule")
+            }
+            return nil
+        }
+        return currentURL
+    }
+
+    /// Whisper gets the same ephemeral screen terms as the post-corrector.
+    ///
+    /// WhisperKit keeps only the last ~220 prompt tokens and trims from the
+    /// front, so the user's own vocabulary goes last and screen terms fill a
+    /// small budget ahead of it: a page full of identifiers is what gets cut,
+    /// never the user's words. A long glossary also makes Whisper more likely
+    /// to echo it back as a transcript.
+    static func recognitionVocabulary(_ vocabulary: String, contextTerms: [String]) -> String {
+        let userTerms = WhisperService.vocabularyTerms(from: vocabulary)
+        let known = Set(userTerms.map { $0.lowercased() })
+        let characterBudget = max(0, recognitionPromptCharacterBudget - userTerms.joined(separator: ", ").count)
+        var screenTerms: [String] = []
+        var used = 0
+        var seen = Set<String>()
+        for term in contextTerms where !known.contains(term.lowercased()) && seen.insert(term.lowercased()).inserted {
+            guard screenTerms.count < maximumRecognitionContextTerms,
+                  used + term.count + 2 <= characterBudget else { break }
+            screenTerms.append(term)
+            used += term.count + 2
+        }
+        return (screenTerms + userTerms).joined(separator: ", ")
+    }
+
+    /// About 200 tokens of glossary at roughly three characters per token.
+    static let recognitionPromptCharacterBudget = 600
+    static let maximumRecognitionContextTerms = 40
 
     fileprivate func loadDictionary() {
         wordReplacements = Self.loadJSON([WordReplacement].self, forKey: PreferenceKey.wordReplacements) ?? []

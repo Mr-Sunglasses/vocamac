@@ -7,12 +7,18 @@ final class DictationOutputPipelineTests: XCTestCase {
         _ input: String, cleaner: MockTranscriptCleanup,
         format: WritingStyle = .plain, intent: WritingIntent = .preserve,
         cleanup: WritingCleanupPolicy = .inherit, enabled: Bool = true,
-        experimental: Bool = true, snippets: [Snippet] = [], language: String? = "en"
+        experimental: Bool = true, snippets: [Snippet] = [], language: String? = "en",
+        level: CleanupLevel = .medium, cleanupPrompt: String? = nil
     ) async -> DictationOutputResult {
         await DictationOutputPipeline(cleaner: cleaner, snippets: SnippetExpander()).process(
-            input, profile: WritingProfile(format: format, rules: format.defaultRules, intent: intent, cleanup: cleanup),
+            input,
+            profile: WritingProfile(
+                format: format, rules: format.defaultRules, intent: intent,
+                cleanup: cleanup, cleanupPrompt: cleanupPrompt
+            ),
             snippetList: snippets, cleanupEnabled: enabled, rewritingEnabled: experimental,
             model: .defaultKind, customPrompt: "Custom cleanup instructions",
+            cleanupLevel: level,
             language: language, autoCapitalize: true, trailingSpace: false
         )
     }
@@ -24,6 +30,144 @@ final class DictationOutputPipelineTests: XCTestCase {
         XCTAssertEqual(result.text, text)
         XCTAssertEqual(cleaner.loadCallCount, 0)
         XCTAssertEqual(cleaner.cleanCallCount, 0)
+    }
+
+    func testNoneLevelSkipsTheCleanupModel() async {
+        let cleaner = MockTranscriptCleanup()
+        let result = await process("um hello", cleaner: cleaner, level: .none)
+        XCTAssertEqual(cleaner.cleanCallCount, 0)
+        XCTAssertEqual(result.text, "Um hello", "None keeps every spoken sound")
+        XCTAssertEqual(result.summary, "Cleanup level None — formatting only")
+    }
+
+    func testHesitationsGoWithoutTheModelInTerminalAndWithCleanupOff() async {
+        let terminal = MockTranscriptCleanup()
+        let inTerminal = await process("git status um um", cleaner: terminal, format: .terminal)
+        XCTAssertEqual(inTerminal.text, "git status")
+        XCTAssertEqual(terminal.cleanCallCount, 0, "Terminal still never reaches the model")
+        XCTAssertTrue(inTerminal.summary.contains("Terminal style"))
+        XCTAssertTrue(inTerminal.summary.contains("removed"))
+
+        let off = await process("hello, um, how are you?", cleaner: MockTranscriptCleanup(), enabled: false)
+        XCTAssertEqual(off.text, "Hello, how are you?")
+        XCTAssertTrue(off.summary.contains("Smart Cleanup is off"))
+    }
+
+    func testHesitationsSurviveWhenARewriteIsRejected() async {
+        let cleaner = MockTranscriptCleanup()
+        cleaner.cleanHandler = { _ in "Something completely different." }
+        let result = await process("Hi, um, I hope you're good", cleaner: cleaner)
+        XCTAssertEqual(result.text, "Hi, I hope you're good")
+        XCTAssertTrue(result.summary.hasPrefix("Kept your wording"), result.summary)
+    }
+
+    func testLightLevelAndFormattingOnlyKeepHesitations() async {
+        let light = await process("um hello", cleaner: MockTranscriptCleanup(), level: .light)
+        XCTAssertTrue(light.text.lowercased().contains("um"))
+        let formattingOnly = await process("um hello there", cleaner: MockTranscriptCleanup(), cleanup: .off)
+        XCTAssertTrue(formattingOnly.text.lowercased().hasPrefix("um"))
+    }
+
+    func testUnlabelledTextIsJudgedWithoutItsHesitations() {
+        XCTAssertTrue(RewriteValidation.likelyEnglish("hello world um um"))
+        XCTAssertTrue(RewriteValidation.likelyEnglish("so um hello"))
+        XCTAssertTrue(RewriteValidation.likelyEnglish("Uh"))
+        XCTAssertFalse(RewriteValidation.likelyEnglish("wir treffen uns um 5 Uhr"))
+    }
+
+    func testEnginesThatReportAutoStillGetHesitationRemoval() async {
+        // Parakeet reports "auto" when no language is chosen.
+        let result = await process("hello world um um", cleaner: MockTranscriptCleanup(), enabled: false, language: "auto")
+        XCTAssertEqual(result.text, "Hello world")
+        XCTAssertNil(DictationOutputPipeline.knownLanguage("auto"))
+        XCTAssertEqual(DictationOutputPipeline.knownLanguage("en-US"), "en-us")
+    }
+
+    func testSpokenCorrectionsResolveWithoutTheModel() async {
+        let cleaner = MockTranscriptCleanup()
+        let result = await process("let's do it tomorrow, oh, no, Wednesday", cleaner: cleaner, enabled: false)
+        XCTAssertEqual(result.text, "Let's do it Wednesday")
+        XCTAssertTrue(result.summary.contains("spoken correction applied"), result.summary)
+        // Code and Terminal text is only trimmed of filler, never corrected.
+        let terminal = await process("deploy Monday, no, Tuesday tonight", cleaner: MockTranscriptCleanup(),
+                                     format: .terminal, enabled: false)
+        XCTAssertEqual(terminal.text, "deploy Monday, no, Tuesday tonight")
+        // Light keeps every word, corrections included.
+        let light = await process("let's do it tomorrow, no, Wednesday", cleaner: MockTranscriptCleanup(), enabled: false, level: .light)
+        XCTAssertTrue(light.text.contains("tomorrow"))
+    }
+
+    func testHesitationRemovalIsEnglishOnly() async {
+        let german = await process("wir treffen uns um 5 Uhr", cleaner: MockTranscriptCleanup(), enabled: false, language: "de")
+        XCTAssertTrue(german.text.contains(" um 5 Uhr"))
+    }
+
+    func testALoneHesitationTypesNothing() async {
+        let result = await process("Uh", cleaner: MockTranscriptCleanup())
+        XCTAssertEqual(result.text, "")
+    }
+
+    func testHesitationCleanupRepairsPunctuationAndCase() {
+        let cases: [(String, String)] = [
+            ("Hello, um, how are you?", "Hello, how are you?"),
+            ("How are you? Um I hope you're good.", "How are you? I hope you're good."),
+            ("Um, so we ship Friday", "So we ship Friday"),
+            ("hello world, um.", "hello world."),
+            ("uh uh okay", "okay"),
+            ("Umm, uhh, hmm, erm, uhm", ""),
+            ("the summary says 5 mm and humming", "the summary says 5 mm and humming"),
+        ]
+        for (input, expected) in cases {
+            XCTAssertEqual(WritingStyleEngine.removeHesitations(input).text, expected, input)
+        }
+        XCTAssertFalse(WritingStyleEngine.removeHesitations("nothing to remove").removed)
+    }
+
+    func testHesitationRemovalLeavesOtherWhitespaceAlone() {
+        // Indentation, double spaces, and line breaks are content in code.
+        XCTAssertEqual(
+            WritingStyleEngine.removeHesitations("    let x = 1  // um").text,
+            "    let x = 1  //"
+        )
+        XCTAssertEqual(
+            WritingStyleEngine.removeHesitations("first  line\num second line\n\tindented").text,
+            "first  line\nsecond line\n\tindented"
+        )
+        XCTAssertEqual(
+            WritingStyleEngine.removeHesitations("a  b uh c").text,
+            "a  b c"
+        )
+    }
+
+    func testNamesStayReadableForTheModelAndMustSurvive() {
+        let protected = RewriteProtectedText("Hi Sergey, how are you?")
+        XCTAssertTrue(protected.text.contains("Sergey"), "Names are not hidden behind tokens")
+        XCTAssertEqual(protected.restoreValidated("Hi Sergey, how are you?"), "Hi Sergey, how are you?")
+        XCTAssertNil(protected.restoreValidated("How are you?"), "Dropping the name rejects the rewrite")
+        XCTAssertNil(protected.restoreValidated("Hi Sergei, how are you?"), "So does respelling it")
+    }
+
+    func testNumericCorrectionsResolveWithOrWithoutTheModel() async {
+        let cleaner = MockTranscriptCleanup()
+        cleaner.cleanHandler = { $0 }
+        let corrected = await process("meet at 2 actually 3", cleaner: cleaner, level: .high)
+        XCTAssertEqual(corrected.text, "Meet at 3")
+
+        let disabled = await process(
+            "meet at 2 actually 3", cleaner: MockTranscriptCleanup(), enabled: false, level: .high
+        )
+        // Rule-based, so Smart Cleanup being off doesn't matter.
+        XCTAssertEqual(disabled.text, "Meet at 3")
+    }
+
+    func testProfileCleanupPromptOverridesTheGlobalPrompt() async {
+        let cleaner = MockTranscriptCleanup()
+        _ = await process(
+            "hello there", cleaner: cleaner,
+            cleanupPrompt: "Keep the app-specific terminology"
+        )
+        XCTAssertTrue(cleaner.lastPrompt?.contains("Keep the app-specific terminology") == true)
+        XCTAssertFalse(cleaner.lastPrompt?.contains("Custom cleanup instructions") == true)
     }
 
     func testTechnicalFormatsNeverRunModelEvenWithWordingEnabled() async {
@@ -72,7 +216,7 @@ final class DictationOutputPipelineTests: XCTestCase {
         }
     }
 
-    func testChangedFactsFallBackToDeterministicOutput() async {
+    func testChangedFactsAreNeverTakenFromTheModel() async {
         for (input, output) in [
             ("do not deploy today", "Deploy today."),
             ("the meeting is at 15", "The meeting is at 50."),
@@ -85,8 +229,11 @@ final class DictationOutputPipelineTests: XCTestCase {
             let cleaner = MockTranscriptCleanup()
             cleaner.cleanHandler = { _ in output }
             let result = await process(input, cleaner: cleaner, intent: .professional)
-            XCTAssertTrue(result.summary.contains("rejected"), input)
-            XCTAssertEqual(result.text, DictationOutputFormatter.apply(input, autoCapitalize: true, appendTrailingSpace: false))
+            // Every word the user said survives exactly; at most the model's
+            // punctuation is taken. Nothing is "rejected" whole.
+            let words = { (text: String) in RewriteValidation.substrings(#"[\p{L}\p{N}']+"#, in: text.lowercased()) }
+            XCTAssertEqual(words(result.text), words(input), input)
+            XCTAssertFalse(result.summary.contains("rejected"), input)
         }
     }
 
@@ -102,7 +249,8 @@ final class DictationOutputPipelineTests: XCTestCase {
 
     func testSnippetTriggerIsMatchedBeforeRewriteAndExpansionIsExact() async {
         let cleaner = MockTranscriptCleanup()
-        cleaner.cleanHandler = { $0.replacingOccurrences(of: "um send", with: "Please send") }
+        // "um" is removed before the model; the model sees "send …".
+        cleaner.cleanHandler = { $0.hasPrefix("send") ? "Please " + $0 : $0 }
         let result = await process(
             "um send my signature", cleaner: cleaner, intent: .professional,
             snippets: [Snippet(trigger: "my signature", expansion: "alice@example.com\nEngineering\n")]

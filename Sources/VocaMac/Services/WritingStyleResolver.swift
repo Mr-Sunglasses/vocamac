@@ -14,9 +14,14 @@ struct ResolvedWritingStyle: Equatable {
     let matchedAppName: String?
     var intent: WritingIntent = .preserve
     var cleanup: WritingCleanupPolicy = .inherit
+    var cleanupLevel: CleanupLevel?
+    var cleanupPrompt: String?
 
     var profile: WritingProfile {
-        WritingProfile(format: style, rules: rules, intent: intent, cleanup: cleanup)
+        WritingProfile(
+            format: style, rules: rules, intent: intent, cleanup: cleanup,
+            cleanupLevel: cleanupLevel, cleanupPrompt: cleanupPrompt
+        )
     }
 
     /// The unshaped result: global preferences only.
@@ -64,7 +69,9 @@ enum WritingStyleResolver {
                     rules: match.effectiveRules,
                     matchedAppName: match.displayName,
                     intent: match.intent,
-                    cleanup: match.cleanup
+                    cleanup: match.cleanup,
+                    cleanupLevel: match.cleanupLevel,
+                    cleanupPrompt: match.cleanupPrompt
                 )
             }
         }
@@ -74,6 +81,34 @@ enum WritingStyleResolver {
             rules: defaultStyle.defaultRules,
             matchedAppName: nil,
             intent: defaultIntent
+        )
+    }
+
+    /// Website rules override the receiving browser's app rule. Matching uses
+    /// only the URL host and never stores page content or browsing history.
+    static func applyingWebsiteRule(
+        _ resolved: ResolvedWritingStyle,
+        url: URL?,
+        bindings: [WebsiteStyleBinding]
+    ) -> ResolvedWritingStyle {
+        // The most specific domain wins, so a mail.example.com rule beats an
+        // example.com rule whichever was added first. Among equals, the later.
+        let specificity = { (binding: WebsiteStyleBinding) -> Int in
+            binding.hostPattern.trimmingCharacters(in: CharacterSet(charactersIn: "*.")).count
+        }
+        guard let url,
+              let match = bindings.filter({ $0.matches(url) })
+                .enumerated()
+                .max(by: { (specificity($0.element), $0.offset) < (specificity($1.element), $1.offset) })?
+                .element else { return resolved }
+        return ResolvedWritingStyle(
+            style: match.style,
+            rules: match.style.defaultRules,
+            matchedAppName: match.displayName,
+            intent: match.intent,
+            cleanup: match.cleanup,
+            cleanupLevel: match.cleanupLevel,
+            cleanupPrompt: match.cleanupPrompt
         )
     }
 }

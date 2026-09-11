@@ -51,9 +51,16 @@ protocol SoundPlaying: AnyObject {
     func playStopSound()
     func playStopSoundAsync() async
     func previewStartThenStop() async
+    /// Command Mode's start cue: the selected tone, twice, so an edit sounds
+    /// different from a dictation without looking at the screen.
+    func playCommandStartSound()
+    func playCommandStartSoundAsync() async
 }
 
 extension SoundPlaying {
+    func playCommandStartSound() { playStartSound() }
+    func playCommandStartSoundAsync() async { await playStartSoundAsync() }
+
     func previewStartThenStop() async {
         await playStartSoundAsync()
         await playStopSoundAsync()
@@ -92,6 +99,7 @@ protocol HotKeyMonitoring: AnyObject {
 /// the default implementations do nothing.
 protocol HotKeyShortcutMonitoring: AnyObject {
     var onShortcut: ((HotKeyShortcutAction) -> Void)? { get set }
+    var onShortcutReleased: ((HotKeyShortcutAction) -> Void)? { get set }
     var onCancel: (() -> Void)? { get set }
     func updateShortcuts(_ shortcuts: [HotKeyShortcutAction: HotKeyCombo])
     func setCancelKeyArmed(_ armed: Bool)
@@ -138,6 +146,18 @@ protocol CursorOverlayManaging: AnyObject {
     func transitionToRecording()
     func transitionToProcessing()
     func updateAudioLevel(_ level: Float)
+    func updateTranscript(_ text: String)
+    /// Show the overlay as a Command Mode session (an edit of selected text)
+    /// rather than a dictation, or nil for dictation. `show` resets it.
+    func setCommandSession(_ session: CommandModeSession?)
+    /// Whether partial words will arrive for this recording, so the live
+    /// panel doesn't promise words an engine never sends.
+    func setLiveWordsAvailable(_ available: Bool)
+}
+
+extension CursorOverlayManaging {
+    func setCommandSession(_ session: CommandModeSession?) {}
+    func setLiveWordsAvailable(_ available: Bool) {}
 }
 
 // MARK: - ModelManaging
@@ -179,7 +199,11 @@ extension ModelManaging {
 protocol SpeechTranscribing: AnyObject {
     var loadedModelName: String? { get }
     var isModelLoaded: Bool { get }
-    func startStreaming(language: String?) -> RecordingTranscription?
+    func startStreaming(
+        language: String?,
+        vocabulary: String,
+        onPartial: (@Sendable (String) -> Void)?
+    ) -> RecordingTranscription?
     func transcribe(audioData: [Float], language: String?, translate: Bool, vocabulary: String) async throws -> VocaTranscription
     func _loadModel(name: String?, folder: URL?, onPhaseChange: ((String) -> Void)?) async throws
     /// Release the currently loaded model (and any sibling engines) to free memory.
@@ -187,7 +211,11 @@ protocol SpeechTranscribing: AnyObject {
 }
 
 extension SpeechTranscribing {
-    func startStreaming(language: String?) -> RecordingTranscription? { nil }
+    func startStreaming(
+        language: String?,
+        vocabulary: String = "",
+        onPartial: (@Sendable (String) -> Void)? = nil
+    ) -> RecordingTranscription? { nil }
 
     func loadModel(name: String? = nil, folder: URL? = nil, onPhaseChange: ((String) -> Void)? = nil) async throws {
         try await _loadModel(name: name, folder: folder, onPhaseChange: onPhaseChange)
@@ -199,6 +227,10 @@ extension SpeechTranscribing {
 protocol TextInjecting: AnyObject {
     var onFailure: ((String) -> Void)? { get set }
     func inject(text: String, preserveClipboard: Bool)
+    /// Deliver only if the same application is still in front. Command Mode
+    /// uses this after revalidating its captured selection so a delayed paste
+    /// cannot land in a different app.
+    func inject(text: String, preserveClipboard: Bool, expectedProcessID: pid_t)
 }
 
 // MARK: - FrontmostAppResolving
@@ -239,6 +271,10 @@ extension TextInjecting {
         get { nil }
         set { }
     }
+
+    func inject(text: String, preserveClipboard: Bool, expectedProcessID: pid_t) {
+        inject(text: text, preserveClipboard: preserveClipboard)
+    }
 }
 
 // MARK: - StatsManaging
@@ -276,18 +312,38 @@ extension SnippetExpanding {
     }
 }
 
+// MARK: - TextTransforming
+
+/// Runs Command Mode's edits of selected text. Unlike transcript cleanup, a
+/// transform may intentionally translate, expand, or substantially shorten.
+@MainActor
+protocol TextTransforming: AnyObject {
+    func transform(_ text: String, prompt: String) async -> CleanupAttempt
+    /// Ask an in-flight transform to stop early. The caller discards its result.
+    func cancelTransform()
+}
+
+extension TextTransforming {
+    func cancelTransform() {}
+}
+
 // MARK: - TranscriptCleaning
 
 @MainActor
-protocol TranscriptCleaning: AnyObject {
+protocol TranscriptCleaning: TextTransforming {
     var modelState: CleanupModelState { get }
     var isLoaded: Bool { get }
+    /// The model currently resident, when one is.
+    var loadedKind: CleanupModelKind? { get }
+    /// False when text leaves this Mac (a remote endpoint).
+    var isOnDevice: Bool { get }
     nonisolated func inputBudget(forPrompt prompt: String) -> Int
     var objectWillChangePublisher: AnyPublisher<Void, Never> { get }
 
     func clean(_ text: String, prompt: String) async -> String
     func attempt(_ text: String, prompt: String) async -> CleanupAttempt
     func preview(_ text: String, prompt: String) async -> CleanupAttempt
+    func availabilityProblem(for kind: CleanupModelKind) -> String?
     func isDownloaded(_ kind: CleanupModelKind) -> Bool
     func pruneUnknownModels()
     func download(_ kind: CleanupModelKind) async
@@ -298,8 +354,19 @@ protocol TranscriptCleaning: AnyObject {
 }
 
 extension TranscriptCleaning {
+    var loadedKind: CleanupModelKind? { nil }
+    var isOnDevice: Bool { true }
+
+    func availabilityProblem(for kind: CleanupModelKind) -> String? {
+        isDownloaded(kind) ? nil : "download a local cleanup model in Settings"
+    }
+
     func attempt(_ text: String, prompt: String) async -> CleanupAttempt {
         let output = await clean(text, prompt: prompt)
         return CleanupAttempt(output: output, outcome: output == text ? .unchanged : .cleaned, duration: 0)
+    }
+
+    func transform(_ text: String, prompt: String) async -> CleanupAttempt {
+        await preview(text, prompt: prompt)
     }
 }

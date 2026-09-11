@@ -78,6 +78,25 @@ private final class ChangingClipboardProvider: NSObject, NSPasteboardItemDataPro
 }
 
 extension ClipboardPreservationTests {
+    func testInProcessAccessibilityWriteStaysOnMainQueue() async {
+        let board = NSPasteboard(name: .init("com.vocamac.tests.\(UUID())"))
+        defer { board.releaseGlobally() }
+        let inserted = expectation(description: "in-process accessibility insertion")
+        let injector = TextInjector(
+            pasteboard: board, accessibilityTrustedOverride: true,
+            accessibilityWorkerOverride: { _ in
+                XCTAssertTrue(Thread.isMainThread)
+                inserted.fulfill()
+                return true
+            }, frontmostPIDProvider: { ProcessInfo.processInfo.processIdentifier }
+        )
+
+        injector.inject(text: "result", preserveClipboard: false)
+
+        await fulfillment(of: [inserted], timeout: 1)
+        await drainInjectionQueue()
+    }
+
     func testSlowAccessibilityWorkerDoesNotBlockMainQueue() async {
         let board = NSPasteboard(name: .init("com.vocamac.tests.\(UUID())"))
         defer { board.releaseGlobally() }
@@ -134,6 +153,29 @@ extension ClipboardPreservationTests {
         )
         injector.onFailure = { _ in cancelled.fulfill() }
         injector.inject(text: "result", preserveClipboard: true)
+        await fulfillment(of: [cancelled], timeout: 1)
+        XCTAssertEqual(board.string(forType: .string), "original")
+    }
+
+    func testExpectedProcessPreventsCommandModeFromTargetingAnotherApp() async {
+        let board = NSPasteboard(name: .init("com.vocamac.tests.\(UUID())"))
+        defer { board.releaseGlobally() }
+        board.setString("original", forType: .string)
+        let cancelled = expectation(description: "different target reported")
+        let injector = TextInjector(
+            pasteboard: board,
+            accessibilityTrustedOverride: true,
+            accessibilityInjectionOverride: { _ in
+                XCTFail("Must not attempt AX insertion into another app")
+                return false
+            },
+            pasteActionOverride: { XCTFail("Must not paste into another app") },
+            frontmostPIDProvider: { 456 }
+        )
+        injector.onFailure = { _ in cancelled.fulfill() }
+
+        injector.inject(text: "replacement", preserveClipboard: true, expectedProcessID: 123)
+
         await fulfillment(of: [cancelled], timeout: 1)
         XCTAssertEqual(board.string(forType: .string), "original")
     }

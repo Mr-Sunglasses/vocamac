@@ -22,7 +22,7 @@ enum OverlayLayout {
         case .minimal:
             return CGSize(width: 108, height: 44)
         case .live:
-            return CGSize(width: 240, height: 72)
+            return CGSize(width: 340, height: 104)
         }
     }
 
@@ -138,6 +138,9 @@ final class CursorOverlayManager {
         viewModel.phase = .connecting
         viewModel.audioLevel = 0
         viewModel.elapsedSeconds = 0
+        viewModel.transcript = ""
+        viewModel.commandSession = nil
+        viewModel.liveWordsAvailable = false
         viewModel.isActive = true
 
         if let overlayPanel {
@@ -186,6 +189,7 @@ final class CursorOverlayManager {
         viewModel.phase = .recording
         viewModel.audioLevel = 0
         viewModel.elapsedSeconds = 0
+        viewModel.transcript = ""
         VocaLogger.debug(.cursorOverlay, "Overlay transitioned to recording")
     }
 
@@ -228,6 +232,19 @@ final class CursorOverlayManager {
         let smoothing: Float = target > viewModel.audioLevel ? 0.78 : 0.28
         viewModel.audioLevel += (target - viewModel.audioLevel) * smoothing
         viewModel.waveformTick &+= 1
+    }
+
+    func updateTranscript(_ text: String) {
+        guard overlayPanel != nil, viewModel.style == .live else { return }
+        viewModel.transcript = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    func setCommandSession(_ session: CommandModeSession?) {
+        viewModel.commandSession = session
+    }
+
+    func setLiveWordsAvailable(_ available: Bool) {
+        viewModel.liveWordsAvailable = available
     }
 
     // MARK: - Layout
@@ -350,6 +367,12 @@ final class MicIndicatorViewModel: ObservableObject {
     @Published var position: OverlayPosition = .nearCursor
     @Published var waveformTick: Int = 0
     @Published var elapsedSeconds: Int = 0
+    @Published var transcript: String = ""
+    /// Set while the session edits selected text (Command Mode).
+    @Published var commandSession: CommandModeSession?
+    @Published var liveWordsAvailable = false
+
+    var isCommandMode: Bool { commandSession != nil }
 }
 
 // MARK: - Waveform Metrics
@@ -389,13 +412,14 @@ struct HandyOverlayView: View {
     /// A brighter recording accent keeps the small waveform and status icon
     /// distinct from the panel in both system appearances.
     private var recordingColor: Color {
-        VocaDesign.accent
+        viewModel.isCommandMode ? VocaDesign.command : VocaDesign.accent
     }
 
     /// Yellow is clear on a dark panel, while the deeper amber remains visible
     /// against the light panel when it is used for the processing spinner.
     private var processingColor: Color {
-        isDark
+        if viewModel.isCommandMode { return VocaDesign.command }
+        return isDark
             ? Color(nsColor: .systemYellow)
             : Color(red: 0.55, green: 0.27, blue: 0.0)
     }
@@ -441,17 +465,82 @@ struct HandyOverlayView: View {
     private var statusTitle: String {
         switch viewModel.phase {
         case .connecting: return "Connecting"
-        case .recording: return "Listening"
-        case .idle, .processing: return "Transcribing"
+        case .recording: return viewModel.isCommandMode ? "Command Mode" : "Listening"
+        case .idle, .processing: return viewModel.isCommandMode ? "Editing Selection" : "Transcribing"
         }
     }
 
     private var statusDetail: String {
         switch viewModel.phase {
         case .connecting: return "Waiting for microphone…"
-        case .recording: return "Speak now"
-        case .idle, .processing: return "Transcribing…"
+        case .recording: return viewModel.isCommandMode ? "Say how to change it" : "Speak now"
+        case .idle, .processing:
+            guard let session = viewModel.commandSession else { return "Transcribing…" }
+            return session.phase == .rewriting ? "Rewriting with \(session.engineName)…" : "Transcribing instruction…"
         }
+    }
+
+    private var transcriptPlaceholder: String {
+        if viewModel.isCommandMode {
+            return "e.g. “make this shorter” or “translate to Spanish”"
+        }
+        return viewModel.liveWordsAvailable
+            ? "Words will appear here as you speak"
+            : "Your words will appear when you stop"
+    }
+
+    /// Third line of the live panel. Command Mode shows what is being edited
+    /// while listening and the spoken instruction while rewriting.
+    @ViewBuilder
+    private var liveDetailLine: some View {
+        if let session = viewModel.commandSession {
+            if session.phase == .rewriting, let instruction = session.instruction, !instruction.isEmpty {
+                Text("“\(instruction)”")
+                    .foregroundStyle(primaryText)
+            } else if !viewModel.transcript.isEmpty {
+                Text(viewModel.transcript)
+                    .foregroundStyle(primaryText)
+            } else {
+                Text("Editing “\(session.selectionPreview)”")
+                    .foregroundStyle(secondaryText)
+            }
+        } else {
+            Text(viewModel.transcript.isEmpty ? transcriptPlaceholder : viewModel.transcript)
+                .foregroundStyle(viewModel.transcript.isEmpty ? secondaryText : primaryText)
+        }
+    }
+
+    /// Right side of the live header: the timer while dictating, and while
+    /// editing, how much is selected and where.
+    @ViewBuilder
+    private var liveHeaderBadge: some View {
+        if let session = viewModel.commandSession {
+            Text(commandBadgeText(session))
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(VocaDesign.command)
+                .lineLimit(1)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 3)
+                .background(VocaDesign.command.opacity(isDark ? 0.22 : 0.12), in: Capsule())
+        } else if viewModel.phase == .recording {
+            Text(formattedElapsed)
+                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .foregroundStyle(secondaryText)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 3)
+                .background(tertiaryFill, in: Capsule())
+        }
+    }
+
+    private func commandBadgeText(_ session: CommandModeSession) -> String {
+        let count = session.characterCount == 1 ? "1 char" : "\(session.characterCount) chars"
+        guard let app = session.appName, !app.isEmpty else { return count }
+        return "\(count) · \(app)"
+    }
+
+    private var recordingSymbol: String {
+        if viewModel.phase == .connecting { return "mic.slash.fill" }
+        return viewModel.isCommandMode ? "wand.and.stars" : "mic.fill"
     }
 
     private var slideInOffset: CGFloat {
@@ -546,16 +635,9 @@ struct HandyOverlayView: View {
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(primaryText)
 
-            Spacer()
+            Spacer(minLength: 6)
 
-            if viewModel.phase == .recording {
-                Text(formattedElapsed)
-                    .font(.system(size: 11, weight: .medium, design: .monospaced))
-                    .foregroundStyle(secondaryText)
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 3)
-                    .background(tertiaryFill, in: Capsule())
-            }
+            liveHeaderBadge
         }
         .frame(maxWidth: .infinity)
         .frame(height: 28)
@@ -565,6 +647,12 @@ struct HandyOverlayView: View {
         VStack(spacing: 0) {
             liveHeader
             liveControlRow
+            liveDetailLine
+                .font(.system(size: 11))
+                .lineLimit(2)
+                .truncationMode(.head)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityLabel(viewModel.isCommandMode ? "Command Mode" : "Live transcript")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -648,7 +736,7 @@ struct HandyOverlayView: View {
                     .opacity(isPulsing ? 0.55 : 0.9)
             }
 
-            Image(systemName: viewModel.phase == .connecting ? "mic.slash.fill" : "mic.fill")
+            Image(systemName: recordingSymbol)
                 .font(.system(size: 11, weight: .bold))
                 .foregroundStyle(accentColor)
                 .shadow(color: waveformColor.opacity(0.45), radius: 3)

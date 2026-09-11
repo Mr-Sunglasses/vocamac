@@ -153,6 +153,121 @@ enum WritingStyleEngine {
         return words.joined(separator: " ")
     }
 
+    // MARK: - Hesitations
+
+    /// "um", "umm", "uh", "uhh", "uhm", "erm", "hm", "hmm" — sounds, not words.
+    /// Deliberately narrow: "like", "so", and "you know" are real words often
+    /// enough that only the model may judge them, and "mm" is millimetres.
+    ///
+    /// Matched as a whole word, with the punctuation right after it.
+    /// Letters, digits, or an apostrophe on either side mean it is part of a
+    /// longer word ("humming", "um's"), so it is left alone.
+    private static let hesitationWordExpression = try? NSRegularExpression(
+        pattern: #"(?<![\p{L}\p{N}'’])(u+m+|u+h+m*|e+r+m+|h+m+)(?![\p{L}\p{N}'’])([,.!?;:…]*)"#,
+        options: [.caseInsensitive]
+    )
+
+    private static let bareHesitationExpression = try? NSRegularExpression(
+        pattern: #"^(?:u+m+|u+h+m*|e+r+m+|h+m+)$"#, options: [.caseInsensitive]
+    )
+
+    /// Whether a bare, lowercased word ("umm") is a hesitation sound.
+    static func isHesitationWord(_ word: String) -> Bool {
+        guard let bareHesitationExpression else { return false }
+        return bareHesitationExpression.firstMatch(in: word, range: NSRange(word.startIndex..., in: word)) != nil
+    }
+
+    /// Remove hesitation sounds anywhere in English text, without a model, and
+    /// repair what they leave behind: "Hello, um, how are you?" → "Hello, how
+    /// are you?", "you? Um I hope" → "you? I hope", "hello world um." →
+    /// "hello world.". An utterance that was nothing but hesitation becomes
+    /// empty, so an accidental "uh" types nothing.
+    static func removeHesitations(_ text: String, prose: Bool = true) -> (text: String, removed: Bool) {
+        guard let expression = hesitationWordExpression else { return (text, false) }
+        let ranges = expression.matches(in: text, range: NSRange(text.startIndex..., in: text)).map(\.range)
+        guard !ranges.isEmpty else { return (text, false) }
+        return (removeWordRuns(ranges, from: text, prose: prose), true)
+    }
+
+    /// Delete whole words and repair what they leave behind. Each range
+    /// covers one or more words and the punctuation stuck to them; ranges
+    /// separated only by spaces are removed together ("uh uh").
+    ///
+    /// Only the words, their punctuation, and one run of spaces beside them
+    /// go — after them, or before them at the end of a line — so indentation,
+    /// repeated spaces, and line breaks elsewhere are untouched. A sentence
+    /// end the words carried moves to the word before ("hello, um." →
+    /// "hello."), and a capitalized sentence opener hands its capital to the
+    /// next word ("Um I hope" → "I hope").
+    ///
+    /// With `prose` off (Code and Terminal) nothing but the deletion happens:
+    /// a command's case and punctuation are data, so "Um git push" becomes
+    /// "git push", never "Git push".
+    static func removeWordRuns(_ ranges: [NSRange], from text: String, prose: Bool = true) -> String {
+        let result = NSMutableString(string: text)
+        func character(_ index: Int) -> Character {
+            Character(UnicodeScalar(result.character(at: index)) ?? " ")
+        }
+        // Merge neighbours so a run is removed and repaired once.
+        var runs: [NSRange] = []
+        for range in ranges.sorted(by: { $0.location < $1.location }) {
+            if let last = runs.last {
+                var gap = NSMaxRange(last)
+                while gap < range.location, isHorizontalSpace(result.character(at: gap)) { gap += 1 }
+                if gap >= range.location {
+                    runs[runs.count - 1] = NSUnionRange(last, range)
+                    continue
+                }
+            }
+            runs.append(range)
+        }
+
+        // Back to front: a repair only touches text before its run, which no
+        // earlier run overlaps, and text after it, which is already done.
+        for run in runs.reversed() {
+            let words = result.substring(with: run)
+            let trailing = String(words.reversed().prefix { ",.!?;:…".contains($0) }.reversed())
+
+            var previous = run.location - 1
+            while previous >= 0, isHorizontalSpace(result.character(at: previous)) { previous -= 1 }
+            let atSentenceStart = previous < 0 || ".!?…\n\r".contains(character(previous))
+
+            var end = NSMaxRange(run)
+            while end < result.length, isHorizontalSpace(result.character(at: end)) { end += 1 }
+            let start = end == NSMaxRange(run) ? previous + 1 : run.location
+            result.deleteCharacters(in: NSRange(location: start, length: end - start))
+
+            guard prose else { continue }
+            if atSentenceStart {
+                if words.first?.isUppercase == true {
+                    var next = start
+                    while next < result.length, isHorizontalSpace(result.character(at: next)) { next += 1 }
+                    if next < result.length {
+                        let range = NSRange(location: next, length: 1)
+                        let letter = result.substring(with: range)
+                        if letter != letter.uppercased() {
+                            result.replaceCharacters(in: range, with: letter.uppercased())
+                        }
+                    }
+                }
+            } else if let terminal = trailing.last(where: { ".!?…".contains($0) }), previous >= 0 {
+                var last = previous
+                while last >= 0, ",;:".contains(character(last)) {
+                    result.deleteCharacters(in: NSRange(location: last, length: 1))
+                    last -= 1
+                }
+                if last >= 0, !".!?…".contains(character(last)) {
+                    result.insert(String(terminal), at: last + 1)
+                }
+            }
+        }
+        return result as String
+    }
+
+    private static func isHorizontalSpace(_ unit: unichar) -> Bool {
+        unit == 0x20 || unit == 0x09
+    }
+
     // MARK: - Structural commands
 
     /// Words that turn a following "new line" / "new paragraph" into a noun

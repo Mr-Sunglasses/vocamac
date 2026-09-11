@@ -157,6 +157,10 @@ struct WritingStylesSettingsTab: View {
             .disabled(!appState.writingStyleEnabled)
             .opacity(appState.writingStyleEnabled ? 1 : 0.45)
 
+            WebsiteRulesSettings()
+                .disabled(!appState.writingStyleEnabled)
+                .opacity(appState.writingStyleEnabled ? 1 : 0.45)
+
             VocaSettingsGroup("Preview") {
                 Picker("Style", selection: previewTarget) {
                     Section("Presets") {
@@ -242,7 +246,7 @@ struct WritingStylesSettingsTab: View {
                     .foregroundStyle(.secondary)
             }
         } else {
-            Text("Code and Terminal always stay exact. Raw transcription bypasses cleanup, snippets, and formatting.")
+            Text("Code and Terminal keep commands exact: Smart Cleanup may only remove filler there, never reword. Raw transcription bypasses cleanup, snippets, and formatting.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -494,7 +498,7 @@ struct WritingStyleAppPickerSheet: View {
 
             Text(style.supportsWording
                  ? intent.description
-                 : "Code and Terminal preserve wording so commands and technical text stay exact.")
+                 : "Code and Terminal keep your wording. With Smart Cleanup on, the model can only remove filler such as “um”, “like,”, and repeated words; commands and technical text stay exact.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
@@ -548,6 +552,8 @@ struct WritingStyleRuleEditor: View {
     @State private var rules: WritingStyleRules
     @State private var intent: WritingIntent
     @State private var cleanup: WritingCleanupPolicy
+    @State private var cleanupLevel: CleanupLevel?
+    @State private var cleanupPrompt: String
 
     init(
         binding: AppStyleBinding,
@@ -561,6 +567,8 @@ struct WritingStyleRuleEditor: View {
         _rules = State(initialValue: binding.effectiveRules)
         _intent = State(initialValue: binding.intent)
         _cleanup = State(initialValue: binding.cleanup)
+        _cleanupLevel = State(initialValue: binding.cleanupLevel)
+        _cleanupPrompt = State(initialValue: binding.cleanupPrompt ?? "")
     }
 
     var body: some View {
@@ -593,6 +601,13 @@ struct WritingStyleRuleEditor: View {
                     Picker("Processing", selection: $cleanup) {
                         ForEach(WritingCleanupPolicy.allCases) { Text($0.displayName).tag($0) }
                     }
+                    Picker("Cleanup level", selection: $cleanupLevel) {
+                        Text("Use global setting").tag(Optional<CleanupLevel>.none)
+                        ForEach(CleanupLevel.allCases) { level in
+                            Text(level.displayName).tag(Optional(level))
+                        }
+                    }
+                    .disabled(cleanup != .inherit)
                     Text(profileExplanation)
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -608,6 +623,15 @@ struct WritingStyleRuleEditor: View {
                     Picker("Leading filler words", selection: $rules.filler) {
                         ForEach(FillerPolicy.allCases) { Text($0.displayName).tag($0) }
                     }
+                }
+
+                Section("Custom Cleanup Prompt") {
+                    TextEditor(text: $cleanupPrompt)
+                        .font(.system(.caption, design: .monospaced))
+                        .frame(minHeight: 90)
+                    Text("Leave blank to use the global prompt. This prompt applies only when dictating into this app.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
 
                 Section("Code and Paths") {
@@ -668,6 +692,9 @@ struct WritingStyleRuleEditor: View {
         updated.style = style
         updated.intent = intent
         updated.cleanup = cleanup
+        updated.cleanupLevel = cleanupLevel
+        let trimmedPrompt = cleanupPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        updated.cleanupPrompt = trimmedPrompt.isEmpty ? nil : cleanupPrompt
         // Storing nil when nothing was changed lets the binding inherit future
         // improvements to the preset.
         updated.ruleOverrides = (rules == style.defaultRules) ? nil : rules
@@ -676,7 +703,7 @@ struct WritingStyleRuleEditor: View {
 
     private var profileExplanation: String {
         if !style.supportsWording {
-            return "Code and Terminal preserve wording and use exact formatting only."
+            return "Code and Terminal keep your wording and exact formatting. With Smart Cleanup on, the model only removes filler; it never rewrites a command."
         }
         switch cleanup {
         case .raw:

@@ -111,6 +111,9 @@ struct MenuBarView: View {
     @EnvironmentObject var appState: AppState
     @ObservedObject var settingsManager: SettingsWindowManager
     @ObservedObject var updateWindowManager: UpdateWindowManager
+    @ObservedObject var fileTranscriptionManager: FileTranscriptionWindowManager
+    @ObservedObject var scratchpadManager: ScratchpadWindowManager
+    @ObservedObject var meetingCaptureManager: MeetingCaptureWindowManager
     @StateObject private var processMonitor = ProcessMonitor(useTimer: false)
     @State private var audioDevices: [AudioDevice] = []
 
@@ -154,15 +157,16 @@ struct MenuBarView: View {
                 suggestionSection(suggestion)
             }
 
-            // Last Transcription
-            if let transcription = appState.lastTranscription {
+            // Last Command Mode edit, which replaces the dictation card until
+            // the next dictation so its original stays one click away.
+            if let edit = appState.lastCommandEdit {
                 Divider()
-                transcriptionSection(transcription)
+                commandEditSection(edit)
                     .vocaCard()
-            }
-            if let output = appState.lastOutput {
-                Text(output.summary).font(.caption).foregroundStyle(.secondary)
-                Text(output.text).font(.caption).lineLimit(4).textSelection(.enabled)
+            } else if let transcription = appState.lastTranscription {
+                Divider()
+                transcriptionSection(transcription, output: appState.lastOutput)
+                    .vocaCard()
             }
             if let held = appState.heldOutput {
                 Text("Saved dictation — destination changed").font(.caption)
@@ -393,9 +397,18 @@ struct MenuBarView: View {
 
                 Spacer()
 
-                Text(activationModeHint)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text(activationModeHint)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    if appState.appStatus == .idle,
+                       let combo = appState.shortcut(for: .commandMode) {
+                        Label("Edit selection: \(KeyCodeReference.displayName(for: combo))", systemImage: "wand.and.stars")
+                            .font(.caption2)
+                            .foregroundStyle(VocaDesign.command)
+                            .help("Select text in any app, press this, and say how to change it")
+                    }
+                }
             }
 
             if let unloadMessage = appState.modelUnloadStatusMessage,
@@ -420,10 +433,26 @@ struct MenuBarView: View {
                 .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             }
 
+            if let session = appState.commandModeSession {
+                commandSessionCard(session)
+            }
+
             // Audio level indicator (visible during recording)
             if appState.appStatus == .recording {
-                ObservedAudioLevelView(meter: appState.audioMeter)
-                    .frame(height: 6)
+                ObservedAudioLevelView(
+                    meter: appState.audioMeter,
+                    tint: appState.commandModeSession == nil ? nil : VocaDesign.command
+                )
+                .frame(height: 6)
+
+                if !appState.liveTranscript.isEmpty {
+                    Text(appState.liveTranscript)
+                        .font(.callout)
+                        .lineLimit(4)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityLabel("Live transcript")
+                }
 
                 // Stop/recovery button — visible during recording so the user
                 // can unstick the app if the hotkey isn't responding
@@ -432,18 +461,36 @@ struct MenuBarView: View {
                         await appState.stopRecordingAndTranscribe()
                     }
                 } label: {
-                    Label("Stop Recording", systemImage: "stop.circle.fill")
-                        .font(.callout)
-                        .foregroundStyle(.red)
+                    if appState.commandModeSession != nil {
+                        Label("Finish Instruction", systemImage: "checkmark.circle.fill")
+                            .font(.callout)
+                            .foregroundStyle(VocaDesign.command)
+                    } else {
+                        Label("Stop Recording", systemImage: "stop.circle.fill")
+                            .font(.callout)
+                            .foregroundStyle(.red)
+                    }
                 }
                 .buttonStyle(.plain)
             }
 
             // Processing indicator
             if appState.appStatus == .processing {
-                ProgressView()
-                    .controlSize(.small)
-                    .frame(maxWidth: .infinity, alignment: .center)
+                if appState.commandModeSession != nil {
+                    HStack {
+                        ProgressView().controlSize(.small).tint(VocaDesign.command)
+                        Spacer()
+                        Button("Cancel Edit") {
+                            Task { @MainActor in await appState.cancelDictation() }
+                        }
+                        .controlSize(.small)
+                        .help("Leave the selection unchanged (Esc)")
+                    }
+                } else {
+                    ProgressView()
+                        .controlSize(.small)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                }
             }
 
             // Force recovery button — visible in error state
@@ -598,10 +645,18 @@ struct MenuBarView: View {
 
     // MARK: - Transcription
 
-    private func transcriptionSection(_ result: VocaTranscription) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+    private func transcriptionSection(
+        _ result: VocaTranscription,
+        output: DictationOutputResult?
+    ) -> some View {
+        // Other workflows (for example Command Mode and history retry) can
+        // update lastOutput without producing a new lastTranscription. Only
+        // pair an output with the raw transcript it was actually derived from.
+        let matchingOutput = output?.original == result.text ? output : nil
+        let displayedText = matchingOutput?.text ?? result.text
+        return VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("Last Transcription")
+                Text("Last Dictation")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
 
@@ -609,7 +664,7 @@ struct MenuBarView: View {
 
                 Button {
                     NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(result.text, forType: .string)
+                    NSPasteboard.general.setString(displayedText, forType: .string)
                 } label: {
                     Image(systemName: "doc.on.doc")
                         .font(.subheadline)
@@ -618,13 +673,19 @@ struct MenuBarView: View {
                 .help("Copy to clipboard")
             }
 
-            Text(result.text)
+            Text(displayedText)
                 .font(.body)
                 .lineLimit(4)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(10)
                 .background(Color.secondary.opacity(0.1))
                 .cornerRadius(8)
+
+            if let matchingOutput {
+                Text(matchingOutput.summary)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
 
             HStack {
                 Text("\(String(format: "%.1f", result.audioLengthSeconds))s audio")
@@ -780,6 +841,25 @@ struct MenuBarView: View {
 
     private var actionsSection: some View {
         VStack(spacing: 2) {
+            // One row for the three utility windows, so the tools don't push
+            // History, Settings, and Quit down the menu.
+            HStack(spacing: 6) {
+                toolButton("Scratchpad", systemImage: "note.text",
+                           help: "A floating note to dictate into") {
+                    scratchpadManager.open(appState: appState)
+                }
+                toolButton("Transcribe File", systemImage: "waveform.badge.plus",
+                           help: "Transcribe an audio or video file") {
+                    fileTranscriptionManager.open(appState: appState)
+                }
+                toolButton("System Audio", systemImage: "speaker.wave.2",
+                           help: "Transcribe what this Mac is playing") {
+                    meetingCaptureManager.open(appState: appState)
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.bottom, 4)
+
             Button {
                 openHistory()
             } label: {
@@ -855,9 +935,122 @@ struct MenuBarView: View {
         .padding(.horizontal, -8)
     }
 
+    /// Shown while Command Mode listens or rewrites: what is being edited,
+    /// where, and how to back out.
+    private func commandSessionCard(_ session: CommandModeSession) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: "wand.and.stars")
+                    .foregroundStyle(VocaDesign.command)
+                Text(session.phase == .rewriting
+                     ? "Rewriting with \(session.engineName)"
+                     : "Say how to change the selection")
+                    .font(.callout.weight(.medium))
+                Spacer(minLength: 0)
+            }
+            if session.phase == .rewriting, let instruction = session.instruction, !instruction.isEmpty {
+                Text("“\(instruction)”")
+                    .font(.caption)
+                    .lineLimit(2)
+            }
+            Text("Editing “\(session.selectionPreview)”")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+            Text(commandSessionDetail(session))
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(VocaDesign.command.opacity(0.10), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(VocaDesign.command.opacity(0.35))
+        )
+        .accessibilityElement(children: .combine)
+    }
+
+    private func commandSessionDetail(_ session: CommandModeSession) -> String {
+        var parts = ["\(session.characterCount) characters"]
+        if let app = session.appName, !app.isEmpty { parts[0] += " in \(app)" }
+        parts.append("Esc leaves it unchanged")
+        return parts.joined(separator: " · ")
+    }
+
+    private func commandEditSection(_ edit: CommandModeEdit) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Label("Last Edit", systemImage: "wand.and.stars")
+                    .font(.subheadline)
+                    .foregroundStyle(VocaDesign.command)
+                Spacer()
+                Text(edit.engineName)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            Text("“\(edit.instruction)”")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+            Text(edit.replacement.trimmingCharacters(in: .whitespacesAndNewlines))
+                .font(.body)
+                .lineLimit(4)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(8)
+                .background(Color.secondary.opacity(0.1))
+                .cornerRadius(8)
+            HStack {
+                Button("Copy Original") { copyToPasteboard(edit.original) }
+                    .help("Copy the text as it was before the edit")
+                Button("Copy Result") { copyToPasteboard(edit.replacement) }
+                Spacer()
+            }
+            .controlSize(.small)
+        }
+    }
+
+    private func copyToPasteboard(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+
     // MARK: - Helpers
 
+    private func toolButton(
+        _ title: String,
+        systemImage: String,
+        help: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            VStack(spacing: 4) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(VocaDesign.accent)
+                Text(title)
+                    .font(.caption)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
+            .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 8))
+            .contentShape(RoundedRectangle(cornerRadius: 8))
+        }
+        .buttonStyle(.plain)
+        .help(help)
+        .accessibilityLabel(title)
+    }
+
     private var statusText: String {
+        if let session = appState.commandModeSession {
+            switch (appState.appStatus, session.phase) {
+            case (.recording, _): return "Command Mode — listening"
+            case (_, .rewriting): return "Rewriting selection…"
+            default: return "Transcribing instruction…"
+            }
+        }
         if appState.isAutoPaused {
             return appState.autoPauseTriggerDisplayName.map { "Paused (\($0))" } ?? "Auto-paused"
         }
@@ -870,6 +1063,7 @@ struct MenuBarView: View {
     }
 
     private var statusColor: Color {
+        if appState.commandModeSession != nil { return VocaDesign.command }
         if appState.isAutoPaused { return .orange }
         switch appState.appStatus {
         case .idle:       return VocaDesign.success
