@@ -219,7 +219,7 @@ final class WhisperService: @unchecked Sendable {
             let modelUsed = modelSizeFromName(loadedModelName ?? "tiny")
 
             VocaLogger.info(.whisperService, "Transcription completed in \(String(format: "%.2f", elapsed))s")
-            VocaLogger.info(.whisperService, "Result: \(fullText.prefix(100))...")
+            VocaLogger.info(.whisperService, "Result: \(fullText.count) characters")
 
             return VocaTranscription(
                 text: fullText,

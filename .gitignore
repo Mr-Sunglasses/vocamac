@@ -46,3 +46,7 @@ bitbucket-pipelines.yml
 .desloppify/
 .claude/
 VocaMac.app.bak/
+
+# Local build/test artifacts
+*.profraw
+web/cookies.txt

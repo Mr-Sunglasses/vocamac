@@ -164,7 +164,7 @@ final class ParakeetService: @unchecked Sendable {
             let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
 
             VocaLogger.info(.parakeetService, "Parakeet transcription completed in \(String(format: "%.2f", elapsed))s")
-            VocaLogger.info(.parakeetService, "Result: \(text.prefix(100))...")
+            VocaLogger.info(.parakeetService, "Result: \(text.count) characters")
 
             return VocaTranscription(
                 text: text,

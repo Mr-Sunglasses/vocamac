@@ -6,9 +6,13 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 @MainActor
-final class MeetingCaptureWindowManager: ObservableObject {
+final class MeetingCaptureWindowManager: NSObject, ObservableObject, NSWindowDelegate {
     private var window: NSWindow?
     private var closeObserver: NSObjectProtocol?
+    /// Owned here rather than by the view, so closing the window can ask
+    /// before throwing a capture away.
+    private var capture: SystemAudioCapture?
+
     func open(appState: AppState) {
         if let window, window.isVisible { window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true); return }
         let window = NSWindow(
@@ -18,26 +22,45 @@ final class MeetingCaptureWindowManager: ObservableObject {
         )
         window.contentMinSize = NSSize(width: 500, height: 310)
         window.title = "System Audio Transcription"
-        window.contentView = NSHostingView(rootView: MeetingCaptureView().environmentObject(appState))
+        let capture = SystemAudioCapture()
+        window.contentView = NSHostingView(rootView: MeetingCaptureView(capture: capture).environmentObject(appState))
+        window.delegate = self
         window.center(); window.isReleasedWhenClosed = false; window.makeKeyAndOrderFront(nil)
         self.window = window
+        self.capture = capture
         DockVisibilityCoordinator.shared.windowDidOpen(); NSApp.activate(ignoringOtherApps: true)
         closeObserver = NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
                 self.window = nil
+                if let capture = self.capture, capture.isCapturing { _ = capture.stop() }
+                self.capture = nil
                 if let closeObserver = self.closeObserver { NotificationCenter.default.removeObserver(closeObserver) }
                 self.closeObserver = nil
                 DockVisibilityCoordinator.shared.windowDidClose()
             }
         }
     }
+
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        guard let capture, capture.isCapturing else { return true }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Discard the system-audio capture?"
+        alert.informativeText = "Closing this window stops the capture and throws away the audio recorded so far. Use Stop and Transcribe to keep it."
+        alert.addButton(withTitle: "Keep Capturing")
+        alert.addButton(withTitle: "Discard and Close")
+        return alert.runModal() == .alertSecondButtonReturn
+    }
 }
 
 struct MeetingCaptureView: View {
     @EnvironmentObject var appState: AppState
-    @StateObject private var capture = SystemAudioCapture()
+    @ObservedObject var capture: SystemAudioCapture
     @State private var result: VocaTranscription?
+    /// The last capture, kept until it is transcribed so a failed attempt
+    /// (the speech model busy or unavailable) can be retried.
+    @State private var capturedSamples: [Float]?
     @State private var error: String?
     @State private var notice: String?
     @State private var isTranscribing = false
@@ -91,9 +114,15 @@ struct MeetingCaptureView: View {
                 )
             }
             if let error {
-                Label(error, systemImage: "exclamationmark.triangle")
-                    .foregroundStyle(.orange)
-                    .font(.caption)
+                HStack(spacing: 10) {
+                    Label(error, systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(.orange)
+                        .font(.caption)
+                    if capturedSamples != nil, !isTranscribing, !capture.isCapturing {
+                        Button("Try Again") { transcribeCapture() }
+                            .controlSize(.small)
+                    }
+                }
             }
             if let notice {
                 Label(notice, systemImage: "clock.arrow.circlepath")
@@ -108,13 +137,13 @@ struct MeetingCaptureView: View {
         .onChange(of: capture.didReachLimit) {
             if capture.didReachLimit, !isTranscribing { stop() }
         }
-        .onDisappear { if capture.isCapturing { _ = capture.stop() } }
     }
 
     private func start() {
         error = nil
         notice = nil
         result = nil
+        capturedSamples = nil
         do {
             try capture.start()
             startedAt = Date()
@@ -140,10 +169,21 @@ struct MeetingCaptureView: View {
         if capture.didReachLimit {
             notice = "The 20-minute limit was reached; the retained audio is being transcribed."
         }
+        capturedSamples = samples
+        transcribeCapture()
+    }
+
+    private func transcribeCapture() {
+        guard let samples = capturedSamples else { return }
+        error = nil
         isTranscribing = true
         Task { @MainActor in
-            do { result = try await appState.transcribeCapturedAudio(samples) }
-            catch { self.error = error.localizedDescription }
+            do {
+                result = try await appState.transcribeCapturedAudio(samples)
+                capturedSamples = nil
+            } catch {
+                self.error = error.localizedDescription
+            }
             isTranscribing = false
         }
     }
@@ -151,6 +191,7 @@ struct MeetingCaptureView: View {
     private var statusTitle: String {
         if capture.isCapturing { return "Capturing system audio" }
         if isTranscribing { return "Transcribing capture" }
+        if capturedSamples != nil { return "Capture not transcribed yet" }
         return "Ready to capture"
     }
 

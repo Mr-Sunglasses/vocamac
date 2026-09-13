@@ -333,7 +333,7 @@ final class SherpaService: @unchecked Sendable {
                 FailedAudioDump.save(audioData, model: size.rawValue)
             }
         } else {
-            VocaLogger.info(.sherpaService, "Result: \(text.prefix(100))...")
+            VocaLogger.info(.sherpaService, "Result: \(text.count) characters")
         }
 
         // SenseVoice reports the detected language; other models are

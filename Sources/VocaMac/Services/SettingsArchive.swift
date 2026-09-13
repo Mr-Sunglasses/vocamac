@@ -69,22 +69,48 @@ enum SettingsArchiveService {
         PreferenceKey.writingStyleBindings, PreferenceKey.writingStyleDefault, PreferenceKey.writingStyleEnabled,
     ]
 
+    /// The microphone choice names a device on the Mac that exported it.
+    /// These keys are restored together, and only when that device is here.
+    static let inputDeviceKeys: Set<String> = [
+        "vocamac.selectedAudioDeviceID", "vocamac.selectedAudioDeviceName",
+        "vocamac.selectedAudioChannel", "vocamac.selectedAudioChannelCount",
+        "vocamac.selectedAudioChannelDeviceID",
+    ]
+
     static func make(defaults: UserDefaults = .standard) -> SettingsArchive {
         var values: [String: SettingsArchive.Value] = [:]
         for key in keys {
-            guard let raw = defaults.object(forKey: key) else { continue }
-            // Check the CF type first: an NSNumber holding 0 or 1 bridges to
-            // Bool too, which would export a stored Int or Double as a Bool.
-            if let number = raw as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() {
-                values[key] = .bool(number.boolValue)
-            } else if let number = raw as? NSNumber, !CFNumberIsFloatType(number) {
-                values[key] = .integer(number.intValue)
-            } else if let value = raw as? Double { values[key] = .double(value) }
-            else if let value = raw as? String { values[key] = .string(value) }
-            else if let value = raw as? Data { values[key] = .data(value) }
-            else if let value = raw as? [String] { values[key] = .strings(value) }
+            guard let raw = defaults.object(forKey: key), let value = value(of: raw) else { continue }
+            values[key] = value
         }
         return SettingsArchive(values: values)
+    }
+
+    private static func value(of raw: Any) -> SettingsArchive.Value? {
+        // Check the CF type first: an NSNumber holding 0 or 1 bridges to
+        // Bool too, which would export a stored Int or Double as a Bool.
+        if let number = raw as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() {
+            return .bool(number.boolValue)
+        } else if let number = raw as? NSNumber, !CFNumberIsFloatType(number) {
+            return .integer(number.intValue)
+        } else if let value = raw as? Double { return .double(value) }
+        else if let value = raw as? String { return .string(value) }
+        else if let value = raw as? Data { return .data(value) }
+        else if let value = raw as? [String] { return .strings(value) }
+        return nil
+    }
+
+    /// Whether a value can replace what is stored: the same kind, so an
+    /// edited backup can't put a string where the app reads an integer. A
+    /// whole number may stand in for a decimal one.
+    private static func isCompatible(_ value: SettingsArchive.Value, with stored: SettingsArchive.Value) -> Bool {
+        switch (value, stored) {
+        case (.bool, .bool), (.integer, .integer), (.double, .double), (.integer, .double),
+             (.string, .string), (.data, .data), (.strings, .strings):
+            return true
+        default:
+            return false
+        }
     }
 
     static func encode(defaults: UserDefaults = .standard) throws -> Data {
@@ -94,14 +120,28 @@ enum SettingsArchiveService {
         return try encoder.encode(make(defaults: defaults))
     }
 
-    static func restore(_ data: Data, defaults: UserDefaults = .standard) throws {
+    static func restore(
+        _ data: Data,
+        defaults: UserDefaults = .standard,
+        isAvailableInputDevice: (String) -> Bool = { _ in true }
+    ) throws {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         let archive = try decoder.decode(SettingsArchive.self, from: data)
         guard archive.version <= SettingsArchive.currentVersion else {
             throw ArchiveError.newerVersion(archive.version)
         }
+        let deviceIsHere = ["vocamac.selectedAudioDeviceID", "vocamac.selectedAudioChannelDeviceID"].allSatisfy { key in
+            guard case .string(let id)? = archive.values[key], !id.isEmpty else { return true }
+            return isAvailableInputDevice(id)
+        }
         for (key, value) in archive.values where keys.contains(key) {
+            if inputDeviceKeys.contains(key), !deviceIsHere { continue }
+            if let raw = defaults.object(forKey: key), let stored = Self.value(of: raw),
+               !isCompatible(value, with: stored) {
+                VocaLogger.warning(.general, "Skipped imported setting \(key): unexpected value type")
+                continue
+            }
             switch value {
             case .bool(let value): defaults.set(value, forKey: key)
             case .integer(let value): defaults.set(value, forKey: key)

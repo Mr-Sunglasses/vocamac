@@ -371,40 +371,45 @@ struct VocaMacApp: App {
         }
 
         // Also kill by process name for direct binary execution (no bundle ID).
-        // Match against the full command line (pid + args) so a running
-        // headless CLI job (e.g. `VocaMac --transcribe-file ... --json`) is
-        // never mistaken for another GUI instance and killed mid-job.
+        // Match the executable's own name, never a substring of the command
+        // line: `tail -f ~/Library/Logs/VocaMac/…`, an editor with
+        // `Sources/VocaMac/…` open, or `xcodebuild -scheme VocaMac` must not
+        // be terminated. A running headless CLI job (e.g.
+        // `VocaMac --transcribe-file ... --json`) is left alone too.
         let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
-        task.arguments = ["-fl", "VocaMac"]
+        task.executableURL = URL(fileURLWithPath: "/bin/ps")
+        task.arguments = ["-axo", "pid=,ucomm=,args="]
 
         let pipe = Pipe()
         task.standardOutput = pipe
 
         do {
             try task.run()
-            task.waitUntilExit()
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            task.waitUntilExit()
             if let output = String(data: data, encoding: .utf8) {
-                for line in output.split(separator: "\n") {
-                    let components = line.split(separator: " ", maxSplits: 1)
-                    guard let pidField = components.first, let pid = Int32(pidField),
-                          pid != currentPID else { continue }
-                    let commandLine = components.count > 1 ? components[1] : ""
-                    guard !Self.isHeadlessCLICommandLine(commandLine) else { continue }
+                for pid in previousGUIInstancePIDs(psOutput: output, currentPID: currentPID) {
                     VocaLogger.info(.general, "Killing previous VocaMac process (PID \(pid))")
                     kill(pid, SIGTERM)
                 }
             }
         } catch {
-            // pgrep not found or failed — not critical
+            // ps not found or failed — not critical
         }
     }
 
-    /// Recognizes the headless CLI flags from `CLICommand.cliFlags` so the GUI
-    /// leaves an in-flight one-shot transcription running instead of killing it.
-    private static func isHeadlessCLICommandLine(_ commandLine: some StringProtocol) -> Bool {
-        CLICommand.cliFlags.contains { commandLine.contains($0) }
+    /// PIDs of other GUI VocaMac processes in `ps -axo pid=,ucomm=,args=`
+    /// output: the executable name must be exactly `VocaMac`, and headless CLI
+    /// invocations (see `CLICommand.cliFlags`) are skipped.
+    nonisolated static func previousGUIInstancePIDs(psOutput: String, currentPID: Int32) -> [Int32] {
+        psOutput.split(separator: "\n").compactMap { line in
+            let fields = line.split(separator: " ", maxSplits: 2, omittingEmptySubsequences: true)
+            guard fields.count >= 2, let pid = Int32(fields[0]), pid != currentPID,
+                  fields[1] == "VocaMac" else { return nil }
+            let arguments = fields.count > 2 ? fields[2].split(separator: " ").map(String.init) : []
+            guard !arguments.contains(where: CLICommand.cliFlags.contains) else { return nil }
+            return pid
+        }
     }
 }
 

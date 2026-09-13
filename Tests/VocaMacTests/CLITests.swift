@@ -439,3 +439,20 @@ private final class MockAudioFileLoader: AudioFileLoading {
         return loadedAudio
     }
 }
+
+final class SingleInstanceTests: XCTestCase {
+    func testOnlyOtherGUIVocaMacExecutablesAreTerminated() {
+        let output = """
+          100 VocaMac          /Applications/VocaMac.app/Contents/MacOS/VocaMac
+          200 VocaMac          /usr/local/bin/VocaMac --transcribe-file /tmp/a b.wav --json
+          300 tail             tail -f /Users/me/Library/Logs/VocaMac/vocamac.log
+          400 xcodebuild       xcodebuild -scheme VocaMac build
+          500 VocaMac          /Users/me/vocamac/.build/debug/VocaMac -hidden-flag
+          600 VocaMac          /Applications/VocaMac.app/Contents/MacOS/VocaMac
+        """
+        XCTAssertEqual(
+            VocaMacApp.previousGUIInstancePIDs(psOutput: output, currentPID: 600),
+            [100, 500]
+        )
+    }
+}
