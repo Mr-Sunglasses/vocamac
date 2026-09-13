@@ -455,6 +455,53 @@ final class SettingsArchiveTests: XCTestCase {
         XCTAssertTrue(defaults.bool(forKey: PreferenceKey.historyEnabled))
     }
 
+    func testRestoreChecksTypesEvenWhenTheSettingWasNeverSaved() throws {
+        XCTAssertNil(defaults.object(forKey: "vocamac.hotKeyCode"))
+        let archive = SettingsArchive(values: [
+            "vocamac.hotKeyCode": .string("F5"),
+            "vocamac.overlayStyle": .integer(3),
+            "vocamac.maxRecordingDuration": .integer(90),
+        ])
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+
+        try SettingsArchiveService.restore(try encoder.encode(archive), defaults: defaults)
+
+        XCTAssertNil(defaults.object(forKey: "vocamac.hotKeyCode"))
+        XCTAssertNil(defaults.object(forKey: "vocamac.overlayStyle"))
+        XCTAssertEqual(defaults.integer(forKey: "vocamac.maxRecordingDuration"), 90)
+    }
+
+    @MainActor
+    func testDeclaredKindsMatchHowTheAppStoresSettings() {
+        let keys = Array(SettingsArchiveService.keys)
+        let saved = keys.map { ($0, UserDefaults.standard.object(forKey: $0)) }
+        defer {
+            for (key, value) in saved { UserDefaults.standard.set(value, forKey: key) }
+        }
+        let (app, _) = AppState.makeTestState()
+        app.hotKeyCode = 63
+        app.hotKeyModifiers = [.command, .shift]
+        app.activationMode = .doubleTapToggle
+        app.maxRecordingDuration = 90
+        app.silenceDuration = 2.5
+        app.overlayStyle = .live
+        app.dictationTone = .glass
+        app.historyRetention = .defaultRetention
+        app.writingStyleDefault = .email
+        app.mouseTriggerButton = 4
+        app.addWordReplacement(heard: "voca mac", replacement: "VocaMac")
+        app.snippets = [Snippet(trigger: "sig", expansion: "Thanks")]
+        app.saveSnippets()
+
+        let archive = SettingsArchiveService.make(defaults: .standard)
+        XCTAssertGreaterThanOrEqual(archive.values.count, 12)
+        for (key, value) in archive.values {
+            guard let kind = SettingsArchiveService.kinds[key] else { return XCTFail("\(key) has no kind") }
+            XCTAssertTrue(SettingsArchiveService.isCompatible(value, with: kind), "\(key): \(value) vs \(kind)")
+        }
+    }
+
     func testMicrophoneChoiceIsOnlyRestoredWhenThatDeviceIsConnected() throws {
         let archive = SettingsArchive(values: [
             "vocamac.selectedAudioDeviceID": .string("usb-mic-on-old-mac"),

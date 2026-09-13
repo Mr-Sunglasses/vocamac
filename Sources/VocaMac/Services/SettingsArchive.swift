@@ -42,32 +42,52 @@ struct SettingsArchive: Codable, Equatable {
 }
 
 enum SettingsArchiveService {
-    /// Deliberate allowlist: user content (history, stats, scratchpad) and the
-    /// cleanup endpoint and API key are not settings backups. Neither is the
-    /// Command Mode clipboard opt-in: a privacy consent is given in Settings,
-    /// never by importing a file.
-    static let keys: Set<String> = [
-        "vocamac.activationMode", "vocamac.customVocabulary", "vocamac.doubleTapThreshold",
-        "vocamac.hotKeyCode", "vocamac.hotKeyModifiers", "vocamac.launchAtLogin",
-        "vocamac.logLevel", "vocamac.maxRecordingDuration", "vocamac.overlayPosition",
-        "vocamac.overlayStyle", "vocamac.preserveClipboard", "vocamac.selectedAudioChannel",
-        "vocamac.selectedAudioChannelCount", "vocamac.selectedAudioChannelDeviceID",
-        "vocamac.selectedAudioDeviceID", "vocamac.selectedAudioDeviceName",
-        "vocamac.showCursorIndicator", "vocamac.silenceDuration", "vocamac.silenceThreshold",
-        "vocamac.soundEffectsEnabled", "vocamac.translationEnabled", "vocamac.snippets",
-        PreferenceKey.appendTrailingSpace, PreferenceKey.autoCapitalize, PreferenceKey.autoPauseEnabled,
-        PreferenceKey.autoPauseApps, PreferenceKey.autoPausePollInterval,
-        PreferenceKey.commandModeShortcut, PreferenceKey.commandModeEngine, PreferenceKey.dictationTone, PreferenceKey.duckOtherAudioEnabled,
-        PreferenceKey.escapeCancelsDictation, PreferenceKey.externalMicWhenLidClosed,
-        PreferenceKey.handsFreeShortcut, PreferenceKey.historyEnabled, PreferenceKey.historyKeepsAudio,
-        PreferenceKey.historyRetention, PreferenceKey.learnCorrectionsMode, PreferenceKey.modelKeepAliveEnabled,
-        PreferenceKey.modelKeepAliveIdleTimeout, PreferenceKey.mouseTriggerButton, PreferenceKey.pasteLastShortcut,
-        PreferenceKey.selectedLanguage, PreferenceKey.selectedModelSize, PreferenceKey.transcriptCleanupEnabled,
-        PreferenceKey.transcriptCleanupLevel, PreferenceKey.transcriptCleanupModel,
-        PreferenceKey.transcriptCleanupPrompt, PreferenceKey.useScreenContext, PreferenceKey.websiteStyleBindings,
-        PreferenceKey.wordReplacements, PreferenceKey.writingIntent, PreferenceKey.writingRewriteEnabled,
-        PreferenceKey.writingStyleBindings, PreferenceKey.writingStyleDefault, PreferenceKey.writingStyleEnabled,
+    /// The kind of value each exported setting holds, matching how the app
+    /// stores it (`@AppStorage` raw values, or JSON as a string or data).
+    enum Kind { case bool, integer, double, string, data }
+
+    /// Deliberate allowlist, with the kind each value must have: user content
+    /// (history, stats, scratchpad) and the cleanup endpoint and API key are
+    /// not settings backups. Neither is the Command Mode clipboard opt-in: a
+    /// privacy consent is given in Settings, never by importing a file.
+    static let kinds: [String: Kind] = [
+        // Switches
+        "vocamac.launchAtLogin": .bool, "vocamac.preserveClipboard": .bool,
+        "vocamac.showCursorIndicator": .bool, "vocamac.soundEffectsEnabled": .bool,
+        "vocamac.translationEnabled": .bool, PreferenceKey.appendTrailingSpace: .bool,
+        PreferenceKey.autoCapitalize: .bool, PreferenceKey.autoPauseEnabled: .bool,
+        PreferenceKey.duckOtherAudioEnabled: .bool, PreferenceKey.escapeCancelsDictation: .bool,
+        PreferenceKey.externalMicWhenLidClosed: .bool, PreferenceKey.historyEnabled: .bool,
+        PreferenceKey.historyKeepsAudio: .bool, PreferenceKey.modelKeepAliveEnabled: .bool,
+        PreferenceKey.transcriptCleanupEnabled: .bool, PreferenceKey.useScreenContext: .bool,
+        PreferenceKey.writingRewriteEnabled: .bool, PreferenceKey.writingStyleEnabled: .bool,
+        // Whole numbers
+        "vocamac.hotKeyCode": .integer, "vocamac.hotKeyModifiers": .integer,
+        "vocamac.maxRecordingDuration": .integer, "vocamac.selectedAudioChannel": .integer,
+        "vocamac.selectedAudioChannelCount": .integer, PreferenceKey.mouseTriggerButton: .integer,
+        // Decimals
+        "vocamac.doubleTapThreshold": .double, "vocamac.silenceDuration": .double,
+        "vocamac.silenceThreshold": .double, PreferenceKey.autoPausePollInterval: .double,
+        PreferenceKey.modelKeepAliveIdleTimeout: .double,
+        // Text, enum raw values, and JSON stored as text
+        "vocamac.activationMode": .string, "vocamac.customVocabulary": .string,
+        "vocamac.logLevel": .string, "vocamac.overlayPosition": .string,
+        "vocamac.overlayStyle": .string, "vocamac.selectedAudioChannelDeviceID": .string,
+        "vocamac.selectedAudioDeviceID": .string, "vocamac.selectedAudioDeviceName": .string,
+        PreferenceKey.autoPauseApps: .string, PreferenceKey.commandModeShortcut: .string,
+        PreferenceKey.commandModeEngine: .string, PreferenceKey.dictationTone: .string,
+        PreferenceKey.handsFreeShortcut: .string, PreferenceKey.historyRetention: .string,
+        PreferenceKey.learnCorrectionsMode: .string, PreferenceKey.pasteLastShortcut: .string,
+        PreferenceKey.selectedLanguage: .string, PreferenceKey.selectedModelSize: .string,
+        PreferenceKey.transcriptCleanupLevel: .string, PreferenceKey.transcriptCleanupModel: .string,
+        PreferenceKey.transcriptCleanupPrompt: .string, PreferenceKey.websiteStyleBindings: .string,
+        PreferenceKey.writingIntent: .string, PreferenceKey.writingStyleBindings: .string,
+        PreferenceKey.writingStyleDefault: .string,
+        // JSON stored as data
+        "vocamac.snippets": .data, PreferenceKey.wordReplacements: .data,
     ]
+
+    static var keys: Set<String> { Set(kinds.keys) }
 
     /// The microphone choice names a device on the Mac that exported it.
     /// These keys are restored together, and only when that device is here.
@@ -100,13 +120,14 @@ enum SettingsArchiveService {
         return nil
     }
 
-    /// Whether a value can replace what is stored: the same kind, so an
-    /// edited backup can't put a string where the app reads an integer. A
-    /// whole number may stand in for a decimal one.
-    private static func isCompatible(_ value: SettingsArchive.Value, with stored: SettingsArchive.Value) -> Bool {
-        switch (value, stored) {
+    /// Whether an imported value has the kind the app reads for its key, so
+    /// an edited backup can't put a string where the app reads an integer —
+    /// whether or not the setting was ever saved on this Mac. A whole number
+    /// may stand in for a decimal one.
+    static func isCompatible(_ value: SettingsArchive.Value, with kind: Kind) -> Bool {
+        switch (value, kind) {
         case (.bool, .bool), (.integer, .integer), (.double, .double), (.integer, .double),
-             (.string, .string), (.data, .data), (.strings, .strings):
+             (.string, .string), (.data, .data):
             return true
         default:
             return false
@@ -135,10 +156,10 @@ enum SettingsArchiveService {
             guard case .string(let id)? = archive.values[key], !id.isEmpty else { return true }
             return isAvailableInputDevice(id)
         }
-        for (key, value) in archive.values where keys.contains(key) {
+        for (key, value) in archive.values {
+            guard let kind = kinds[key] else { continue }
             if inputDeviceKeys.contains(key), !deviceIsHere { continue }
-            if let raw = defaults.object(forKey: key), let stored = Self.value(of: raw),
-               !isCompatible(value, with: stored) {
+            guard isCompatible(value, with: kind) else {
                 VocaLogger.warning(.general, "Skipped imported setting \(key): unexpected value type")
                 continue
             }

@@ -5,13 +5,31 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
+/// Audio that exists only in this window: a capture in progress, or one
+/// that stopped and hasn't been transcribed yet (still running, or failed and
+/// waiting for Try Again). Owned by the window manager rather than the view,
+/// so closing the window can ask before throwing it away.
+@MainActor
+final class MeetingCaptureSession: ObservableObject {
+    let capture = SystemAudioCapture()
+    /// Cleared only once transcription succeeds.
+    @Published var capturedSamples: [Float]?
+    @Published var isTranscribing = false
+
+    enum PendingAudio: Equatable { case capturing, transcribing, notTranscribed }
+
+    var pendingAudio: PendingAudio? {
+        if capture.isCapturing { return .capturing }
+        guard capturedSamples != nil else { return nil }
+        return isTranscribing ? .transcribing : .notTranscribed
+    }
+}
+
 @MainActor
 final class MeetingCaptureWindowManager: NSObject, ObservableObject, NSWindowDelegate {
     private var window: NSWindow?
     private var closeObserver: NSObjectProtocol?
-    /// Owned here rather than by the view, so closing the window can ask
-    /// before throwing a capture away.
-    private var capture: SystemAudioCapture?
+    private var session: MeetingCaptureSession?
 
     func open(appState: AppState) {
         if let window, window.isVisible { window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true); return }
@@ -22,19 +40,21 @@ final class MeetingCaptureWindowManager: NSObject, ObservableObject, NSWindowDel
         )
         window.contentMinSize = NSSize(width: 500, height: 310)
         window.title = "System Audio Transcription"
-        let capture = SystemAudioCapture()
-        window.contentView = NSHostingView(rootView: MeetingCaptureView(capture: capture).environmentObject(appState))
+        let session = MeetingCaptureSession()
+        window.contentView = NSHostingView(
+            rootView: MeetingCaptureView(session: session, capture: session.capture).environmentObject(appState)
+        )
         window.delegate = self
         window.center(); window.isReleasedWhenClosed = false; window.makeKeyAndOrderFront(nil)
         self.window = window
-        self.capture = capture
+        self.session = session
         DockVisibilityCoordinator.shared.windowDidOpen(); NSApp.activate(ignoringOtherApps: true)
         closeObserver = NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
                 self.window = nil
-                if let capture = self.capture, capture.isCapturing { _ = capture.stop() }
-                self.capture = nil
+                if let capture = self.session?.capture, capture.isCapturing { _ = capture.stop() }
+                self.session = nil
                 if let closeObserver = self.closeObserver { NotificationCenter.default.removeObserver(closeObserver) }
                 self.closeObserver = nil
                 DockVisibilityCoordinator.shared.windowDidClose()
@@ -43,12 +63,21 @@ final class MeetingCaptureWindowManager: NSObject, ObservableObject, NSWindowDel
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
-        guard let capture, capture.isCapturing else { return true }
+        guard let pending = session?.pendingAudio else { return true }
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "Discard the system-audio capture?"
-        alert.informativeText = "Closing this window stops the capture and throws away the audio recorded so far. Use Stop and Transcribe to keep it."
-        alert.addButton(withTitle: "Keep Capturing")
+        switch pending {
+        case .capturing:
+            alert.informativeText = "Closing this window stops the capture and throws away the audio recorded so far. Use Stop and Transcribe to keep it."
+            alert.addButton(withTitle: "Keep Capturing")
+        case .transcribing:
+            alert.informativeText = "The capture is still being transcribed. Closing this window throws away the audio and its transcript."
+            alert.addButton(withTitle: "Keep Window Open")
+        case .notTranscribed:
+            alert.informativeText = "This capture hasn't been transcribed. Closing this window throws the audio away; use Try Again to transcribe it."
+            alert.addButton(withTitle: "Keep Window Open")
+        }
         alert.addButton(withTitle: "Discard and Close")
         return alert.runModal() == .alertSecondButtonReturn
     }
@@ -56,14 +85,11 @@ final class MeetingCaptureWindowManager: NSObject, ObservableObject, NSWindowDel
 
 struct MeetingCaptureView: View {
     @EnvironmentObject var appState: AppState
+    @ObservedObject var session: MeetingCaptureSession
     @ObservedObject var capture: SystemAudioCapture
     @State private var result: VocaTranscription?
-    /// The last capture, kept until it is transcribed so a failed attempt
-    /// (the speech model busy or unavailable) can be retried.
-    @State private var capturedSamples: [Float]?
     @State private var error: String?
     @State private var notice: String?
-    @State private var isTranscribing = false
     @State private var startedAt: Date?
 
     var body: some View {
@@ -98,8 +124,8 @@ struct MeetingCaptureView: View {
                     capture.isCapturing ? stop() : start()
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(isTranscribing || appState.isRecording)
-                if isTranscribing { ProgressView().controlSize(.small) }
+                .disabled(session.isTranscribing || appState.isRecording)
+                if session.isTranscribing { ProgressView().controlSize(.small) }
             }
             .vocaCard()
             Label("Private capture · no virtual driver · 20-minute limit", systemImage: "lock.shield")
@@ -118,7 +144,7 @@ struct MeetingCaptureView: View {
                     Label(error, systemImage: "exclamationmark.triangle")
                         .foregroundStyle(.orange)
                         .font(.caption)
-                    if capturedSamples != nil, !isTranscribing, !capture.isCapturing {
+                    if session.capturedSamples != nil, !session.isTranscribing, !capture.isCapturing {
                         Button("Try Again") { transcribeCapture() }
                             .controlSize(.small)
                     }
@@ -135,7 +161,7 @@ struct MeetingCaptureView: View {
         .background(VocaDesign.canvas)
         .tint(VocaDesign.accent)
         .onChange(of: capture.didReachLimit) {
-            if capture.didReachLimit, !isTranscribing { stop() }
+            if capture.didReachLimit, !session.isTranscribing { stop() }
         }
     }
 
@@ -143,7 +169,7 @@ struct MeetingCaptureView: View {
         error = nil
         notice = nil
         result = nil
-        capturedSamples = nil
+        session.capturedSamples = nil
         do {
             try capture.start()
             startedAt = Date()
@@ -169,41 +195,41 @@ struct MeetingCaptureView: View {
         if capture.didReachLimit {
             notice = "The 20-minute limit was reached; the retained audio is being transcribed."
         }
-        capturedSamples = samples
+        session.capturedSamples = samples
         transcribeCapture()
     }
 
     private func transcribeCapture() {
-        guard let samples = capturedSamples else { return }
+        guard let samples = session.capturedSamples else { return }
         error = nil
-        isTranscribing = true
+        session.isTranscribing = true
         Task { @MainActor in
             do {
                 result = try await appState.transcribeCapturedAudio(samples)
-                capturedSamples = nil
+                session.capturedSamples = nil
             } catch {
                 self.error = error.localizedDescription
             }
-            isTranscribing = false
+            session.isTranscribing = false
         }
     }
 
     private var statusTitle: String {
         if capture.isCapturing { return "Capturing system audio" }
-        if isTranscribing { return "Transcribing capture" }
-        if capturedSamples != nil { return "Capture not transcribed yet" }
+        if session.isTranscribing { return "Transcribing capture" }
+        if session.capturedSamples != nil { return "Capture not transcribed yet" }
         return "Ready to capture"
     }
 
     private var statusDetail: String {
         if capture.isCapturing { return "Playback continues normally" }
-        if isTranscribing { return "Processing locally with the selected speech model" }
+        if session.isTranscribing { return "Processing locally with the selected speech model" }
         return "Uses the currently selected speech model"
     }
 
     private var statusColor: Color {
         if capture.isCapturing { return .red }
-        if isTranscribing { return VocaDesign.accent }
+        if session.isTranscribing { return VocaDesign.accent }
         return VocaDesign.success
     }
 
