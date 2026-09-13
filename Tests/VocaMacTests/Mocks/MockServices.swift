@@ -520,12 +520,16 @@ final class MockWhisperService: SpeechTranscribing {
     private(set) var maxConcurrentLoadCount = 0
     var mockTranscriptionResult: VocaTranscription = VocaTranscription(text: "mock transcription", duration: 1.0, detectedLanguage: "en", audioLengthSeconds: 1.0, modelUsed: .tiny)
     var shouldThrow = false
+    var transcribeDelayNanoseconds: UInt64 = 0
 
     func transcribe(audioData: [Float], language: String?, translate: Bool, vocabulary: String) async throws -> VocaTranscription {
         lastTranscribedAudioData = audioData
         lastLanguage = language
         lastTranslate = translate
         lastVocabulary = vocabulary
+        if transcribeDelayNanoseconds > 0 {
+            try await Task.sleep(nanoseconds: transcribeDelayNanoseconds)
+        }
         if shouldThrow {
             throw WhisperError.transcriptionFailed(reason: "mock error")
         }

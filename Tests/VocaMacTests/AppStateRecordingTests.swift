@@ -279,6 +279,30 @@ final class AppStateRecordingTests: XCTestCase {
         XCTAssertEqual(mocks.whisperService.lastTranscribedAudioData, [0.3])
     }
 
+    func testCancellingSystemAudioTranscriptionFreesTheModelForDictation() async throws {
+        let (appState, mocks) = AppState.makeTestState()
+        mocks.whisperService.transcribeDelayNanoseconds = 10_000_000_000
+
+        let transcription = Task { try await appState.transcribeCapturedAudio([0.3]) }
+        for _ in 0..<200 where mocks.whisperService.lastTranscribedAudioData == nil { await Task.yield() }
+        XCTAssertEqual(appState.appStatus, .processing)
+
+        transcription.cancel()
+        do {
+            _ = try await transcription.value
+            XCTFail("A cancelled capture must not produce a result")
+        } catch {
+            XCTAssertTrue(error is CancellationError, "\(error)")
+        }
+
+        XCTAssertEqual(appState.appStatus, .idle)
+        XCTAssertFalse(appState.isTranscribingMedia)
+        XCTAssertNil(appState.lastTranscription)
+        mocks.whisperService.transcribeDelayNanoseconds = 0
+        await appState.startRecording()
+        XCTAssertTrue(appState.isRecording, "Dictation must not be blocked by the discarded capture")
+    }
+
     func testStopRecordingInjectsPolishedText() async {
         let (appState, mocks) = AppState.makeTestState()
         mocks.audioEngine.stopRecordingResult = Array(repeating: Float(0.1), count: 16_000)

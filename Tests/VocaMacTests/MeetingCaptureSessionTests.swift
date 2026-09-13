@@ -20,4 +20,18 @@ final class MeetingCaptureSessionTests: XCTestCase {
         session.capturedSamples = nil
         XCTAssertNil(session.pendingAudio)
     }
+
+    func testDiscardCancelsAnInFlightTranscription() {
+        let session = MeetingCaptureSession()
+        let task = Task<Void, Never> { try? await Task.sleep(nanoseconds: 10_000_000_000) }
+        session.capturedSamples = [0.2]
+        session.isTranscribing = true
+        session.transcriptionTask = task
+
+        session.discard()
+
+        XCTAssertTrue(task.isCancelled)
+        XCTAssertNil(session.transcriptionTask)
+        XCTAssertNil(session.pendingAudio)
+    }
 }

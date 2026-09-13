@@ -2858,12 +2858,17 @@ final class AppState: ObservableObject {
         }
         if !whisperService.isModelLoaded { await ensureModelLoaded() }
         guard whisperService.isModelLoaded else { throw CLIError(.modelNotDownloaded, "The selected model could not be loaded.") }
+        // Cancelled when the capture window is closed and its audio
+        // discarded: stop before (or during) the decode, and never record a
+        // result nobody will see.
+        try Task.checkCancellation()
         let result = try await whisperService.transcribe(
             audioData: samples,
             language: selectedLanguage == "auto" ? nil : selectedLanguage,
             translate: translationEnabled,
             vocabulary: customVocabulary
         )
+        try Task.checkCancellation()
         statsManager.recordTranscription(result)
         lastTranscription = result
         return result

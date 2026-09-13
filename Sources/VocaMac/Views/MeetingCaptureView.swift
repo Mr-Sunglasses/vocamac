@@ -15,6 +15,19 @@ final class MeetingCaptureSession: ObservableObject {
     /// Cleared only once transcription succeeds.
     @Published var capturedSamples: [Float]?
     @Published var isTranscribing = false
+    /// The running transcription, so discarding the window can stop the
+    /// decode instead of leaving it to hold the speech model unseen.
+    var transcriptionTask: Task<Void, Never>?
+
+    /// Throw away everything this window holds: stop capturing and cancel a
+    /// transcription still in flight.
+    func discard() {
+        if capture.isCapturing { _ = capture.stop() }
+        transcriptionTask?.cancel()
+        transcriptionTask = nil
+        capturedSamples = nil
+        isTranscribing = false
+    }
 
     enum PendingAudio: Equatable { case capturing, transcribing, notTranscribed }
 
@@ -53,7 +66,7 @@ final class MeetingCaptureWindowManager: NSObject, ObservableObject, NSWindowDel
             MainActor.assumeIsolated {
                 guard let self else { return }
                 self.window = nil
-                if let capture = self.session?.capture, capture.isCapturing { _ = capture.stop() }
+                self.session?.discard()
                 self.session = nil
                 if let closeObserver = self.closeObserver { NotificationCenter.default.removeObserver(closeObserver) }
                 self.closeObserver = nil
@@ -203,14 +216,17 @@ struct MeetingCaptureView: View {
         guard let samples = session.capturedSamples else { return }
         error = nil
         session.isTranscribing = true
-        Task { @MainActor in
+        session.transcriptionTask = Task { @MainActor in
             do {
                 result = try await appState.transcribeCapturedAudio(samples)
                 session.capturedSamples = nil
             } catch {
+                // A cancelled task belongs to a window the user closed.
+                guard !Task.isCancelled else { return }
                 self.error = error.localizedDescription
             }
             session.isTranscribing = false
+            session.transcriptionTask = nil
         }
     }
 
