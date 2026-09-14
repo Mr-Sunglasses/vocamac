@@ -51,19 +51,28 @@ struct CleanupAttempt: Equatable {
     }
 }
 
-/// How a cleanup model is positioned in the picker.
+/// How a cleanup model is positioned in the picker. Which model is
+/// recommended depends on the Mac — see `CleanupModelCatalog.suggestion`.
 enum CleanupModelRecommendation: Equatable {
     case compact
-    case recommended
+    case allRound
     case quality
 
     var badge: String {
         switch self {
         case .compact: return "Compact"
-        case .recommended: return "Recommended"
+        case .allRound: return "All-round"
         case .quality: return "Higher quality"
         }
     }
+}
+
+/// The on-device models suggested for one Mac.
+struct CleanupModelSuggestion: Equatable {
+    let cleanup: CleanupModelKind
+    let commandMode: CleanupModelKind
+    /// One sentence for Settings on why these suit this Mac, true of both.
+    let reason: String
 }
 
 /// Identifiers persisted in `PreferenceKey.transcriptCleanupModel`.
@@ -82,20 +91,21 @@ enum CleanupModelKind: String, CaseIterable, Identifiable, Codable {
     case qwen25_0_5b_q4_k_m
     case qwen3_0_6b_q4_k_m
     case qwen25_1_5b_q4_k_m
+    case ministral3_3b_q4_k_m
     case qwen3_4b_instruct_2507_q4_k_m
     case qwen25_7b_q4_k_m
 
     var id: String { rawValue }
 
-    /// Models listed as dictation cleanup choices. The larger ones are too
-    /// slow to run after every dictation and are offered for Command Mode only.
-    static let cleanupChoices: [CleanupModelKind] = [
-        .qwen25_0_5b_q4_k_m, .qwen3_0_6b_q4_k_m, .qwen25_1_5b_q4_k_m,
-    ]
+    /// Models listed as dictation cleanup choices: every model. Anything that
+    /// can follow editing instructions can also tidy a transcript, so the
+    /// Command Mode model can serve cleanup too and only one model has to be
+    /// downloaded and kept in memory. The larger ones are slower per dictation.
+    static let cleanupChoices: [CleanupModelKind] = allCases
 
     /// Models strong enough to follow spoken editing instructions.
     static let commandModeChoices: [CleanupModelKind] = [
-        .qwen25_1_5b_q4_k_m, .qwen3_4b_instruct_2507_q4_k_m, .qwen25_7b_q4_k_m,
+        .qwen25_1_5b_q4_k_m, .ministral3_3b_q4_k_m, .qwen3_4b_instruct_2507_q4_k_m, .qwen25_7b_q4_k_m,
     ]
 
     static let defaultKind: CleanupModelKind = .qwen25_0_5b_q4_k_m
@@ -113,6 +123,11 @@ enum CleanupModelKind: String, CaseIterable, Identifiable, Codable {
     var supportsCommandMode: Bool { Self.commandModeChoices.contains(self) }
     /// Listed for both features; one download serves both.
     var isShared: Bool { supportsCleanup && supportsCommandMode }
+    /// Sized for editing rather than for running after every dictation:
+    /// slower than Qwen 2.5 1.5B, the largest model tuned for cleanup.
+    var isSlowForCleanup: Bool {
+        descriptor.generationTokensPerSecond < CleanupModelCatalog.quality.generationTokensPerSecond
+    }
 }
 
 /// One downloadable GGUF used for post-transcription cleanup.
@@ -127,6 +142,10 @@ struct CleanupModelDescriptor: Equatable {
     let expectedByteCount: Int64
     let maxTokenCount: Int32
     let ramRequiredGB: Double
+    /// Conservative generation speed on the slowest supported Mac (a base M1),
+    /// from public llama.cpp Q4_K_M benchmarks. Only used to size the cleanup
+    /// deadline, so erring low costs a longer ceiling, never a result.
+    let generationTokensPerSecond: Double
     let recommendation: CleanupModelRecommendation
 }
 
@@ -152,7 +171,8 @@ enum CleanupModelCatalog {
         expectedByteCount: 491_400_032,
         maxTokenCount: 4096,
         ramRequiredGB: 0.9,
-        recommendation: .recommended
+        generationTokensPerSecond: 100,
+        recommendation: .allRound
     )
 
     static let compact = CleanupModelDescriptor(
@@ -166,6 +186,7 @@ enum CleanupModelCatalog {
         expectedByteCount: 396_705_472,
         maxTokenCount: 4096,
         ramRequiredGB: 0.8,
+        generationTokensPerSecond: 90,
         recommendation: .compact
     )
 
@@ -182,6 +203,35 @@ enum CleanupModelCatalog {
         expectedByteCount: 1_117_320_736,
         maxTokenCount: 8192,
         ramRequiredGB: 2.2,
+        generationTokensPerSecond: 45,
+        recommendation: .quality
+    )
+
+    /// Ministral 3 3B Instruct 2512: `mistral3` architecture (plain attention),
+    /// Apache 2.0. The text-only GGUF; the vision encoder ships as a separate
+    /// file VocaMac does not need. Measured through `TranscriptCleanupService`
+    /// on 22 cleanup and 19 Command Mode probes (M1 Pro, two passes, identical):
+    /// cleanup 18, level with Qwen 3 4B and ahead of every other model tried,
+    /// and it kept German and French dictation in their own language, which
+    /// Qwen 3 4B and Granite 4.0 Micro translated to English. Command Mode 14
+    /// against Qwen 3 4B's 15: it can over-rewrite a tone change (it turned a
+    /// short request into a letter). About 20% faster than Qwen 3 4B and 350 MB
+    /// smaller. Granite 4.0 Micro and Llama 3.2 3B matched its total but fail
+    /// cleanup in worse ways (translation; dropped words); Qwen 3 1.7B and
+    /// SmolLM3 3B scored lower; Granite 4.0 1B generates only "@" on this
+    /// llama.cpp build.
+    static let commandCompact = CleanupModelDescriptor(
+        kind: .ministral3_3b_q4_k_m,
+        displayName: "Ministral 3 3B Instruct",
+        summary: "A lighter, faster alternative to Qwen 3 4B for both cleanup and Command Mode. Cleans up as well as 4B and kept Spanish, French, and German dictation in its own language; slightly less reliable on tone rewrites.",
+        sizeDescription: "~2.15 GB",
+        fileName: "Ministral-3-3B-Instruct-2512-Q4_K_M.gguf",
+        url: URL(string: "https://huggingface.co/mistralai/Ministral-3-3B-Instruct-2512-GGUF/resolve/eb599d408350ea2bb60452cb86be7c7b2fc28227/Ministral-3-3B-Instruct-2512-Q4_K_M.gguf")!,
+        expectedSHA256: "9ed150d4367e68df0ac8e1540f6ddc65b42d0ee26378329d1ecbca60f93fc5f8",
+        expectedByteCount: 2_147_023_008,
+        maxTokenCount: 8192,
+        ramRequiredGB: 3.4,
+        generationTokensPerSecond: 22,
         recommendation: .quality
     )
 
@@ -191,7 +241,7 @@ enum CleanupModelCatalog {
     static let commandBalanced = CleanupModelDescriptor(
         kind: .qwen3_4b_instruct_2507_q4_k_m,
         displayName: "Qwen 3 4B Instruct",
-        summary: "Best Command Mode quality for most Macs. Follows multi-step edits, rewrites, and translation far more reliably than 1.5B. Needs 16 GB of memory to stay comfortable.",
+        summary: "Strong Command Mode quality. Follows multi-step edits, rewrites, and translation far more reliably than 1.5B. Needs 16 GB of memory to stay comfortable.",
         sizeDescription: "~2.50 GB",
         fileName: "Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
         url: URL(string: "https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF/resolve/a06e946bb6b655725eafa393f4a9745d460374c9/Qwen3-4B-Instruct-2507-Q4_K_M.gguf")!,
@@ -199,6 +249,7 @@ enum CleanupModelCatalog {
         expectedByteCount: 2_497_281_120,
         maxTokenCount: 8192,
         ramRequiredGB: 4.0,
+        generationTokensPerSecond: 18,
         recommendation: .quality
     )
 
@@ -215,10 +266,42 @@ enum CleanupModelCatalog {
         expectedByteCount: 4_683_074_240,
         maxTokenCount: 8192,
         ramRequiredGB: 5.6,
+        generationTokensPerSecond: 11,
         recommendation: .quality
     )
 
-    static let all: [CleanupModelDescriptor] = [recommended, compact, quality, commandBalanced, commandLarge]
+    static let all: [CleanupModelDescriptor] = [
+        recommended, compact, quality, commandCompact, commandBalanced, commandLarge,
+    ]
+
+    /// Macs with at least this much memory are suggested one model for both
+    /// cleanup and Command Mode.
+    static let sharedModelMemoryGB = 16
+
+    /// Models suggested for a Mac with `memoryGB` of installed memory — the
+    /// same input the speech-model fallback uses.
+    ///
+    /// Below 16 GB a cleanup model shares memory with the speech model and
+    /// every open app, so cleanup gets the 0.5B model and Command Mode the
+    /// smallest model that follows edits. From 16 GB Ministral 3 3B serves
+    /// both: it cleaned up best of the models measured and was within a probe
+    /// of Qwen 3 4B on edits, and a single shared model never swaps in and out
+    /// around an edit. The larger Command Mode models are not suggested:
+    /// running a different model for edits brings that swapping back.
+    static func suggestion(memoryGB: Int) -> CleanupModelSuggestion {
+        guard memoryGB >= sharedModelMemoryGB else {
+            return CleanupModelSuggestion(
+                cleanup: .qwen25_0_5b_q4_k_m,
+                commandMode: .qwen25_1_5b_q4_k_m,
+                reason: "With \(memoryGB) GB of memory, small models leave room for speech recognition and your apps."
+            )
+        }
+        return CleanupModelSuggestion(
+            cleanup: .ministral3_3b_q4_k_m,
+            commandMode: .ministral3_3b_q4_k_m,
+            reason: "With \(memoryGB) GB of memory, one model can stay loaded for both cleanup and Command Mode."
+        )
+    }
 
     static func descriptor(for kind: CleanupModelKind) -> CleanupModelDescriptor {
         all.first { $0.kind == kind } ?? recommended

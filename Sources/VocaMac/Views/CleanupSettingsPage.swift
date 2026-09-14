@@ -130,6 +130,10 @@ struct CleanupSettingsPage: View {
 
             if appState.cleanupEndpoint.isLocal {
                 VocaSettingsGroup("Cleanup Model") {
+                    CleanupSuggestionBanner(suggestion: appState.cleanupModelSuggestion)
+                    if let shared = appState.commandModelAvailableForCleanup {
+                        ShareCommandModelBanner(kind: shared)
+                    }
                     ForEach(CleanupModelKind.cleanupChoices) { kind in
                         CleanupModelRow(kind: kind)
                         if kind != CleanupModelKind.cleanupChoices.last { Divider() }
@@ -406,6 +410,7 @@ struct CleanupModelRow: View {
     private var descriptor: CleanupModelDescriptor { kind.descriptor }
     private var isDownloaded: Bool { appState.transcriptCleanup.isDownloaded(kind) }
     private var isSelected: Bool { appState.selectedCleanupModelKind == kind }
+    private var isSuggested: Bool { appState.cleanupModelSuggestion.cleanup == kind }
     /// Selected for cleanup and actually resident — Command Mode may have
     /// borrowed the model slot for a larger model.
     private var isActive: Bool {
@@ -434,13 +439,19 @@ struct CleanupModelRow: View {
                         .font(.callout)
                         .fontWeight(isSelected ? .semibold : .regular)
 
-                    Text(descriptor.recommendation.badge)
-                        .font(.caption2)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 1)
-                        .background(badgeColor.opacity(0.2))
-                        .foregroundStyle(badgeColor)
-                        .cornerRadius(4)
+                    // Recommended for this Mac replaces the model's general
+                    // positioning, as the speech model list does.
+                    if isSuggested {
+                        RecommendedBadge(reason: appState.cleanupModelSuggestion.reason)
+                    } else {
+                        Text(descriptor.recommendation.badge)
+                            .font(.caption2)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 1)
+                            .background(badgeColor.opacity(0.2))
+                            .foregroundStyle(badgeColor)
+                            .cornerRadius(4)
+                    }
 
                     if kind.isShared {
                         SharedModelBadge(title: "Cleanup + Command Mode")
@@ -541,9 +552,10 @@ struct CleanupModelRow: View {
     /// using this very download.
     private var sharedUseNote: String? {
         guard kind.isShared else { return nil }
+        let slower = kind.isSlowForCleanup ? " Slower after each dictation than the smaller models." : ""
         return appState.commandModeEngine == .local(kind)
-            ? "Also your Command Mode model — one download serves both."
-            : "Can also run Command Mode — one download serves both."
+            ? "Also your Command Mode model — one download and one model in memory serve both." + slower
+            : "Can also run Command Mode — one download serves both." + slower
     }
 
     private var deleteMessage: String {
@@ -551,11 +563,11 @@ struct CleanupModelRow: View {
         return appState.commandModeEngine == .local(kind) ? base + " Command Mode uses this model too." : base
     }
 
+    /// Neutral, so the accent stays with Recommended for this Mac.
     private var badgeColor: Color {
         switch descriptor.recommendation {
         case .compact: return .secondary
-        case .recommended: return VocaDesign.accent
-        case .quality: return .primary
+        case .allRound, .quality: return .primary
         }
     }
 }
@@ -683,6 +695,9 @@ private struct CommandLocalModelRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(descriptor.displayName).font(.callout)
+                    if appState.cleanupModelSuggestion.commandMode == kind {
+                        RecommendedBadge(reason: appState.cleanupModelSuggestion.reason)
+                    }
                     if kind.isShared {
                         SharedModelBadge(title: "Cleanup + Command Mode")
                     }
@@ -831,6 +846,75 @@ private struct CommandModeExamples: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Example instructions: " + Self.phrases.joined(separator: ", "))
+    }
+}
+
+/// Which cleanup model suits this Mac, mirroring the speech model page.
+private struct CleanupSuggestionBanner: View {
+    let suggestion: CleanupModelSuggestion
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: "sparkles")
+                .foregroundStyle(VocaDesign.accent)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Recommended for your Mac: **\(suggestion.cleanup.descriptor.displayName)**")
+                    .font(.callout)
+                Text(suggestion.reason)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 4)
+    }
+}
+
+private struct RecommendedBadge: View {
+    let reason: String
+
+    var body: some View {
+        Text("Recommended")
+            .font(.caption2)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 1)
+            .background(VocaDesign.accent.opacity(0.12))
+            .foregroundStyle(VocaDesign.accent)
+            .cornerRadius(4)
+            .help("Recommended for your Mac. \(reason)")
+    }
+}
+
+/// Offers to run cleanup with the Command Mode model, so the two features
+/// stop swapping different models in and out of memory around every edit.
+private struct ShareCommandModelBanner: View {
+    @EnvironmentObject var appState: AppState
+    let kind: CleanupModelKind
+    @State private var isSwitching = false
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: "square.on.square")
+                .foregroundStyle(VocaDesign.command)
+            Text("Command Mode uses \(kind.descriptor.displayName). Use it for cleanup too, so one model stays loaded instead of two swapping.")
+                .font(.caption)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 8)
+            if isSwitching {
+                ProgressView().controlSize(.small)
+            } else {
+                Button("Use for Cleanup") {
+                    isSwitching = true
+                    Task { @MainActor in
+                        await appState.useCommandModelForCleanup()
+                        isSwitching = false
+                    }
+                }
+                .controlSize(.small)
+            }
+        }
+        .padding(.vertical, 4)
     }
 }
 
