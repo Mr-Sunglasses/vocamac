@@ -86,6 +86,9 @@ final class AIConfigurationTests: XCTestCase {
         XCTAssertFalse(CleanupEndpointConfiguration.isLocalNetworkHost("8.8.8.8"))
         XCTAssertFalse(CleanupEndpointConfiguration.isLocalNetworkHost("172.32.0.1"))
         XCTAssertTrue(CleanupEndpointConfiguration.isLocalNetworkHost("172.20.0.1"))
+        XCTAssertTrue(CleanupEndpointConfiguration.isLocalNetworkHost("fd12:3456:789a::1"))
+        XCTAssertTrue(CleanupEndpointConfiguration.isLocalNetworkHost("[fe80::1]"))
+        XCTAssertFalse(CleanupEndpointConfiguration.isLocalNetworkHost("2001:4860:4860::8888"))
     }
 
     func testCommandModeEngineResolution() {
@@ -323,6 +326,18 @@ final class SpokenCorrectionResolverTests: XCTestCase {
         XCTAssertEqual(SpokenCorrectionResolver.resolve("deploy Monday, no, Tuesday"), "deploy Tuesday")
     }
 
+    func testEverydayCueWordsNeedPunctuationOnBothSides() {
+        for text in [
+            "Press 1, wait 2 seconds, then press 3",       // "wait" is an instruction
+            "Boil for 10, wait 5 minutes, then drain",
+            "We open Monday, no Sunday hours",              // "no" modifies the noun
+            "I work Monday, no Tuesday or Wednesday",
+        ] {
+            XCTAssertEqual(SpokenCorrectionResolver.resolve(text), text, text)
+        }
+        XCTAssertEqual(SpokenCorrectionResolver.resolve("Friday - wait - Saturday"), "Saturday")
+    }
+
     func testOrdinaryActuallyPhraseIsNotRewritten() {
         let text = "I was actually thrilled with the result"
         XCTAssertEqual(SpokenCorrectionResolver.resolve(text), text)
@@ -420,6 +435,92 @@ final class SettingsArchiveTests: XCTestCase {
         try SettingsArchiveService.restore(try encoder.encode(archive), defaults: defaults)
 
         XCTAssertEqual(defaults.string(forKey: PreferenceKey.cleanupEndpoint), "https://trusted.example/v1")
+    }
+
+    func testRestoreSkipsValuesOfTheWrongType() throws {
+        defaults.set(63, forKey: "vocamac.hotKeyCode")
+        defaults.set(1.5, forKey: "vocamac.silenceDuration")
+        let archive = SettingsArchive(values: [
+            "vocamac.hotKeyCode": .string("F5"),
+            "vocamac.silenceDuration": .integer(2),
+            PreferenceKey.historyEnabled: .bool(true),
+        ])
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+
+        try SettingsArchiveService.restore(try encoder.encode(archive), defaults: defaults)
+
+        XCTAssertEqual(defaults.integer(forKey: "vocamac.hotKeyCode"), 63)
+        XCTAssertEqual(defaults.double(forKey: "vocamac.silenceDuration"), 2)
+        XCTAssertTrue(defaults.bool(forKey: PreferenceKey.historyEnabled))
+    }
+
+    func testRestoreChecksTypesEvenWhenTheSettingWasNeverSaved() throws {
+        XCTAssertNil(defaults.object(forKey: "vocamac.hotKeyCode"))
+        let archive = SettingsArchive(values: [
+            "vocamac.hotKeyCode": .string("F5"),
+            "vocamac.overlayStyle": .integer(3),
+            "vocamac.maxRecordingDuration": .integer(90),
+        ])
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+
+        try SettingsArchiveService.restore(try encoder.encode(archive), defaults: defaults)
+
+        XCTAssertNil(defaults.object(forKey: "vocamac.hotKeyCode"))
+        XCTAssertNil(defaults.object(forKey: "vocamac.overlayStyle"))
+        XCTAssertEqual(defaults.integer(forKey: "vocamac.maxRecordingDuration"), 90)
+    }
+
+    @MainActor
+    func testDeclaredKindsMatchHowTheAppStoresSettings() {
+        let keys = Array(SettingsArchiveService.keys)
+        let saved = keys.map { ($0, UserDefaults.standard.object(forKey: $0)) }
+        defer {
+            for (key, value) in saved { UserDefaults.standard.set(value, forKey: key) }
+        }
+        let (app, _) = AppState.makeTestState()
+        app.hotKeyCode = 63
+        app.hotKeyModifiers = [.command, .shift]
+        app.activationMode = .doubleTapToggle
+        app.maxRecordingDuration = 90
+        app.silenceDuration = 2.5
+        app.overlayStyle = .live
+        app.dictationTone = .glass
+        app.historyRetention = .defaultRetention
+        app.writingStyleDefault = .email
+        app.mouseTriggerButton = 4
+        app.addWordReplacement(heard: "voca mac", replacement: "VocaMac")
+        app.snippets = [Snippet(trigger: "sig", expansion: "Thanks")]
+        app.saveSnippets()
+
+        let archive = SettingsArchiveService.make(defaults: .standard)
+        XCTAssertGreaterThanOrEqual(archive.values.count, 12)
+        for (key, value) in archive.values {
+            guard let kind = SettingsArchiveService.kinds[key] else { return XCTFail("\(key) has no kind") }
+            XCTAssertTrue(SettingsArchiveService.isCompatible(value, with: kind), "\(key): \(value) vs \(kind)")
+        }
+    }
+
+    func testMicrophoneChoiceIsOnlyRestoredWhenThatDeviceIsConnected() throws {
+        let archive = SettingsArchive(values: [
+            "vocamac.selectedAudioDeviceID": .string("usb-mic-on-old-mac"),
+            "vocamac.selectedAudioDeviceName": .string("Old USB Mic"),
+            "vocamac.selectedAudioChannel": .integer(2),
+            PreferenceKey.historyEnabled: .bool(true),
+        ])
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(archive)
+
+        try SettingsArchiveService.restore(data, defaults: defaults, isAvailableInputDevice: { _ in false })
+        XCTAssertNil(defaults.string(forKey: "vocamac.selectedAudioDeviceID"))
+        XCTAssertNil(defaults.object(forKey: "vocamac.selectedAudioChannel"))
+        XCTAssertTrue(defaults.bool(forKey: PreferenceKey.historyEnabled))
+
+        try SettingsArchiveService.restore(data, defaults: defaults, isAvailableInputDevice: { $0 == "usb-mic-on-old-mac" })
+        XCTAssertEqual(defaults.string(forKey: "vocamac.selectedAudioDeviceName"), "Old USB Mic")
+        XCTAssertEqual(defaults.integer(forKey: "vocamac.selectedAudioChannel"), 2)
     }
 
     func testRestoreRejectsNewerFormatWithoutChangingDefaults() throws {
@@ -574,6 +675,37 @@ final class CommandModeFlowTests: XCTestCase {
         XCTAssertTrue(cleanup.lastPrompt?.contains("make this shorter") == true)
         XCTAssertNil(mocks.textInjector.lastInjectedText)
         XCTAssertEqual(app.appStatus, .idle)
+    }
+
+    func testLosingTheInputDeviceEndsCommandModeSoTheNextDictationTypesNormally() async {
+        let selection = MockSelectedTextService()
+        selection.selectedText = "This sentence is unnecessarily long."
+        let cleanup = MockTranscriptCleanup()
+        cleanup.cleanHandler = { _ in "A short sentence." }
+        let (app, mocks) = AppState.makeTestState(
+            transcriptCleanup: cleanup,
+            selectedTextService: selection
+        )
+        await app.beginCommandMode()
+        XCTAssertTrue(app.isRecording)
+        XCTAssertNotNil(app.commandModeSession)
+
+        mocks.audioEngine.onAudioDeviceChanged?()
+        for _ in 0..<200 where app.isRecording { await Task.yield() }
+
+        XCTAssertFalse(app.isRecording)
+        XCTAssertNil(app.commandModeSession)
+
+        mocks.audioEngine.stopRecordingResult = Array(repeating: Float(0.1), count: 16_000)
+        mocks.whisperService.mockTranscriptionResult = VocaTranscription(
+            text: "hello there", duration: 0, detectedLanguage: "en",
+            audioLengthSeconds: 1, modelUsed: .tiny
+        )
+        await app.startRecording()
+        await app.stopRecordingAndTranscribe()
+
+        XCTAssertNil(selection.replacement)
+        XCTAssertEqual(mocks.textInjector.injectCallCount, 1)
     }
 
     func testQuickPressKeepsCommandModeRecordingUntilSecondPress() async {

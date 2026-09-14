@@ -189,12 +189,18 @@ struct CleanupEndpointConfiguration: Codable, Equatable {
         return nil
     }
 
-    /// This Mac, a `.local` name, a bare host name, or a private IPv4 address —
-    /// the hosts `NSAllowsLocalNetworking` lets through without TLS.
+    /// This Mac, a `.local` name, a bare host name, or a private IPv4 or IPv6
+    /// address — the hosts `NSAllowsLocalNetworking` lets through without TLS.
     static func isLocalNetworkHost(_ host: String?) -> Bool {
         guard let host = host?.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "[]")),
               !host.isEmpty else { return false }
         if host == "localhost" || host == "::1" || host.hasSuffix(".local") { return true }
+        if host.contains(":") {
+            // Unique local (fc00::/7) and link-local (fe80::/10) addresses.
+            let firstGroup = host.split(separator: ":", omittingEmptySubsequences: false).first.map(String.init) ?? ""
+            guard firstGroup.count == 4, let value = UInt16(firstGroup, radix: 16) else { return false }
+            return value & 0xFE00 == 0xFC00 || value & 0xFFC0 == 0xFE80
+        }
         let octets = host.split(separator: ".").compactMap { UInt8($0) }
         if octets.count == 4 {
             switch (octets[0], octets[1]) {

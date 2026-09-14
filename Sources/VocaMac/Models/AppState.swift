@@ -367,6 +367,12 @@ final class AppState: ObservableObject {
     /// negotiating the route.
     private var pendingStopDuringStart: PendingStopKind?
 
+    /// True while `startRecording` waits for the speech model to load after
+    /// an idle unload. A stop arriving then can't stop anything yet, so it is
+    /// remembered here and the recording is never started.
+    private var isLoadingModelForRecording = false
+    private var pendingStopDuringModelLoad: PendingStopKind?
+
     /// Frontmost app captured when recording started. Used only when the app
     /// in front at injection time is VocaMac itself (Settings has focus).
     private var pendingTargetApp: RunningAppSnapshot?
@@ -944,10 +950,7 @@ final class AppState: ObservableObject {
                 guard let self = self else { return }
                 VocaLogger.warning(.appState, "Audio device changed — recovering from interrupted recording")
                 self.recordingGeneration = UUID()
-                self.isRecording = false
-                self.audioLevel = 0.0
-                self.cursorOverlay.hide()
-                self.hotKeyManager.resetKeyState()
+                self.discardRecordingState()
                 self.appStatus = .idle
                 self.errorMessage = nil
             }
@@ -1243,11 +1246,9 @@ final class AppState: ObservableObject {
 
         if isRecording || appStatus == .recording {
             VocaLogger.warning(.appState, "Auto-pause entered while recording: stopping without inject")
+            recordingGeneration = UUID()
             _ = await stopAudioEngine()
-            isRecording = false
-            audioLevel = 0
-            cursorOverlay.hide()
-            hotKeyManager.resetKeyState()
+            discardRecordingState()
             appStatus = .idle
         }
 
@@ -1650,12 +1651,28 @@ final class AppState: ObservableObject {
         // Lazy-reload after idle unload (or any other cold start).
         if !whisperService.isModelLoaded {
             appStatus = .processing
+            isLoadingModelForRecording = true
+            pendingStopDuringModelLoad = nil
             await ensureModelLoaded()
+            isLoadingModelForRecording = false
+            let pendingStop = pendingStopDuringModelLoad
+            pendingStopDuringModelLoad = nil
             guard whisperService.isModelLoaded else {
                 showTemporaryError("Could not load the speech model. Open Settings → Speech Model and try again.")
                 return
             }
             appStatus = .idle
+            // The hotkey was released (or Escape pressed) while the model
+            // loaded. Starting now would leave the microphone recording with
+            // nobody holding the key.
+            if let pendingStop {
+                VocaLogger.info(.appState, "Dictation ended while the speech model was loading — not starting a recording")
+                hotKeyManager.resetKeyState()
+                if pendingStop == .transcribe {
+                    showTemporaryError("The speech model was still loading, so nothing was recorded. It's ready now — try again.")
+                }
+                return
+            }
         }
 
         recordingGeneration = UUID()
@@ -1734,12 +1751,7 @@ final class AppState: ObservableObject {
 
         guard didStartRecording else {
             VocaLogger.warning(.appState, "Audio engine failed to start — resetting recording state")
-            isRecording = false
-            audioLevel = 0.0
-            resetCommandModeState()
-            liveTranscript = ""
-            cursorOverlay.hide()
-            hotKeyManager.resetKeyState()
+            discardRecordingState()
             // Silently dropping back to idle looks like the hotkey did nothing.
             // Tell the user which microphone we tried and where to change it.
             let deviceDescription = selectedAudioDeviceName.isEmpty
@@ -1800,7 +1812,10 @@ final class AppState: ObservableObject {
         // Accept stop if we're recording OR if the audio engine thinks
         // it's recording (covers stuck-state recovery scenarios where
         // isRecording and appStatus may be out of sync).
-        guard isRecording || appStatus == .recording else { return }
+        guard isRecording || appStatus == .recording else {
+            if isLoadingModelForRecording { pendingStopDuringModelLoad = .transcribe }
+            return
+        }
 
         // A start that is still negotiating its input route holds the audio
         // engine's lifecycle queue. Calling stopRecording() here would block the
@@ -2050,7 +2065,10 @@ final class AppState: ObservableObject {
     /// Cancels the active recording without sending its audio to a transcription
     /// engine. This is used by the overlay's cancel button.
     func cancelRecording() async {
-        guard isRecording || appStatus == .recording else { return }
+        guard isRecording || appStatus == .recording else {
+            if isLoadingModelForRecording { pendingStopDuringModelLoad = .discard }
+            return
+        }
 
         if isStartingAudio {
             pendingStopDuringStart = .discard
@@ -2059,6 +2077,17 @@ final class AppState: ObservableObject {
         }
 
         _ = await stopAudioEngine()
+        discardRecordingState()
+        appStatus = .idle
+        errorMessage = nil
+        VocaLogger.info(.appState, "Recording cancelled")
+    }
+
+    /// Tear down a recording that ends without a transcript: a cancel, a
+    /// failed start, a lost input device, or auto-pause. Every such exit
+    /// must also drop a Command Mode session, or the next ordinary dictation
+    /// would be taken as an editing command for the stale selection.
+    private func discardRecordingState() {
         isRecording = false
         audioLevel = 0.0
         screenContextTask?.cancel()
@@ -2069,9 +2098,6 @@ final class AppState: ObservableObject {
         liveTranscript = ""
         cursorOverlay.hide()
         hotKeyManager.resetKeyState()
-        appStatus = .idle
-        errorMessage = nil
-        VocaLogger.info(.appState, "Recording cancelled")
     }
 
     /// Escape: throw away a recording, or drop a dictation still being
@@ -2781,9 +2807,10 @@ final class AppState: ObservableObject {
     /// Transcribe a user-chosen media file without injecting it into another
     /// app. The GUI shares the same router and model choice as the CLI.
     func transcribeFile(at url: URL) async throws -> VocaTranscription {
-        guard !isRecording, appStatus == .idle else {
+        guard isFreeForMediaTranscription else {
             throw CLIError(.transcriptionFailed, "Finish the active dictation before transcribing a file.")
         }
+        errorMessage = nil
         appStatus = .processing
         isTranscribingMedia = true
         defer {
@@ -2813,9 +2840,16 @@ final class AppState: ObservableObject {
 
     func transcribeCapturedAudio(_ samples: [Float]) async throws -> VocaTranscription {
         guard !samples.isEmpty else { throw CLIError(.invalidAudio, "No audio was captured.") }
-        guard !isRecording, appStatus == .idle else {
-            throw CLIError(.transcriptionFailed, "Finish the active dictation first.")
+        // A capture can end on its own (the duration limit) mid-dictation.
+        // Wait for the dictation rather than refuse and lose the capture.
+        let deadline = Date().addingTimeInterval(Self.mediaTranscriptionWaitSeconds)
+        while !isFreeForMediaTranscription {
+            guard Date() < deadline else {
+                throw CLIError(.transcriptionFailed, "VocaMac is still busy with a dictation. Try again when it finishes.")
+            }
+            try await Task.sleep(nanoseconds: 100_000_000)
         }
+        errorMessage = nil
         appStatus = .processing
         isTranscribingMedia = true
         defer {
@@ -2824,15 +2858,28 @@ final class AppState: ObservableObject {
         }
         if !whisperService.isModelLoaded { await ensureModelLoaded() }
         guard whisperService.isModelLoaded else { throw CLIError(.modelNotDownloaded, "The selected model could not be loaded.") }
+        // Cancelled when the capture window is closed and its audio
+        // discarded: stop before (or during) the decode, and never record a
+        // result nobody will see.
+        try Task.checkCancellation()
         let result = try await whisperService.transcribe(
             audioData: samples,
             language: selectedLanguage == "auto" ? nil : selectedLanguage,
             translate: translationEnabled,
             vocabulary: customVocabulary
         )
+        try Task.checkCancellation()
         statsManager.recordTranscription(result)
         lastTranscription = result
         return result
+    }
+
+    static let mediaTranscriptionWaitSeconds: TimeInterval = 120
+
+    /// Nothing else is using the speech model. An error banner is only a
+    /// message, so it doesn't count as busy.
+    private var isFreeForMediaTranscription: Bool {
+        !isRecording && !isTranscribingMedia && (appStatus == .idle || appStatus == .error)
     }
 
     private static func sameOutputTarget(_ first: RunningAppSnapshot?, _ second: RunningAppSnapshot?) -> Bool {

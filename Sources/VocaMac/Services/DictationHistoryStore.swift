@@ -36,7 +36,7 @@ final class DictationHistoryStore: ObservableObject {
     /// synchronously on the main actor.
     private let ioQueue = DispatchQueue(label: "com.vocamac.history.io", qos: .utility)
 
-    private static let sampleRate = 16_000
+    nonisolated private static let sampleRate = 16_000
 
     /// Size of a 16-bit mono WAV file with a 44-byte header.
     static func wavByteCount(sampleCount: Int) -> Int64 {

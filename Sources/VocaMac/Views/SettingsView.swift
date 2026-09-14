@@ -497,7 +497,8 @@ struct ApplicationSettingsPage: View {
         panel.allowsMultipleSelection = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
-            try SettingsArchiveService.restore(Data(contentsOf: url))
+            let devices = Set(appState.availableInputDevices().map(\.id))
+            try SettingsArchiveService.restore(Data(contentsOf: url), isAvailableInputDevice: devices.contains)
             appState.reloadImportedSettings()
             backupNotice = "Settings imported. The existing cleanup endpoint and API key were left unchanged."
         } catch {

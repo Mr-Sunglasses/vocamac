@@ -163,6 +163,14 @@ enum SpokenCorrectionResolver {
         "nahi nahi", "nahi", "nahin", "mera matlab", "matlab",
     ]
 
+    /// Cues that are also everyday words: "wait 5 minutes", "no Sunday
+    /// hours", "the word matlab". They only count when set off by punctuation
+    /// on both sides ("tomorrow, no, Wednesday"), which is how a speaker
+    /// correcting themselves is transcribed.
+    static let punctuatedCues: Set<String> = [
+        "no", "wait", "non", "nein", "não", "nao", "nahi", "nahin", "pardon", "enfin", "alias", "digo", "matlab",
+    ]
+
     // MARK: - Pattern
 
     /// Spaces and tabs only. A line break is structure — "deploy Monday" on
@@ -182,16 +190,25 @@ enum SpokenCorrectionResolver {
     }
 
     /// "<first value> [oh,] <cue> <replacement>", with the cue set off by
-    /// commas, periods, dashes, or spaces — never a question mark. The whole
+    /// commas, periods, dashes, or spaces — never a question mark. A cue that
+    /// is also an everyday word needs punctuation on both sides. The whole
     /// span is replaced by the replacement value.
     private static let expression: NSRegularExpression? = {
-        let cue = cues.map { phrase in
-            phrase.split(separator: " ").map { NSRegularExpression.escapedPattern(for: String($0)) }
-                .joined(separator: "[," + space + "]+")
-        }.joined(separator: "|")
+        let cuePattern = { (phrases: [String]) in
+            phrases.map { phrase in
+                phrase.split(separator: " ").map { NSRegularExpression.escapedPattern(for: String($0)) }
+                    .joined(separator: "[," + space + "]+")
+            }.joined(separator: "|")
+        }
+        let plainCue = cuePattern(cues.filter { !punctuatedCues.contains($0) })
+        let punctuatedCue = cuePattern(cues.filter { punctuatedCues.contains($0) })
         let separators = "[,.;…—–\\-" + space + "]"
+        let punctuation = space + "*[,.;…—–\\-]" + separators + "*"
+        let interjection = "(?:oh[," + space + "]+)?"
+        let plain = separators + "*" + interjection + "(?:" + plainCue + ")(?![\\p{L}])" + separators + "+"
+        let punctuated = punctuation + interjection + "(?:" + punctuatedCue + ")(?![\\p{L}])" + punctuation
         let pattern = "(?i)(?<![\\p{L}\\p{N}])(?<correction>" + value("first")
-            + separators + "*(?:oh[," + space + "]+)?(?:" + cue + ")(?![\\p{L}])" + separators + "+"
+            + "(?:" + plain + "|" + punctuated + ")"
             + value("replacement") + ")(?![\\p{L}\\p{N}])"
         return try? NSRegularExpression(pattern: pattern)
     }()

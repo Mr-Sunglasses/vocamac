@@ -199,14 +199,12 @@ final class TextInjector {
     /// queue proves earlier work is done — without touching any pasteboard.
     static func waitForInjectionQueueIdleForTesting() async {
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            let resume = {
+            Task { @MainActor in
                 Self.clipboardInjectionCoordinator.enqueue { finish in
                     finish()
                     continuation.resume()
                 }
             }
-            if Thread.isMainThread { resume() }
-            else { DispatchQueue.main.async(execute: resume) }
         }
     }
 
@@ -453,7 +451,7 @@ final class TextInjector {
     private func writeTranscribedText(_ text: String, to pasteboard: NSPasteboard) -> Bool {
         pasteboard.clearContents()
         let didSetText = pasteboard.setString(text, forType: .string)
-        VocaLogger.debug(.textInjector, "Set clipboard: '\(String(text.prefix(80)))'")
+        VocaLogger.debug(.textInjector, "Set clipboard: \(text.count) characters")
         return didSetText
     }
 
