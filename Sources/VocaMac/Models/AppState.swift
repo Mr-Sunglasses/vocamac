@@ -275,6 +275,9 @@ final class AppState: ObservableObject {
     @AppStorage(PreferenceKey.commandModeShortcut) var commandModeShortcut: String = ""
     /// `CommandModeEngine.storageValue`, or empty to pick automatically.
     @AppStorage(PreferenceKey.commandModeEngine) var commandModeEngineStorage: String = ""
+    /// Set when the user chose separate models for Smart Cleanup and Command
+    /// Mode even though one model could serve both.
+    @AppStorage(PreferenceKey.aiModelsKeptSeparate) var aiModelsKeptSeparate: Bool = false
     /// Opt-in: let Command Mode copy a selection an app won't share through
     /// Accessibility. Off by default; see `AccessibilitySelectedTextService`.
     @AppStorage(PreferenceKey.commandModeClipboardFallback) var commandModeClipboardFallback: Bool = false
@@ -2821,13 +2824,119 @@ final class AppState: ObservableObject {
         commandModeEngine = .local(kind)
     }
 
+    // MARK: Models for Cleanup and Command Mode
+
+    /// Bumped by every model choice. A choice that resumes after a download or
+    /// load checks it, so an older request can't overwrite a newer one.
+    private var aiModelChoiceGeneration = 0
+
+    /// Whether one on-device model is running both Smart Cleanup and Command
+    /// Mode. Choosing a different model for either one ends it; so does
+    /// switching it off, which is remembered.
+    var sharesAIModel: Bool {
+        !aiModelsKeptSeparate && cleanupEndpoint.isLocal
+            && commandModeEngine == .local(selectedCleanupModelKind)
+    }
+
+    /// Put `kind` to work for `role`, downloading it first if needed. While
+    /// the two features share a model, a model that can do both is used for
+    /// both, so picking one in either place never leaves them out of step.
+    /// Nothing changes if the download fails or cleanup can't load the model:
+    /// a request is applied whole or not at all.
+    func useAIModel(_ kind: CleanupModelKind, for role: AIModelRole) async {
+        var role = role
+        if sharesAIModel, kind.supportsCommandMode { role = .both }
+        if !kind.supportsCommandMode {
+            guard role != .commandMode else { return }
+            role = .cleanup
+        }
+        aiModelChoiceGeneration += 1
+        let generation = aiModelChoiceGeneration
+        if !transcriptCleanup.isDownloaded(kind) {
+            await transcriptCleanup.download(kind)
+            guard generation == aiModelChoiceGeneration,
+                  transcriptCleanup.isDownloaded(kind) else { return }
+        }
+        if role != .commandMode {
+            if transcriptCleanupEnabled && cleanupEndpoint.isLocal {
+                await transcriptCleanup.load(kind)
+                // A newer choice wins. A refused load keeps the previous
+                // cleanup model, so Command Mode and sharing don't move either.
+                guard generation == aiModelChoiceGeneration,
+                      transcriptCleanup.loadedKind == kind else { return }
+                transcriptCleanupModel = kind.rawValue
+            } else {
+                // Nothing to load while cleanup is off; remember the choice.
+                transcriptCleanupModel = kind.rawValue
+            }
+        }
+        // Asking for one model to do both is asking to share again.
+        if role == .both { aiModelsKeptSeparate = false }
+        if role != .cleanup {
+            commandModeEngine = .local(kind)
+        }
+    }
+
+    /// Turn sharing on or off. On adopts the cleanup model when it can edit
+    /// text, then the local Command Mode model, then the one suggested for
+    /// this Mac.
+    func setSharesAIModel(_ shared: Bool) async {
+        guard shared else {
+            // Supersedes a sharing request still downloading or loading.
+            aiModelChoiceGeneration += 1
+            aiModelsKeptSeparate = true
+            return
+        }
+        // useAIModel clears the separate flag only once the model is in place.
+        let kind: CleanupModelKind
+        if selectedCleanupModelKind.supportsCommandMode {
+            kind = selectedCleanupModelKind
+        } else if case .local(let commandKind) = commandModeEngine {
+            kind = commandKind
+        } else {
+            kind = cleanupModelSuggestion.commandMode
+        }
+        await useAIModel(kind, for: .both)
+    }
+
+    /// Run Command Mode with Apple Intelligence or the cleanup endpoint.
+    /// Local models go through `useAIModel`, which can download them.
+    func selectCommandModeEngine(_ engine: CommandModeEngine) {
+        aiModelChoiceGeneration += 1
+        commandModeEngine = engine
+    }
+
+    func downloadAIModel(_ kind: CleanupModelKind) async {
+        await transcriptCleanup.download(kind)
+    }
+
+    /// Optional cleanup must not make the speech engine appear unavailable.
+    var cleanupReadinessLabel: String? {
+        guard transcriptCleanupEnabled else { return nil }
+        guard cleanupEndpoint.isLocal else {
+            return cleanupEndpoint.validationProblem() == nil ? nil : "Cleanup needs setup"
+        }
+        return transcriptCleanup.modelState.readinessLabel
+    }
+
+    /// Offer the smallest downloaded alternative; the service rechecks free
+    /// memory when the user chooses it, so this never promises a successful load.
+    var smallerDownloadedCleanupModel: CleanupModelKind? {
+        CleanupModelKind.cleanupChoices
+            .filter {
+                $0.descriptor.ramRequiredGB < selectedCleanupModelKind.descriptor.ramRequiredGB
+                    && transcriptCleanup.isDownloaded($0)
+            }
+            .min { $0.descriptor.ramRequiredGB < $1.descriptor.ramRequiredGB }
+    }
+
     func loadCleanupModel(_ kind: CleanupModelKind) async {
         await transcriptCleanup.load(kind)
         // Same rule as downloading: adopt the selection only once the model is
         // actually resident. A load refused for memory would otherwise point
         // the preference at a model that never loads, while the previously
         // working one stays in RAM unselected.
-        guard transcriptCleanup.isLoaded else { return }
+        guard transcriptCleanup.loadedKind == kind else { return }
         transcriptCleanupModel = kind.rawValue
     }
 
