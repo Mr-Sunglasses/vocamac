@@ -29,6 +29,8 @@ struct DictationOutputOptions {
 /// get the same answer, so a result computed while recording can stand in for
 /// the one the pipeline would compute at stop.
 struct CleanupRequestKey: Hashable, Sendable {
+    /// An answer from one model never stands in for another's.
+    let model: CleanupModelKind
     let prompt: String
     let input: String
 }
@@ -136,7 +138,7 @@ struct DictationOutputPipeline {
         if protectedSlices.count == 1, protectedSlices[0].text.count > budget {
             return result(plan.fallback, prepared.noting("Rewrite skipped — transcript exceeds the model context"))
         }
-        let keys = protectedSlices.map { CleanupRequestKey(prompt: plan.prompt, input: $0.text) }
+        let keys = protectedSlices.map { CleanupRequestKey(model: options.model, prompt: plan.prompt, input: $0.text) }
         await speculator?.beginFinal(needed: Set(keys))
         await cleaner.load(options.model)
         guard !Task.isCancelled else { return result(plan.fallback, "Processing cancelled") }
@@ -475,7 +477,7 @@ struct DictationOutputPipeline {
         guard !protected.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               protected.text.count <= cleaner.inputBudget(forPrompt: plan.prompt) else { return nil }
         return CleanupRequest(
-            key: CleanupRequestKey(prompt: plan.prompt, input: protected.text),
+            key: CleanupRequestKey(model: options.model, prompt: plan.prompt, input: protected.text),
             model: options.model, usesPreview: plan.usesPreview
         )
     }
