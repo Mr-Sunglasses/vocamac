@@ -189,6 +189,75 @@ enum WritingStyleEngine {
         return (removeWordRuns(ranges, from: text, prose: prose), true)
     }
 
+    // MARK: - Cut-off words
+
+    /// Remove a word the speaker cut off and then said in full, without a
+    /// model: "can you ple please install it", "we supp are supporting
+    /// streaming", "what we can im improve". A small cleanup model often
+    /// leaves these in, and Code and Terminal styles only take deletions the
+    /// model makes.
+    ///
+    /// A fragment is a lowercase, letters-only word with a vowel that isn't a
+    /// real word, and a real, longer word starting with it follows — right
+    /// after it, or one word later when the fragment has three or more
+    /// letters ("supp are supporting"). A fragment that leads to a removed
+    /// fragment goes too ("supp supp are supporting"). A sentence end in
+    /// between breaks the link. English only.
+    ///
+    /// Deliberately narrow, since nothing checks it afterwards: "diff
+    /// different" and "them theme" stay because both halves are words;
+    /// capitalized words may be names; vowel-less abbreviations ("pkg
+    /// package", "js javascript") are usually meant; and a word the speaker
+    /// also uses on its own elsewhere ("the addr field … addr address") is
+    /// theirs, not a slip.
+    static func removeCutOffWords(
+        _ text: String, prose: Bool = true, isKnownWord: (String) -> Bool
+    ) -> (text: String, removed: Int) {
+        guard let wordExpression = cutOffTokenExpression else { return (text, 0) }
+        let ns = text as NSString
+        let tokens = wordExpression.matches(in: text, range: NSRange(location: 0, length: ns.length)).map { match in
+            let text = ns.substring(with: match.range)
+            let trailing = String(text.reversed().prefix { ",.!?;:…—–-".contains($0) }.reversed())
+            return (range: match.range, word: String(text.dropLast(trailing.count)), trailing: trailing)
+        }
+        let keys = tokens.map { $0.word.lowercased() }
+        // A word used where nothing starting with it follows is intended.
+        var standalone = Set<String>()
+        for (index, key) in keys.enumerated()
+        where !keys[(index + 1)..<min(index + 3, keys.count)].contains(where: { $0.hasPrefix(key) }) {
+            standalone.insert(key)
+        }
+        // Back to front, so a fragment can see whether the one after it went.
+        var removed = Set<Int>()
+        for index in tokens.indices.reversed() {
+            let token = tokens[index]
+            let fragment = keys[index]
+            guard fragment.count >= 2, token.word == fragment, fragment.allSatisfy(\.isLetter),
+                  fragment.contains(where: { "aeiouy".contains($0) }), !standalone.contains(fragment),
+                  !".!?…".contains(where: token.trailing.contains), !isKnownWord(fragment) else { continue }
+            for distance in 1...2 where index + distance < tokens.count {
+                let candidate = tokens[index + distance]
+                let word = keys[index + distance]
+                if word.hasPrefix(fragment),
+                   removed.contains(index + distance)
+                    || (word.count > fragment.count && word.allSatisfy { $0.isLetter || $0 == "'" || $0 == "’" }
+                        && isKnownWord(word)) {
+                    removed.insert(index)
+                    break
+                }
+                // Only a plain word may sit between a fragment and its word.
+                guard distance == 1, fragment.count >= 3, candidate.trailing.isEmpty,
+                      candidate.word.allSatisfy(\.isLetter) else { break }
+            }
+        }
+        guard !removed.isEmpty else { return (text, 0) }
+        return (removeWordRuns(removed.map { tokens[$0].range }, from: text, prose: prose), removed.count)
+    }
+
+    /// Whitespace-separated tokens. One joined to symbols ("--sup",
+    /// "src/supp") isn't all letters, so it is never a fragment or its word.
+    private static let cutOffTokenExpression = try? NSRegularExpression(pattern: #"\S+"#)
+
     /// Delete whole words and repair what they leave behind. Each range
     /// covers one or more words and the punctuation stuck to them; ranges
     /// separated only by spaces are removed together ("uh uh").
