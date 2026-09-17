@@ -56,14 +56,14 @@ test("keeps navigation and anchors accessible", () => {
 });
 
 test("keeps the PRODUCT.md product boundary explicit", () => {
-  assert.match(index, /v0\.9\.0/);
+  assert.match(index, /v0\.10\.0/);
   assert.match(index, /macOS 14\+|macOS 14 Sonoma/);
   assert.match(index, /Apple Silicon/);
   assert.match(index, /WhisperKit/);
   assert.match(index, /model downloads/i);
   assert.match(index, /Beta/);
   assert.match(index, /includes Parakeet/i);
-  assert.match(index, /Additional engines and models available in v0\.9\.0/i);
+  assert.match(index, /Additional engines and models available in v0\.10\.0/i);
   assert.match(index, /Parakeet/);
   assert.match(index, /sherpa-onnx/);
   assert.doesNotMatch(index, /Stable release/i);
@@ -75,6 +75,8 @@ test("keeps the PRODUCT.md product boundary explicit", () => {
   assert.doesNotMatch(index, /remove local models/i);
   assert.match(product, /status = "Beta"/);
   assert.match(product, /osShort = "macOS 14\+"/);
+  assert.match(product, /count = 37/);
+  assert.doesNotMatch(product, /count = 17/);
 });
 
 test("uses local assets and accurate social metadata", async () => {
@@ -96,7 +98,7 @@ test("emits valid structured metadata", () => {
   assert.ok(jsonLd, "homepage JSON-LD is present");
   const structured = JSON.parse(jsonLd);
   assert.equal(structured["@type"], "SoftwareApplication");
-  assert.equal(structured.softwareVersion, "0.9.0");
+  assert.equal(structured.softwareVersion, "0.10.0");
   assert.equal(structured.processorRequirements, "Apple Silicon");
 });
 
@@ -141,7 +143,7 @@ test("keeps content available without javascript", () => {
   assert.match(index, /<details[^>]+open/);
   assert.match(index, /<summary>Does my voice leave my Mac\?<\/summary>/);
   assert.match(index, /brew install --cask vocamac/);
-  assert.match(index, /Download v0\.9\.0 DMG/);
+  assert.match(index, /Download v0\.10\.0 DMG/);
   assert.match(script, /IntersectionObserver/);
   assert.match(script, /setTimeout\(function \(\) \{ revealItems\.forEach\(reveal\); \}, 800\)/);
   assert.match(script, /event\.key === "Escape"/);
@@ -199,8 +201,12 @@ test("keeps the site-audit copy and a11y fixes", async () => {
   assert.match(script, /if \(token !== copyFeedbackToken\)/);
 
   const ogSvg = await readFile(join(siteRoot, "static/og-image.svg"), "utf8");
-  assert.match(ogSvg, /v0\.9\.0/);
-  assert.doesNotMatch(ogSvg, /v0\.8\.0/);
+  assert.match(ogSvg, /v0\.10\.0/);
+  assert.doesNotMatch(ogSvg, /v0\.9\.0/);
+
+  const languages = await readFile(join(outputRoot, "features/languages/index.html"), "utf8");
+  assert.match(languages, /37 language hints/);
+  assert.doesNotMatch(languages, /17 language hints/);
 });
 
 test("all rendered local references resolve", async () => {
