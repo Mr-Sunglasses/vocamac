@@ -1,8 +1,8 @@
 // DownloadAndEngineTests.swift
 // VocaMac Tests
 //
-// Download progress throttling, free-space checks, Whisper prewarm policy,
-// live-preview cancellation, and system-audio sample ownership.
+// Download progress throttling, free-space checks, live-preview
+// cancellation, and system-audio sample ownership.
 
 import XCTest
 @testable import VocaMac
@@ -158,16 +158,16 @@ final class ModelDownloadDiskSpaceTests: XCTestCase {
     }
 }
 
-// MARK: - Whisper prewarm
+// MARK: - Retired prewarm ledger
 
-final class WhisperPrewarmLedgerTests: XCTestCase {
+final class LegacyPrewarmLedgerCleanupTests: XCTestCase {
 
     private var suiteName = ""
     private var defaults: UserDefaults!
 
     override func setUp() {
         super.setUp()
-        suiteName = "WhisperPrewarmLedgerTests.\(UUID().uuidString)"
+        suiteName = "LegacyPrewarmLedgerCleanupTests.\(UUID().uuidString)"
         defaults = UserDefaults(suiteName: suiteName)
     }
 
@@ -176,25 +176,18 @@ final class WhisperPrewarmLedgerTests: XCTestCase {
         super.tearDown()
     }
 
-    func testPrewarmsOnlyTheFirstLoadOnAnOSBuild() {
-        let ledger = WhisperPrewarmLedger(defaults: defaults, osBuild: "26.0 (A)")
-        XCTAssertTrue(ledger.needsPrewarm(model: "openai_whisper-small"))
-        ledger.recordPrewarm(model: "openai_whisper-small")
-        XCTAssertFalse(ledger.needsPrewarm(model: "openai_whisper-small"))
-        XCTAssertTrue(ledger.needsPrewarm(model: "openai_whisper-base"))
+    func testUpgradingClearsTheStoredLedger() {
+        defaults.set(["openai_whisper-small": "26.0 (A)"], forKey: WhisperService.legacyPrewarmLedgerKey)
+
+        WhisperService.removeLegacyPrewarmLedger(defaults: defaults)
+
+        XCTAssertNil(defaults.object(forKey: WhisperService.legacyPrewarmLedgerKey))
     }
 
-    func testAnOSUpdatePrewarmsAgain() {
-        WhisperPrewarmLedger(defaults: defaults, osBuild: "26.0 (A)").recordPrewarm(model: "openai_whisper-small")
-        let updated = WhisperPrewarmLedger(defaults: defaults, osBuild: "26.1 (B)")
-        XCTAssertTrue(updated.needsPrewarm(model: "openai_whisper-small"))
-    }
+    func testClearingIsHarmlessWhenTheLedgerWasNeverWritten() {
+        WhisperService.removeLegacyPrewarmLedger(defaults: defaults)
 
-    func testForgettingAModelPrewarmsItAgain() {
-        let ledger = WhisperPrewarmLedger(defaults: defaults, osBuild: "26.0 (A)")
-        ledger.recordPrewarm(model: "openai_whisper-small")
-        ledger.forget(model: "openai_whisper-small")
-        XCTAssertTrue(ledger.needsPrewarm(model: "openai_whisper-small"))
+        XCTAssertNil(defaults.object(forKey: WhisperService.legacyPrewarmLedgerKey))
     }
 }
 

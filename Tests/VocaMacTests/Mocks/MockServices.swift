@@ -538,6 +538,11 @@ final class MockWhisperService: SpeechTranscribing {
     var mockTranscriptionResult: VocaTranscription = VocaTranscription(text: "mock transcription", duration: 1.0, detectedLanguage: "en", audioLengthSeconds: 1.0, modelUsed: .tiny)
     var shouldThrow = false
     var transcribeDelayNanoseconds: UInt64 = 0
+    private(set) var removeRetiredEngineStateCallCount = 0
+
+    func removeRetiredEngineState() {
+        removeRetiredEngineStateCallCount += 1
+    }
 
     func transcribe(audioData: [Float], language: String?, translate: Bool, vocabulary: String) async throws -> VocaTranscription {
         lastTranscribedAudioData = audioData
@@ -889,7 +894,7 @@ extension AppState {
         // small fixed word list instead.
         appState.isKnownWord = { word, _ in TestWords.common.contains(word.lowercased()) }
         // Bypass host free-RAM probe so mock loads are not refused on CI.
-        appState.modelFitsInMemory = { _ in true }
+        appState.modelFitsInMemory = { _, _ in true }
         // Command Mode's automatic engine choice must not depend on whether
         // the machine running the tests has Apple Intelligence turned on.
         appState.appleIntelligenceAvailable = { false }
