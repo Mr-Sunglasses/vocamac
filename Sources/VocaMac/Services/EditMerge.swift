@@ -222,6 +222,12 @@ enum EditMerge {
             if hunk.previous?.isWord == true, hunk.next?.isWord == true,
                hunk.removed.contains(where: { ["-", "–", "—"].contains($0.text) && $0.leading.isEmpty }),
                hunk.next?.leading.isEmpty == true { return false }
+            // Nor is a new dash stuck to the word before it: "option B—build"
+            // is a compound, not punctuation, and "option B— build" is
+            // malformed. The next word keeps the user's space either way, so
+            // only a spaced dash ("works — mostly") reads right.
+            if hunk.previous?.isWord == true, hunk.next?.isWord == true,
+               hunk.added.contains(where: { ["-", "–", "—"].contains($0.text) && $0.leading.isEmpty }) { return false }
             // "well water" must not become "Well, water". An unmarked
             // opener may be part of the sentence, not a discourse filler.
             if hunk.removed.isEmpty, hunk.precedingInSentence.count == 1,
@@ -283,10 +289,13 @@ enum EditMerge {
             if Array(hunk.following.prefix(keys.count)).map(\.key) == keys { return true }
             if Array(hunk.preceding.suffix(keys.count)).map(\.key) == keys { return true }
         }
-        // "diff different", "sor sorry", "S see": a cut-off start of the next
-        // word. "a", "I", and "o" are words, not fragments.
-        if keys.count == 1, !realOneLetterWords.contains(first.key), let next = hunk.following.first,
-           !isKnownWord(first.key), next.key.count > first.key.count, next.key.hasPrefix(first.key) {
+        // "diff different", "sor sorry", "S see", "sn scan": a cut-off start
+        // of the next word, with nothing between them. A lone letter only
+        // opens a sentence: mid-sentence it is usually a label ("option B
+        // build", "use x xcode").
+        if keys.count == 1, hunk.removed.count == 1, let next = hunk.following.first,
+           hunk.next?.isWord == true, hunk.previous.map({ $0.isWord || [".", "!", "?", ","].contains($0.text) }) ?? true,
+           isCutOffStart(first.key, of: next.key, allowsLetter: hunk.sentenceStart, isKnownWord: isKnownWord) {
             return true
         }
         // "I want to, I need to": an abandoned start the next words redo.
@@ -371,6 +380,36 @@ enum EditMerge {
     private static let negations: Set<String> = ["not", "no", "never", "nor", "neither", "without", "cannot"]
 
     private static let realOneLetterWords: Set<String> = ["a", "i", "o"]
+
+    /// Whether `fragment` is a clipped start of `next`: "diff" of "different",
+    /// "S" of "see", or a two- or three-letter slur of its opening such as
+    /// "sn" of "scan". `next` must be an ordinary word, so identifiers
+    /// ("ts tsx") are never shortened. A single letter counts only where the
+    /// caller allows it, and "a", "I", and "o" are words; the system spell
+    /// checker accepts every letter, so letters are judged by that list alone.
+    static func isCutOffStart(
+        _ fragment: String, of next: String, allowsLetter: Bool, isKnownWord: (String) -> Bool
+    ) -> Bool {
+        guard !fragment.isEmpty, fragment.allSatisfy(\.isLetter), next.allSatisfy(\.isLetter),
+              next.count > fragment.count, fragment.first == next.first, isKnownWord(next) else { return false }
+        if fragment.count == 1 {
+            guard allowsLetter, !realOneLetterWords.contains(fragment) else { return false }
+            // A clipped "code" isn't heard as the letter C, so "C code" is the language.
+            if fragment == "c" || fragment == "g" {
+                return next.dropFirst().first.map { "eiy".contains($0) } ?? false
+            }
+            return true
+        }
+        guard !isKnownWord(fragment) else { return false }
+        if next.hasPrefix(fragment) { return true }
+        guard fragment.count <= 3 else { return false }
+        var remaining = next[...]
+        for letter in fragment {
+            guard let index = remaining.firstIndex(of: letter) else { return false }
+            remaining = remaining[remaining.index(after: index)...]
+        }
+        return true
+    }
 
     private static let questionLeadIns: Set<String> = ["hey", "hi", "so", "okay", "ok", "well", "and", "but", "also", "oh"]
 
