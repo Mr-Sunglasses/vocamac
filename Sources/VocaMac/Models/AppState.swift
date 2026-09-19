@@ -221,6 +221,9 @@ final class AppState: ObservableObject {
     /// All available models and their statuses
     @Published var availableModels: [WhisperModelInfo] = []
 
+    /// Whether onboarding is downloading or loading its current recommendation.
+    @Published private(set) var isPreparingOnboardingModel = false
+
     // Permissions are managed by PermissionManager.
     // These computed properties maintain backward compatibility for views.
     var micPermission: PermissionStatus { permissionManager.micPermission }
@@ -235,7 +238,7 @@ final class AppState: ObservableObject {
 
     // MARK: - User Settings (persisted via UserDefaults)
 
-    @AppStorage("vocamac.hasCompletedOnboarding") var hasCompletedOnboarding: Bool = false
+    @AppStorage(PreferenceKey.onboardingCompleted) var hasCompletedOnboarding: Bool = false
     @AppStorage("vocamac.activationMode") var activationMode: ActivationMode = .pushToTalk
     @AppStorage("vocamac.hotKeyCode") var hotKeyCode: Int = 61  // Right Option
     @AppStorage("vocamac.hotKeyModifiers") var hotKeyModifiers: HotKeyModifiers = []
@@ -702,6 +705,14 @@ final class AppState: ObservableObject {
     /// actions can otherwise start several downloads or model-management
     /// operations before they reach those lower-level services.
     private let modelOperationSerializer = LoadSerializer()
+
+    /// Invalidates an onboarding recommendation when its language or user intent changes.
+    private var onboardingModelRequestGeneration: UInt64 = 0
+    private var onboardingRequestedModel: ModelSize?
+    /// Non-nil only while onboarding itself owns the serialized engine load.
+    private var onboardingLoadingRequestGeneration: UInt64?
+    /// The language whose change `languageDidChange()` has already reacted to.
+    private var handledLanguageChange: String?
 
     /// AudioEngine serializes its own lifecycle internally; this wrapper makes
     /// the intentional background handoff explicit for Dispatch's @Sendable API.
@@ -2562,6 +2573,136 @@ final class AppState: ObservableObject {
         await loadModel(size)
     }
 
+    /// Download and load the model currently recommended by onboarding.
+    ///
+    /// The recommendation is resolved and revalidated here so a language
+    /// change during a download cannot activate the previous language's model.
+    func prepareOnboardingRecommendedModel() async {
+        guard let recommendation = OnboardingModelGuidance.recommendation(
+            for: selectedLanguage,
+            availableModels: availableModels
+        ) else {
+            return
+        }
+
+        onboardingModelRequestGeneration &+= 1
+        let generation = onboardingModelRequestGeneration
+        let model = recommendation.model
+        onboardingRequestedModel = model
+        isPreparingOnboardingModel = true
+        errorMessage = nil
+
+        defer {
+            if generation == onboardingModelRequestGeneration {
+                onboardingRequestedModel = nil
+                isPreparingOnboardingModel = false
+            }
+        }
+
+        do {
+            try await modelOperationSerializer.run { [self] in
+                await performOnboardingModelPreparation(model, generation: generation)
+            }
+        } catch is CancellationError {
+            VocaLogger.info(.appState, "Onboarding model preparation cancelled for \(model.displayName)")
+        } catch {
+            let message = "Could not prepare \(model.displayName): \(error.localizedDescription)"
+            showTemporaryError(message)
+            VocaLogger.error(.appState, message)
+        }
+    }
+
+    /// Perform onboarding's model operation while holding the shared model lock.
+    private func performOnboardingModelPreparation(
+        _ model: ModelSize,
+        generation: UInt64
+    ) async {
+        guard generation == onboardingModelRequestGeneration else { return }
+        if !modelManager.isModelDownloaded(model) {
+            await performDownloadModel(model)
+        }
+
+        guard generation == onboardingModelRequestGeneration,
+              onboardingRequestedModel == model,
+              OnboardingModelGuidance.recommendation(
+                for: selectedLanguage,
+                availableModels: availableModels
+              )?.model == model,
+              modelManager.isModelDownloaded(model) else {
+            return
+        }
+
+        let previouslyActiveModel = currentModel?.size
+        onboardingLoadingRequestGeneration = generation
+        defer {
+            if onboardingLoadingRequestGeneration == generation {
+                onboardingLoadingRequestGeneration = nil
+            }
+        }
+        await performLoadModel(model)
+
+        guard generation == onboardingModelRequestGeneration else {
+            // Onboarding no longer owns the shared load; the restore below is
+            // not its work to cancel.
+            onboardingLoadingRequestGeneration = nil
+
+            // The engine may have completed after cancellation even though
+            // performLoadModel correctly declined to publish the stale model.
+            // Keep service and AppState readiness aligned.
+            await whisperService.unloadModel()
+            clearActiveModelState()
+
+            // A language change queues a replacement preparation that will
+            // load the new recommendation. A plain Cancel does not, so put
+            // back the model the user was already dictating with rather than
+            // leaving the app with nothing loaded.
+            if !isPreparingOnboardingModel, let previouslyActiveModel {
+                VocaLogger.info(
+                    .appState,
+                    "Onboarding load cancelled — restoring \(previouslyActiveModel.displayName)"
+                )
+                await performLoadModel(previouslyActiveModel)
+            }
+            return
+        }
+    }
+
+    /// Invalidate onboarding's recommendation and stop its download, if any.
+    func cancelOnboardingModelPreparation() {
+        onboardingModelRequestGeneration &+= 1
+        if let onboardingRequestedModel {
+            modelManager.cancelDownload(for: onboardingRequestedModel)
+        }
+        if onboardingLoadingRequestGeneration != nil {
+            // Safe to invalidate the global load only here: this marker is set
+            // after onboarding acquires the serializer, so no unrelated model
+            // operation can be running at the same time.
+            loadGeneration &+= 1
+        }
+        onboardingRequestedModel = nil
+        isPreparingOnboardingModel = false
+    }
+
+    /// Apply a changed transcription language and invalidate stale model work.
+    ///
+    /// Settings and the onboarding wizard both watch `selectedLanguage`, and
+    /// the wizard is launched from Settings, so a single change routinely
+    /// arrives twice. Handling it twice would cancel and restart the download
+    /// the first call just started, so later calls for the same language are
+    /// dropped.
+    func languageDidChange() async {
+        guard handledLanguageChange != selectedLanguage else { return }
+        handledLanguageChange = selectedLanguage
+
+        let shouldPrepareUpdatedRecommendation = isPreparingOnboardingModel
+        cancelOnboardingModelPreparation()
+        if shouldPrepareUpdatedRecommendation {
+            await prepareOnboardingRecommendedModel()
+            return
+        }
+        await reloadModelForLanguageChangeIfNeeded()
+    }
+
     /// Say near the caret why a dictation produced nothing. The menu bar
     /// popover is closed while dictating, so an error only shown there goes
     /// unseen. Returns false when overlays are off; the caller then relies on
@@ -2919,6 +3060,19 @@ final class AppState: ObservableObject {
         }
         hasCompletedOnboarding = true
         VocaLogger.info(.appState, "Onboarding completed")
+    }
+
+    /// Repair completion state corrupted by the old manual "Set Up VocaMac"
+    /// action. A genuine first launch has no stored value; the old action was
+    /// the only production path that explicitly persisted `false`.
+    func repairLegacyOnboardingCompletionIfNeeded(defaults: UserDefaults = .standard) {
+        guard !hasCompletedOnboarding,
+              defaults.object(forKey: PreferenceKey.onboardingCompleted) != nil else {
+            return
+        }
+
+        hasCompletedOnboarding = true
+        VocaLogger.info(.appState, "Repaired onboarding completion state from the legacy setup action")
     }
 
     // MARK: - Snippets Management
@@ -4001,11 +4155,12 @@ extension AppState {
               let capturedURL,
               let reader = screenContextReader else { return nil }
         let refresh = Task { @MainActor in await reader.captureFrontmostDocumentURL() }
-        guard let currentURL = await Self.value(of: refresh, within: Self.screenContextTimeout, otherwise: nil),
-              capturedURL.host?.lowercased() == currentURL.host?.lowercased() else {
-            if capturedURL != nil {
-                VocaLogger.warning(.appState, "Website changed before dictation output; skipping the captured website rule")
-            }
+        guard let currentURL = await Self.value(of: refresh, within: Self.screenContextTimeout, otherwise: nil) else {
+            VocaLogger.warning(.appState, "Couldn't re-read the website before dictation output; skipping the captured website rule")
+            return nil
+        }
+        guard capturedURL.host?.lowercased() == currentURL.host?.lowercased() else {
+            VocaLogger.warning(.appState, "Website changed before dictation output; skipping the captured website rule")
             return nil
         }
         return currentURL

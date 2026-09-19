@@ -37,12 +37,13 @@ final class OnboardingStepTests: XCTestCase {
 
     func testOnboardingStepOrdering() {
         let steps = OnboardingStep.allCases
-        XCTAssertEqual(steps.count, 5)
+        XCTAssertEqual(steps.count, 6)
         XCTAssertEqual(steps[0], .welcome)
         XCTAssertEqual(steps[1], .permissions)
-        XCTAssertEqual(steps[2], .hotkeyConfig)
-        XCTAssertEqual(steps[3], .quickTest)
-        XCTAssertEqual(steps[4], .complete)
+        XCTAssertEqual(steps[2], .modelSetup)
+        XCTAssertEqual(steps[3], .hotkeyConfig)
+        XCTAssertEqual(steps[4], .quickTest)
+        XCTAssertEqual(steps[5], .complete)
     }
 
     func testOnboardingStepTitles() {
@@ -62,6 +63,23 @@ final class OnboardingStepTests: XCTestCase {
         let ids = steps.map { $0.id }
         let uniqueIds = Set(ids)
         XCTAssertEqual(ids.count, uniqueIds.count)
+    }
+
+    func testCompletionNavigationStaysEnabledWhileBackgroundWorkFinishes() {
+        XCTAssertFalse(
+            OnboardingStep.complete.disablesNavigation(
+                practiceBusy: true,
+                isRecording: true,
+                appStatus: .processing
+            )
+        )
+        XCTAssertTrue(
+            OnboardingStep.quickTest.disablesNavigation(
+                practiceBusy: false,
+                isRecording: false,
+                appStatus: .processing
+            )
+        )
     }
 }
 
@@ -236,11 +254,31 @@ final class AppStateOnboardingTests: XCTestCase {
 
     @MainActor
     func testOnboardingFlagPersistence() {
-        UserDefaults.standard.set(true, forKey: "vocamac.hasCompletedOnboarding")
+        UserDefaults.standard.set(true, forKey: PreferenceKey.onboardingCompleted)
 
         let (appState, _) = AppState.makeTestState()
 
         XCTAssertTrue(appState.hasCompletedOnboarding)
+    }
+
+    @MainActor
+    func testLegacyExplicitFalseCompletionIsRepaired() {
+        UserDefaults.standard.set(false, forKey: PreferenceKey.onboardingCompleted)
+        let (appState, _) = AppState.makeTestState()
+
+        appState.repairLegacyOnboardingCompletionIfNeeded()
+
+        XCTAssertTrue(appState.hasCompletedOnboarding)
+    }
+
+    @MainActor
+    func testMissingCompletionKeyStillMeansFirstLaunch() {
+        let (appState, _) = AppState.makeTestState()
+
+        appState.repairLegacyOnboardingCompletionIfNeeded()
+
+        XCTAssertFalse(appState.hasCompletedOnboarding)
+        XCTAssertNil(UserDefaults.standard.object(forKey: PreferenceKey.onboardingCompleted))
     }
 
     @MainActor
@@ -728,5 +766,178 @@ final class AppStateModelLoadingTests: XCTestCase {
 
         // Whisper takes the language per transcription — no reload needed.
         XCTAssertEqual(mocks.whisperService.loadRequests.count, loadsAfterInitial)
+    }
+
+    @MainActor
+    func testOnboardingLanguageChangeDoesNotLoadStaleRecommendation() async throws {
+        let modelManager = MockModelManager()
+        modelManager.downloadDelayNanoseconds = 100_000_000
+        let (appState, mocks) = AppState.makeTestState(modelManager: modelManager)
+        appState.selectedLanguage = "en"
+
+        let englishPreparation = Task { @MainActor in
+            await appState.prepareOnboardingRecommendedModel()
+        }
+        for _ in 0..<100 where modelManager.downloadRequests.isEmpty {
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+        XCTAssertEqual(modelManager.downloadRequests.first, .parakeetTdtCtc110m)
+
+        appState.selectedLanguage = "ru"
+        await appState.languageDidChange()
+        await englishPreparation.value
+
+        XCTAssertEqual(modelManager.downloadRequests, [.parakeetTdtCtc110m, .gigaamV3])
+        XCTAssertEqual(modelManager.cancelledDownloads, [.parakeetTdtCtc110m])
+        XCTAssertEqual(mocks.whisperService.loadRequests.map(\.name), ["gigaam-v3-russian"])
+        XCTAssertEqual(appState.currentModel?.size, .gigaamV3)
+    }
+
+    @MainActor
+    func testCancellingQueuedOnboardingPreparationDoesNotInvalidateActiveLoad() async throws {
+        let modelManager = MockModelManager()
+        modelManager.downloadedModels = [.medium, .parakeetTdtCtc110m]
+        let whisperService = MockWhisperService()
+        whisperService.loadDelayNanoseconds = 100_000_000
+        let (appState, _) = AppState.makeTestState(
+            modelManager: modelManager,
+            whisperService: whisperService
+        )
+        appState.selectedLanguage = "en"
+
+        let unrelatedLoad = Task { @MainActor in await appState.loadModel(.medium) }
+        for _ in 0..<100 where whisperService.loadRequests.isEmpty {
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+        let onboardingPreparation = Task { @MainActor in
+            await appState.prepareOnboardingRecommendedModel()
+        }
+        for _ in 0..<100 where !appState.isPreparingOnboardingModel {
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+
+        appState.cancelOnboardingModelPreparation()
+        await unrelatedLoad.value
+        await onboardingPreparation.value
+
+        XCTAssertEqual(appState.currentModel?.size, .medium)
+        XCTAssertEqual(whisperService.loadRequests.map(\.name), ["openai_whisper-medium"])
+        XCTAssertFalse(appState.isPreparingOnboardingModel)
+    }
+
+    @MainActor
+    func testCancelledQueuedOnboardingTaskClearsPreparationState() async throws {
+        let modelManager = MockModelManager()
+        modelManager.downloadedModels = [.medium, .parakeetTdtCtc110m]
+        let whisperService = MockWhisperService()
+        whisperService.loadDelayNanoseconds = 100_000_000
+        let (appState, _) = AppState.makeTestState(
+            modelManager: modelManager,
+            whisperService: whisperService
+        )
+        appState.selectedLanguage = "en"
+
+        let unrelatedLoad = Task { @MainActor in await appState.loadModel(.medium) }
+        for _ in 0..<100 where whisperService.loadRequests.isEmpty {
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+        let onboardingPreparation = Task { @MainActor in
+            await appState.prepareOnboardingRecommendedModel()
+        }
+        for _ in 0..<100 where !appState.isPreparingOnboardingModel {
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+
+        onboardingPreparation.cancel()
+        await onboardingPreparation.value
+        await unrelatedLoad.value
+
+        XCTAssertFalse(appState.isPreparingOnboardingModel)
+        XCTAssertEqual(appState.currentModel?.size, .medium)
+        XCTAssertEqual(whisperService.loadRequests.map(\.name), ["openai_whisper-medium"])
+    }
+
+    @MainActor
+    func testDuplicateLanguageChangeNotificationsReloadOnlyOnce() async {
+        // Settings and the onboarding wizard both watch selectedLanguage, and
+        // the wizard is opened from Settings, so one change fires both.
+        let modelManager = MockModelManager()
+        modelManager.downloadedModels = [.senseVoiceSmall]
+        let (appState, mocks) = AppState.makeTestState(modelManager: modelManager)
+
+        await appState.loadModel(.senseVoiceSmall)
+        let loadsAfterInitial = mocks.whisperService.loadRequests.count
+
+        appState.selectedLanguage = "zh"
+        await appState.languageDidChange()
+        await appState.languageDidChange()
+
+        XCTAssertEqual(mocks.whisperService.loadRequests.count, loadsAfterInitial + 1)
+
+        // A genuinely new language is still handled.
+        appState.selectedLanguage = "ja"
+        await appState.languageDidChange()
+
+        XCTAssertEqual(mocks.whisperService.loadRequests.count, loadsAfterInitial + 2)
+    }
+
+    @MainActor
+    func testCancellingAnActiveOnboardingLoadRestoresThePreviousModel() async throws {
+        let modelManager = MockModelManager()
+        modelManager.downloadedModels = [.medium, .parakeetTdtCtc110m]
+        let whisperService = MockWhisperService()
+        let (appState, _) = AppState.makeTestState(
+            modelManager: modelManager,
+            whisperService: whisperService
+        )
+        appState.selectedLanguage = "en"
+
+        await appState.loadModel(.medium)
+        XCTAssertEqual(appState.currentModel?.size, .medium)
+
+        whisperService.loadDelayNanoseconds = 100_000_000
+        let loadsBeforeOnboarding = whisperService.loadRequests.count
+        let preparation = Task { @MainActor in
+            await appState.prepareOnboardingRecommendedModel()
+        }
+        for _ in 0..<100 where whisperService.loadRequests.count == loadsBeforeOnboarding {
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+
+        appState.cancelOnboardingModelPreparation()
+        await preparation.value
+
+        // Cancelling must not leave the app with nothing loaded.
+        XCTAssertEqual(appState.currentModel?.size, .medium)
+        XCTAssertTrue(whisperService.isModelLoaded)
+        XCTAssertEqual(whisperService.loadRequests.last?.name, "openai_whisper-medium")
+        XCTAssertFalse(appState.isPreparingOnboardingModel)
+    }
+
+    @MainActor
+    func testCancellingAnActiveOnboardingLoadDoesNotPublishStaleModel() async throws {
+        let modelManager = MockModelManager()
+        modelManager.downloadedModels = [.parakeetTdtCtc110m]
+        let whisperService = MockWhisperService()
+        whisperService.loadDelayNanoseconds = 100_000_000
+        let (appState, _) = AppState.makeTestState(
+            modelManager: modelManager,
+            whisperService: whisperService
+        )
+        appState.selectedLanguage = "en"
+
+        let preparation = Task { @MainActor in
+            await appState.prepareOnboardingRecommendedModel()
+        }
+        for _ in 0..<100 where whisperService.loadRequests.isEmpty {
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+
+        appState.cancelOnboardingModelPreparation()
+        await preparation.value
+
+        XCTAssertNil(appState.currentModel)
+        XCTAssertFalse(whisperService.isModelLoaded)
+        XCTAssertFalse(appState.isPreparingOnboardingModel)
     }
 }
