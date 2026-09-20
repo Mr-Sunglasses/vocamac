@@ -41,6 +41,16 @@ final class TextInjector {
         let items: [PasteboardItemSnapshot]
     }
 
+    /// Outcome of one pasteboard write.
+    private enum ClipboardWrite {
+        case written
+        /// The write failed. `generation` is the change count our own
+        /// `clearContents()` established, which separates an uncontested
+        /// failure — where the cleared clipboard is still ours to put back —
+        /// from one where another process has since taken the board.
+        case failed(generation: Int)
+    }
+
     /// A clipboard-backed injection waiting to be processed.
     private struct ClipboardInjectionRequest {
         let text: String
@@ -88,6 +98,10 @@ final class TextInjector {
     private let pasteActionOverride: (() -> Void)?
     private let accessibilityWorkerOverride: (@Sendable (String) -> Bool)?
     private let frontmostPIDProvider: () -> pid_t?
+    /// Stands in for the pasteboard write, which production reaches only after
+    /// `clearContents()`. Returning `false` forces the failure that is
+    /// otherwise reachable only when another process owns the board mid-write.
+    private let clipboardWriteOverride: ((String, NSPasteboard) -> Bool)?
     var onFailure: ((String) -> Void)?
 
     /// Clipboard fallback injections must run one at a time. Otherwise a
@@ -108,7 +122,8 @@ final class TextInjector {
         accessibilityInjectionOverride: ((String) -> Bool)? = nil,
         pasteActionOverride: (() -> Void)? = nil,
         accessibilityWorkerOverride: (@Sendable (String) -> Bool)? = nil,
-        frontmostPIDProvider: @escaping () -> pid_t? = { NSWorkspace.shared.frontmostApplication?.processIdentifier }
+        frontmostPIDProvider: @escaping () -> pid_t? = { NSWorkspace.shared.frontmostApplication?.processIdentifier },
+        clipboardWriteOverride: ((String, NSPasteboard) -> Bool)? = nil
     ) {
         self.pasteboard = pasteboard
         self.accessibilityTrustedOverride = accessibilityTrustedOverride
@@ -116,6 +131,7 @@ final class TextInjector {
         self.pasteActionOverride = pasteActionOverride
         self.accessibilityWorkerOverride = accessibilityWorkerOverride
         self.frontmostPIDProvider = frontmostPIDProvider
+        self.clipboardWriteOverride = clipboardWriteOverride
     }
 
     // MARK: - Public API
@@ -379,12 +395,36 @@ final class TextInjector {
                     return
                 }
                 var snapshot = request.preserveClipboard ? try await captureStableSnapshot(pasteboard) : nil
-                guard writeTranscribedText(request.text, to: pasteboard) else { return }
+                // `writeTranscribedText` clears the pasteboard before it writes,
+                // so a failed write has already taken the user's clipboard away.
+                // Put it back and say so — never drop out silently holding it.
+                //
+                // Only when the cleared board is still untouched, though: the
+                // usual reason the write fails is that another process claimed
+                // the board in between, and its copy is newer than the snapshot.
+                // Restoring over that would bury what the user just copied.
+                func abandonAfterFailedWrite(clearedGeneration: Int) {
+                    if let snapshot, pasteboard.changeCount == clearedGeneration {
+                        restoreSnapshot(snapshot, to: pasteboard)
+                    }
+                    VocaLogger.warning(.textInjector, "Could not put the transcript on the clipboard; insertion abandoned")
+                    onFailure?("The transcript could not be copied, so nothing was pasted. It's available in VocaMac.")
+                }
+                if case .failed(let generation) = writeTranscribedText(request.text, to: pasteboard) {
+                    abandonAfterFailedWrite(clearedGeneration: generation)
+                    return
+                }
                 var expectedChangeCount = pasteboard.changeCount
                 try await Task.sleep(nanoseconds: UInt64(prePasteDelay * 1_000_000_000))
                 if pasteboard.changeCount != expectedChangeCount {
+                    // The snapshot is reassigned first, so a failure here puts
+                    // back the clipboard that replaced the original, not the
+                    // original itself.
                     snapshot = request.preserveClipboard ? try await captureStableSnapshot(pasteboard) : nil
-                    guard writeTranscribedText(request.text, to: pasteboard) else { return }
+                    if case .failed(let generation) = writeTranscribedText(request.text, to: pasteboard) {
+                        abandonAfterFailedWrite(clearedGeneration: generation)
+                        return
+                    }
                     expectedChangeCount = pasteboard.changeCount
                 }
                 let pidBeforePaste = frontmostPIDProvider()
@@ -448,17 +488,24 @@ final class TextInjector {
         throw SnapshotError.changed
     }
 
-    /// Write one transcription to the pasteboard and report whether the text
-    /// write succeeded.
+    /// Write one transcription to the pasteboard, clearing it first, and
+    /// report whether the write landed.
     @discardableResult
-    private func writeTranscribedText(_ text: String, to pasteboard: NSPasteboard) -> Bool {
-        pasteboard.clearContents()
+    private func writeTranscribedText(_ text: String, to pasteboard: NSPasteboard) -> ClipboardWrite {
+        // `clearContents()` returns the change count it just established, so
+        // take it from there rather than re-reading: another process can write
+        // between the two calls, and a failure handler needs to know whether
+        // putting the old contents back would bury someone else's newer copy.
+        let clearedGeneration = pasteboard.clearContents()
+        if let clipboardWriteOverride {
+            return clipboardWriteOverride(text, pasteboard) ? .written : .failed(generation: clearedGeneration)
+        }
         let item = NSPasteboardItem()
         let didSetText = item.setString(text, forType: .string)
         item.setData(Data(), forType: Self.transientType)
         let didWrite = didSetText && pasteboard.writeObjects([item])
         VocaLogger.debug(.textInjector, "Set clipboard: \(text.count) characters")
-        return didWrite
+        return didWrite ? .written : .failed(generation: clearedGeneration)
     }
 
     /// Marks VocaMac's own clipboard writes for clipboard managers
