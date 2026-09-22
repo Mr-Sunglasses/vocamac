@@ -358,7 +358,7 @@ final class TextInjector {
         let element = focusedRef as! AXUIElement
         var elementPID: pid_t = 0
         guard AXUIElementGetPid(element, &elementPID) == .success,
-              elementPID == targetPID else { return .unavailable }
+              elementPID == targetPID || Self.isLauncherPanelOwner(elementPID) else { return .unavailable }
         AXUIElementSetMessagingTimeout(element, 0.1)
         // swiftlint:enable force_cast
 
@@ -400,6 +400,19 @@ final class TextInjector {
 
         VocaLogger.debug(.textInjector, "AX: kAXSelectedTextAttribute write failed (\(setResult.rawValue)) — element may be read-only")
         return setResult == .cannotComplete ? .uncertain : .unavailable
+    }
+
+    /// Whether the focused field belongs to a menu bar app's panel, such as
+    /// the search bar of Raycast, Tinycast or Spotlight.
+    ///
+    /// Those panels take keyboard focus without becoming the frontmost app,
+    /// so their field is never owned by the paste target. Cmd+V would go to
+    /// the panel as well, but launchers often swallow it, so the field is
+    /// written directly. VocaMac's own panels are left out.
+    private static func isLauncherPanelOwner(_ pid: pid_t) -> Bool {
+        guard pid != ProcessInfo.processInfo.processIdentifier,
+              let app = NSRunningApplication(processIdentifier: pid) else { return false }
+        return app.activationPolicy != .regular
     }
 
     // MARK: - Strategy 2: Clipboard + Cmd+V
