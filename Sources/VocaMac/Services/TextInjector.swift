@@ -325,10 +325,13 @@ final class TextInjector {
     /// value mutation. Limiting scope to single-line fields makes AX injection
     /// reliable for apps like Raycast while letting terminal/editor traffic
     /// fall through to the clipboard+Cmd+V path that has always worked there.
+    /// Fields in those roles that report their selected text as not settable
+    /// fall through as well.
     ///
-    /// - Returns: `true` if the text was successfully written via the AX API;
-    ///            `false` if the focused element is unreachable, has an
-    ///            unsupported role, or the write was rejected.
+    /// - Returns: `.inserted` if the text was written via the AX API;
+    ///            `.unavailable` if the focused element is unreachable, has an
+    ///            unsupported role, cannot take the write, or rejected it;
+    ///            `.uncertain` if the write timed out and may still land.
     @discardableResult
     private func injectViaAccessibility(text: String, targetPID: pid_t?) -> AccessibilityInsertion {
         let systemWide = AXUIElementCreateSystemWide()
@@ -369,6 +372,16 @@ final class TextInjector {
         let supportedRoles: Set<String> = ["AXTextField", "AXSearchField", "AXComboBox"]
         guard supportedRoles.contains(role) else {
             VocaLogger.debug(.textInjector, "AX: skipping role '\(role)' — not a single-line input field")
+            return .unavailable
+        }
+
+        // Messages' compose field is an AXTextField that reports its selected
+        // text as not settable and silently drops a write to it. Write only
+        // where the field says it will take one; the rest go through Cmd+V.
+        var isSettable: DarwinBoolean = false
+        guard AXUIElementIsAttributeSettable(element, kAXSelectedTextAttribute as CFString, &isSettable) == .success,
+              isSettable.boolValue else {
+            VocaLogger.debug(.textInjector, "AX: selected text not settable (role: \(role)) — using Cmd+V")
             return .unavailable
         }
 
