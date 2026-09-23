@@ -144,6 +144,31 @@ struct StatsSettingsTab: View {
                     }
                 }
 
+                let stats = appState.statsManager.stats
+                let waitWith = stats.medianStopWait(processedWhileSpeaking: true)
+                let waitWithout = stats.medianStopWait(processedWhileSpeaking: false)
+                if waitWith != nil || waitWithout != nil {
+                    VocaSettingsGroup("Wait After You Stop") {
+                        if let waitWith {
+                            stopWaitRow("With Process while speaking", waitWith)
+                        }
+                        if waitWith != nil, waitWithout != nil {
+                            Divider()
+                        }
+                        if let waitWithout {
+                            stopWaitRow(waitWith == nil ? "Median wait" : "Without it", waitWithout)
+                        }
+                        Text(
+                            "Time from releasing the key to your text appearing, for dictations over "
+                                + "\(Int(UserStats.comparedStopWaitSeconds)) seconds. "
+                                + "Process while speaking is in Settings → Dictation."
+                        )
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+
                 // Daily Activity
                 VocaSettingsGroup("Recent Activity") {
                     let days = recentDays()
@@ -200,6 +225,21 @@ struct StatsSettingsTab: View {
         }
         .onAppear {
             appState.statsManager.refreshCurrentStreak()
+        }
+    }
+
+    private func stopWaitRow(_ title: String, _ wait: (seconds: Double, count: Int)) -> some View {
+        HStack {
+            Text(title)
+                .font(.subheadline)
+            Spacer()
+            Text(String(format: "%.1f s", wait.seconds))
+                .font(.subheadline)
+                .fontWeight(.medium)
+                .monospacedDigit()
+            Text(StatsShareComposer.pluralized(wait.count, "dictation"))
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 

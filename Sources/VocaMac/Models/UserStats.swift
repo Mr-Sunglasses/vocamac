@@ -37,6 +37,10 @@ struct UserStats: Codable, Equatable {
     /// Keeping this stable prevents travel from reinterpreting historical keys.
     var timeZoneIdentifier: String?
 
+    /// The most recent waits between stopping a dictation and its text being
+    /// pasted, oldest first, at most `maxStopWaits`.
+    var stopWaits: [StopWait] = []
+
     /// Calculated average Words Per Minute (WPM).
     /// Note: This is "words-per-minute-of-audio", dividing total words by total audio duration.
     var averageWPM: Double {
@@ -92,6 +96,56 @@ extension UserStats {
         dailyTranscriptionCounts = decodedDailyTranscriptionCounts.mapValues { max(0, $0) }
 
         timeZoneIdentifier = container.decodeLossily(String.self, forKey: .timeZoneIdentifier)
+        let decodedStopWaits = container.decodeLossily([StopWait].self, forKey: .stopWaits) ?? []
+        stopWaits = Array(decodedStopWaits.filter(\.isValid).suffix(Self.maxStopWaits))
+    }
+}
+
+/// How long one dictation took to paste after the user stopped speaking.
+struct StopWait: Codable, Equatable {
+    /// From releasing the key to the text being pasted.
+    let seconds: Double
+    /// Length of the recording.
+    let audioSeconds: Double
+    /// Whether the recording ran with "Process while speaking", including
+    /// one that fell back to decoding the whole recording at stop: what the
+    /// setting gave the user.
+    let processedWhileSpeaking: Bool
+
+    var isValid: Bool {
+        seconds.isFinite && seconds >= 0 && audioSeconds.isFinite && audioSeconds >= 0
+    }
+}
+
+extension UserStats {
+    /// Enough recent waits to show a stable median without growing stats.json.
+    static let maxStopWaits = 200
+
+    /// Only dictations this long are compared: shorter ones barely wait
+    /// either way, and "Process while speaking" is for long dictations.
+    static let comparedStopWaitSeconds = 10.0
+
+    /// Median wait after stop for dictations of at least
+    /// `comparedStopWaitSeconds`, with or without "Process while speaking",
+    /// and how many dictations it covers. Nil when there are none.
+    func medianStopWait(processedWhileSpeaking: Bool) -> (seconds: Double, count: Int)? {
+        let waits = stopWaits
+            .filter { $0.processedWhileSpeaking == processedWhileSpeaking && $0.audioSeconds >= Self.comparedStopWaitSeconds }
+            .map(\.seconds)
+            .sorted()
+        guard !waits.isEmpty else { return nil }
+        let middle = waits.count / 2
+        let median = waits.count.isMultiple(of: 2) ? (waits[middle - 1] + waits[middle]) / 2 : waits[middle]
+        return (median, waits.count)
+    }
+
+    /// Add a wait, keeping only the most recent `maxStopWaits`.
+    mutating func recordStopWait(_ wait: StopWait) {
+        guard wait.isValid else { return }
+        stopWaits.append(wait)
+        if stopWaits.count > Self.maxStopWaits {
+            stopWaits.removeFirst(stopWaits.count - Self.maxStopWaits)
+        }
     }
 }
 

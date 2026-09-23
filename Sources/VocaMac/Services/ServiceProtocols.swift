@@ -315,12 +315,15 @@ protocol StatsManaging: AnyObject {
     var stats: UserStats { get }
     var objectWillChangePublisher: AnyPublisher<Void, Never> { get }
     func recordTranscription(_ transcription: VocaTranscription)
+    /// Remember how long a dictation took to paste after stop.
+    func recordStopWait(_ wait: StopWait)
     func refreshCurrentStreak()
     func flushPendingSaves()
     func resetStats()
 }
 
 extension StatsManaging {
+    func recordStopWait(_ wait: StopWait) {}
     func refreshCurrentStreak() {}
     func flushPendingSaves() {}
 }

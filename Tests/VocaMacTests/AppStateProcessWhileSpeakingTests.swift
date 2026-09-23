@@ -43,6 +43,7 @@ final class AppStateProcessWhileSpeakingTests: XCTestCase {
         let commit = mocks.whisperService.lastStreamingCommit
         XCTAssertNotNil(commit)
         XCTAssertNotNil(commit?.vocabulary, "Whisper reads recognition vocabulary per piece")
+        XCTAssertEqual(commit?.revisesPrevious, true)
         await app.cancelRecording()
     }
 
@@ -129,7 +130,103 @@ final class AppStateProcessWhileSpeakingTests: XCTestCase {
     }
 
     func testSettingIsSearchableAndArchived() {
-        XCTAssertTrue(SettingsSearchIndex.matches(query: "faster").contains { $0.id == "process-while-speaking" })
+        let entry = SettingsSearchIndex.matches(query: "faster").first { $0.id == "process-while-speaking" }
+        XCTAssertEqual(entry?.page, .dictation, "it speeds up transcription without Smart Cleanup too")
         XCTAssertTrue(SettingsArchiveService.keys.contains(PreferenceKey.processWhileSpeaking))
+    }
+
+    // MARK: - Follow-ups
+
+    func testLowPowerModeKeepsRecordingsOnTheBatchPath() async {
+        let (app, mocks) = AppState.makeTestState()
+        app.processWhileSpeaking = true
+        app.isPowerConstrained = { true }
+        await app.startRecording()
+        XCTAssertNil(mocks.whisperService.lastStreamingCommit)
+        await app.cancelRecording()
+
+        app.isPowerConstrained = { false }
+        await app.startRecording()
+        XCTAssertNotNil(mocks.whisperService.lastStreamingCommit)
+        await app.cancelRecording()
+    }
+
+    func testPowerConstraintReadsLowPowerModeAndHeat() {
+        XCTAssertEqual(
+            AppState.systemIsPowerConstrained(),
+            ProcessInfo.processInfo.isLowPowerModeEnabled
+                || [.serious, .critical].contains(ProcessInfo.processInfo.thermalState)
+        )
+    }
+
+    func testOnlySessionsThatStopOnSilenceDecodeEarly() async {
+        let (app, mocks) = AppState.makeTestState()
+        let originalMode = app.activationMode
+        let originalSilence = app.silenceDuration
+        defer {
+            app.activationMode = originalMode
+            app.silenceDuration = originalSilence
+        }
+        app.processWhileSpeaking = true
+        app.activationMode = .pushToTalk
+        await app.startRecording()
+        XCTAssertNil(mocks.whisperService.lastStreamingCommit?.earlyDecodeQuietSeconds,
+                     "push to talk stops on key-up, right after the last word")
+        await app.cancelRecording()
+
+        app.activationMode = .doubleTapToggle
+        app.silenceDuration = 2
+        await app.startRecording()
+        let commit = mocks.whisperService.lastStreamingCommit
+        XCTAssertEqual(commit?.earlyDecodeQuietSeconds ?? 0, 2.0 / 3, accuracy: 0.001)
+        XCTAssertEqual(commit?.isReadyForEarlyDecode?(), true, "no context terms can change the vocabulary")
+        XCTAssertNotNil(commit?.onTentativePiece)
+        await app.cancelRecording()
+    }
+
+    func testEarlyDecodeQuietFitsTheSilenceBeforeStop() {
+        XCTAssertEqual(AppState.earlyDecodeQuietSeconds(silenceDuration: 0.5), 0.3)
+        XCTAssertEqual(AppState.earlyDecodeQuietSeconds(silenceDuration: 1.5), 0.5, accuracy: 0.001)
+        XCTAssertEqual(AppState.earlyDecodeQuietSeconds(silenceDuration: 30), 1.0)
+    }
+
+    func testTailDecodedEarlyIsCleanedBeforeStop() async {
+        let (app, mocks) = AppState.makeTestState()
+        app.processWhileSpeaking = true
+        app.transcriptCleanupEnabled = true
+        app.appendTrailingSpace = false
+        mocks.transcriptCleanup.cleanHandler = { $0.replacingOccurrences(of: "could could", with: "could") }
+        mocks.whisperService.streamingFactory = committedSession([first, second])
+
+        await app.startRecording()
+        let commit = mocks.whisperService.lastStreamingCommit
+        commit?.onPiece?(0, first)
+        commit?.onTentativePiece?(1, second)
+        await waitUntil { mocks.transcriptCleanup.speculateCallCount == 2 }
+        mocks.audioEngine.onAudioSamples?([0.2, 0.3, 0.4], 0)
+        mocks.audioEngine.stopRecordingResult = [0.2, 0.3, 0.4]
+        await app.stopRecordingAndTranscribe()
+
+        XCTAssertEqual(mocks.textInjector.lastInjectedText, "So we could ship it on friday. Then we talk about the review.")
+        XCTAssertEqual(mocks.transcriptCleanup.cleanCallCount, 0, "nothing is left to clean after stop")
+    }
+
+    func testWaitAfterStopIsRecordedForStats() async {
+        let (app, mocks) = AppState.makeTestState()
+        app.processWhileSpeaking = true
+        mocks.whisperService.streamingFactory = committedSession([first, second])
+        await app.startRecording()
+        mocks.audioEngine.onAudioSamples?([0.2, 0.3, 0.4], 0)
+        mocks.audioEngine.stopRecordingResult = [0.2, 0.3, 0.4]
+        await app.stopRecordingAndTranscribe()
+
+        XCTAssertEqual(mocks.statsManager.recordedStopWaits.count, 1)
+        XCTAssertEqual(mocks.statsManager.recordedStopWaits.first?.processedWhileSpeaking, true)
+
+        app.processWhileSpeaking = false
+        await app.startRecording()
+        mocks.audioEngine.stopRecordingResult = [0.2, 0.3, 0.4]
+        await app.stopRecordingAndTranscribe()
+        XCTAssertEqual(mocks.statsManager.recordedStopWaits.last?.processedWhileSpeaking, false)
     }
 }

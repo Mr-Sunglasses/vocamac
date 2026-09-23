@@ -158,6 +158,12 @@ class StatsManager: StatsManaging, ObservableObject {
         saveStats()
     }
 
+    func recordStopWait(_ wait: StopWait) {
+        guard wait.isValid else { return }
+        stats.recordStopWait(wait)
+        saveStats()
+    }
+
     /// Refresh the cached streak when the calendar day changes without a new
     /// transcription. A streak stays active through the day after last use.
     func refreshCurrentStreak() {

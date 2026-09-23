@@ -495,3 +495,262 @@ extension RecordingTranscriptionTests {
         } catch { }
     }
 }
+
+// MARK: - Context that fits, early decodes, revisions
+
+private final class TentativeLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: [(Int, TranscribedPiece)] = []
+    func append(_ index: Int, _ piece: TranscribedPiece) { lock.withLock { storage.append((index, piece)) } }
+    var pieces: [(Int, TranscribedPiece)] { lock.withLock { storage } }
+}
+
+extension RecordingTranscriptionTests {
+    private func silence(_ seconds: Double) -> [Float] {
+        [Float](repeating: 0, count: Int(seconds * 16_000))
+    }
+
+    private func session(
+        engine: FakePieceEngine,
+        log: PieceLog = PieceLog(),
+        tentative: TentativeLog = TentativeLog(),
+        maxPieceSeconds: Double = 25,
+        earlyQuietSeconds: Double? = nil,
+        isReady: (@Sendable () -> Bool)? = nil,
+        revisesPrevious: Bool = false
+    ) -> RecordingTranscription {
+        let configuration = SpeechSegmenter.Configuration(
+            pauseSeconds: 0.6, minPieceSeconds: 4, maxPieceSeconds: maxPieceSeconds
+        )
+        return RecordingTranscription(language: "en", bufferLimit: 10_000) { chunks in
+            try await IncrementalAudioTranscriber.runCommitted(
+                chunks: chunks, segmenter: configuration,
+                onPiece: { log.append($0, $1) },
+                onTentativePiece: { tentative.append($0, $1) },
+                earlyDecodeQuietSeconds: earlyQuietSeconds, isReadyForEarlyDecode: isReady,
+                revisesPrevious: revisesPrevious,
+                transcribe: { try await engine.transcribe($0) }, onPartial: nil
+            )
+        }
+    }
+
+    private func waitForDecodes(_ engine: FakePieceEngine, count: Int) async throws {
+        for _ in 0..<200 {
+            if await engine.decodedLengths.count >= count { return }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTFail("timed out waiting for \(count) decodes")
+    }
+
+    // MARK: Context
+
+    func testContextIsCutToWhatFitsInOnePass() async throws {
+        let engine = FakePieceEngine()
+        await engine.setScript(["alpha bravo charlie delta", "charlie delta echo foxtrot"])
+        let session = session(engine: engine, maxPieceSeconds: 8)
+        // Two 5 s pieces: together they are over the engine's 8 s pass.
+        let audio = tone(5) + silence(1) + tone(5)
+        feed(audio, to: session)
+        let result = try await session.finish(expectedSampleCount: audio.count)
+        XCTAssertEqual(result.pieces.count, 2)
+        let lengths = await engine.decodedLengths
+        XCTAssertEqual(lengths.count, 2, "one merged decode, not a split one")
+        XCTAssertLessThanOrEqual(lengths[1], 8 * 16_000)
+        XCTAssertGreaterThanOrEqual(
+            lengths[1] - result.pieces[1].range.count, IncrementalAudioTranscriber.minimumContextSamples,
+            "part of the previous piece still leads in"
+        )
+        XCTAssertEqual(result.pieces.map(\.text), ["alpha bravo charlie delta", "echo foxtrot"])
+    }
+
+    func testPieceWithNoRoomForContextIsDecodedAlone() async throws {
+        let engine = FakePieceEngine()
+        let session = session(engine: engine, maxPieceSeconds: 8)
+        let audio = tone(4.5) + silence(1) + tone(6.8)
+        feed(audio, to: session)
+        let result = try await session.finish(expectedSampleCount: audio.count)
+        let lengths = await engine.decodedLengths
+        XCTAssertEqual(lengths, result.pieces.map(\.range.count), "less than 2 s of room: no merged decode")
+    }
+
+    func testContextStartsInAPause() {
+        // A pause 3.0-3.5 s into the previous piece, inside the search window.
+        let previousAudio = tone(3) + silence(0.5) + tone(3)
+        let previous = 0..<previousAudio.count
+        let next = previous.upperBound..<(previous.upperBound + 5 * 16_000)
+        let start = IncrementalAudioTranscriber.contextStart(
+            previous: previous, next: next, maxSamples: 9 * 16_000 + 8_000, previousAudio: previousAudio
+        )
+        let unwrapped = try? XCTUnwrap(start)
+        XCTAssertGreaterThanOrEqual(unwrapped ?? 0, 3 * 16_000)
+        XCTAssertLessThanOrEqual(unwrapped ?? 0, 3 * 16_000 + 8_000)
+        XCTAssertEqual(
+            IncrementalAudioTranscriber.contextStart(
+                previous: previous, next: next, maxSamples: 20 * 16_000, previousAudio: previousAudio
+            ),
+            0, "everything fits"
+        )
+        XCTAssertNil(IncrementalAudioTranscriber.contextStart(
+            previous: previous, next: next, maxSamples: 6 * 16_000, previousAudio: previousAudio
+        ))
+    }
+
+    func testPartialContextFindsTheNewWords() {
+        let previous = TranscribedPiece(
+            range: 0..<(8 * 16_000),
+            text: "We spent the morning on the budget and then reviewed the design.", language: "en"
+        )
+        let split = IncrementalAudioTranscriber.split(
+            "reviewed the design. After lunch we shipped it.", previous: previous, contextStart: 6 * 16_000
+        )
+        XCTAssertEqual(split?.newText, "After lunch we shipped it.")
+        XCTAssertNil(split?.revisedPrevious)
+    }
+
+    // MARK: Revisions
+
+    func testMergedDecodeCanCorrectThePreviousPiecesLastWord() {
+        let previous = TranscribedPiece(range: 0..<(4 * 16_000), text: "We ran out of flower", language: "en")
+        let split = IncrementalAudioTranscriber.split(
+            "We ran out of flour for the bread.", previous: previous, contextStart: 0
+        )
+        XCTAssertEqual(split?.newText, "for the bread.")
+        XCTAssertEqual(split?.revisedPrevious, "We ran out of flour")
+    }
+
+    func testARevisionKeepsThePiecesOwnWordsBeforeTheChange() {
+        let previous = TranscribedPiece(
+            range: 0..<(10 * 16_000),
+            text: "Also with an LLC route, we are not close sourcing our code and we can apply for a VC funding tool.",
+            language: "en"
+        )
+        // Context from "we are…": the merged decode starts a sentence there.
+        let split = IncrementalAudioTranscriber.split(
+            "We are not close sourcing our code and we can apply for a VC funding too. So there is nothing wrong.",
+            previous: previous, contextStart: 3 * 16_000
+        )
+        XCTAssertEqual(split?.newText, "So there is nothing wrong.")
+        XCTAssertEqual(
+            split?.revisedPrevious,
+            "Also with an LLC route, we are not close sourcing our code and we can apply for a VC funding too."
+        )
+    }
+
+    func testPunctuationAloneIsNotARevision() {
+        let previous = TranscribedPiece(range: 0..<(4 * 16_000), text: "We ran out of flour.", language: "en")
+        let split = IncrementalAudioTranscriber.split(
+            "We ran out of flour, so we baked nothing.", previous: previous, contextStart: 0
+        )
+        XCTAssertEqual(split?.newText, "so we baked nothing.")
+        XCTAssertNil(split?.revisedPrevious, "cleanup done for the piece stays valid")
+    }
+
+    func testAWordHeardDifferentlyIsNotKeptTwice() {
+        // Without revisions the previous piece keeps its own word, and the new
+        // piece doesn't repeat the merged decode's version of it.
+        let previous = TranscribedPiece(range: 0..<(4 * 16_000), text: "We ran out of flower", language: "en")
+        XCTAssertEqual(
+            IncrementalAudioTranscriber.textAfter(previous: previous, in: "We ran out of flour for the bread."),
+            "for the bread."
+        )
+        let dropped = TranscribedPiece(range: 0..<(4 * 16_000), text: "we ship it on friday um", language: "en")
+        XCTAssertEqual(
+            IncrementalAudioTranscriber.textAfter(previous: dropped, in: "we ship it on Friday next week"),
+            "next week", "a word the merged decode left out isn't matched to a new one"
+        )
+    }
+
+    func testLargeChangesAreNotRevisions() {
+        XCTAssertNil(IncrementalAudioTranscriber.revision(
+            of: ["we", "ship", "on", "friday"], heard: ["the", "chip", "is", "fried"]
+        ))
+        XCTAssertEqual(
+            IncrementalAudioTranscriber.revision(of: ["out", "of", "flower"], heard: ["out", "of", "flour"]),
+            ["out", "of", "flour"]
+        )
+    }
+
+    func testRevisedPreviousPieceIsReportedAgain() async throws {
+        let engine = FakePieceEngine()
+        await engine.setScript(["We ran out of flower", "We ran out of flour for the bread."])
+        let log = PieceLog()
+        let session = session(engine: engine, log: log, revisesPrevious: true)
+        let audio = tone(5) + silence(1) + tone(3)
+        feed(audio, to: session)
+        let result = try await session.finish(expectedSampleCount: audio.count)
+        XCTAssertEqual(result.pieces.map(\.text), ["We ran out of flour", "for the bread."])
+        XCTAssertEqual(log.pieces.map(\.0), [0, 0, 1], "piece 0 is sent again with its corrected text")
+        XCTAssertEqual(log.pieces[1].1.text, "We ran out of flour")
+    }
+
+    // MARK: Early decodes
+
+    func testQuietBeforeStopDecodesTheLastPieceEarly() async throws {
+        let engine = FakePieceEngine()
+        let tentative = TentativeLog()
+        let session = session(engine: engine, tentative: tentative, earlyQuietSeconds: 0.3)
+        let audio = tone(3) + silence(0.5)
+        feed(audio, to: session)
+        try await waitForDecodes(engine, count: 1)
+        let result = try await session.finish(expectedSampleCount: audio.count)
+        XCTAssertEqual(result.text, "tone3")
+        let lengths = await engine.decodedLengths
+        XCTAssertEqual(lengths.count, 1, "nothing left to decode at stop")
+        XCTAssertEqual(tentative.pieces.map(\.0), [0])
+        XCTAssertEqual(tentative.pieces.first?.1.text, "tone3")
+        XCTAssertTrue(RecordingTranscription.piecesCover(result.pieces, sampleCount: audio.count))
+    }
+
+    func testSpeechAfterAnEarlyDecodeIsDecodedAgain() async throws {
+        let engine = FakePieceEngine()
+        let session = session(engine: engine, earlyQuietSeconds: 0.3)
+        let first = tone(3) + silence(0.4)
+        feed(first, to: session)
+        try await waitForDecodes(engine, count: 1)
+        let more = tone(1)
+        var offset = first.count
+        for start in stride(from: 0, to: more.count, by: 1_600) {
+            let chunk = Array(more[start..<min(more.count, start + 1_600)])
+            session.append(chunk, at: offset)
+            offset += chunk.count
+        }
+        let result = try await session.finish(expectedSampleCount: offset)
+        XCTAssertEqual(result.text, "tone3 tone1", "the words after the early decode are kept")
+    }
+
+    func testSoftWordAfterAnEarlyDecodeIsNotDropped() async throws {
+        let engine = FakePieceEngine()
+        let session = session(engine: engine, earlyQuietSeconds: 0.3)
+        let first = tone(3) + silence(0.4)
+        feed(first, to: session)
+        try await waitForDecodes(engine, count: 1)
+        // Speech level, but far below the loud words before it: the relative
+        // measure alone would call it quiet.
+        let soft = (0..<8_000).map { 0.02 * sin(Float($0) * 2 * .pi * 220 / 16_000) }
+        session.append(soft, at: first.count)
+        let result = try await session.finish(expectedSampleCount: first.count + soft.count)
+        let lengths = await engine.decodedLengths
+        XCTAssertEqual(lengths.count, 2, "decoded again, not taken from the early decode")
+        XCTAssertEqual(result.pieces.count, 1)
+    }
+
+    func testEarlyDecodeWaitsUntilItMay() async throws {
+        let engine = FakePieceEngine()
+        let session = session(engine: engine, earlyQuietSeconds: 0.3, isReady: { false })
+        let audio = tone(3) + silence(0.5)
+        feed(audio, to: session)
+        try await Task.sleep(nanoseconds: 300_000_000)
+        let early = await engine.decodedLengths
+        XCTAssertEqual(early.count, 0)
+        _ = try await session.finish(expectedSampleCount: audio.count)
+    }
+
+    func testEarlyDecodeIsUsedOnlyWhenNothingFollows() {
+        let piece = SpeechSegmenter.ClosedPiece(range: 0..<64_000, speechEnd: 48_000)
+        XCTAssertTrue(IncrementalAudioTranscriber.isEarlyDecode(heardEnd: 53_000, usableFor: piece, audioAfter: silence(0.5)))
+        XCTAssertFalse(IncrementalAudioTranscriber.isEarlyDecode(heardEnd: 40_000, usableFor: piece, audioAfter: silence(1)),
+                       "speech the early decode didn't hear")
+        XCTAssertFalse(IncrementalAudioTranscriber.isEarlyDecode(heardEnd: 53_000, usableFor: piece, audioAfter: tone(0.1)))
+        XCTAssertFalse(IncrementalAudioTranscriber.isEarlyDecode(heardEnd: 53_000, usableFor: piece, audioAfter: nil))
+    }
+}

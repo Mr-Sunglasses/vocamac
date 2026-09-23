@@ -14,7 +14,8 @@ import Foundation
 /// changed since (a spoken correction reaching back, a different writing
 /// style), is cleaned again at stop. One generation runs at a time, because
 /// llama.cpp here serves a single sequence. If pieces arrive faster than the
-/// model answers, only the newest waiting piece is kept; older ones are cleaned
+/// model answers, only the two newest waiting pieces are kept (a piece the
+/// next one's decode corrected, and that next piece); older ones are cleaned
 /// at stop.
 ///
 /// Created per recording and never reused.
@@ -29,7 +30,9 @@ final class CleanupSpeculator {
 
     private var completed: [CleanupRequestKey: CleanupAttempt] = [:]
     private var running: (key: CleanupRequestKey, task: Task<CleanupAttempt, Never>)?
-    private var waiting: (index: Int, request: CleanupRequest)?
+    /// Requests not started yet, oldest piece first.
+    private var waiting: [(index: Int, request: CleanupRequest)] = []
+    static let maxWaiting = 2
     /// No new job starts once the final pass has begun, or after a cancel.
     private var isSealed = false
     /// Escape or recovery: the dictation is abandoned, so the final pass
@@ -37,6 +40,11 @@ final class CleanupSpeculator {
     private(set) var isCancelled = false
     /// The running job already asked to stop, so it isn't stopped twice.
     private var stoppedKey: CleanupRequestKey?
+
+    /// Text of every piece submitted, by index, so each request is prepared
+    /// the way the final pass prepares the whole dictation: in the language
+    /// of its first piece, judged English (or not) from all of it so far.
+    private var submittedTexts: [Int: (text: String, language: String)] = [:]
 
     private(set) var submittedCount = 0
     private var preparingCount = 0
@@ -57,12 +65,23 @@ final class CleanupSpeculator {
         guard !isSealed, !piece.text.isEmpty else { return }
         submittedCount += 1
         preparingCount += 1
+        submittedTexts[index] = (piece.text, piece.language)
+        // The final pass reads the whole dictation in the language the engine
+        // reported for its first piece; a later piece labelled differently
+        // would otherwise build a request the final pass never makes.
+        let ordered = submittedTexts.sorted { $0.key < $1.key }
+        let language = ordered.first?.value.language ?? piece.language
+        let textSoFar = TranscribedPiece.join(ordered.filter { $0.key <= index }.map(\.value.text))
         Task { @MainActor [weak self] in
             guard let self else { return }
             defer { self.preparingCount -= 1 }
-            guard !self.isSealed,
-                  let options = await self.options(piece.language),
-                  let request = await self.pipeline.cleanupRequest(for: piece.text, options: options),
+            guard !self.isSealed, let options = await self.options(language) else { return }
+            let isEnglishText = DictationOutputPipeline.knownLanguage(options.language)
+                .map(DictationOutputPipeline.isEnglish)
+                ?? RewriteValidation.likelyEnglish(textSoFar)
+            guard let request = await self.pipeline.cleanupRequest(
+                      for: piece.text, options: options, isEnglishText: isEnglishText
+                  ),
                   !self.isSealed else { return }
             self.enqueue(request, index: index)
         }
@@ -71,21 +90,25 @@ final class CleanupSpeculator {
     /// Wait until every submitted piece has been cleaned or dropped. For
     /// benchmarks that feed pieces faster than real speech would.
     func waitUntilIdle() async {
-        while preparingCount > 0 || running != nil || waiting != nil {
+        while preparingCount > 0 || running != nil || !waiting.isEmpty {
             try? await Task.sleep(nanoseconds: 5_000_000)
         }
     }
 
     private func enqueue(_ request: CleanupRequest, index: Int) {
         guard completed[request.key] == nil, running?.key != request.key else { return }
-        if let waiting, waiting.index > index { return }
-        waiting = (index, request)
+        waiting.removeAll { $0.index == index }
+        waiting.append((index, request))
+        waiting.sort { $0.index < $1.index }
+        if waiting.count > Self.maxWaiting {
+            waiting.removeFirst(waiting.count - Self.maxWaiting)
+        }
         startNextIfIdle()
     }
 
     private func startNextIfIdle() {
-        guard running == nil, !isSealed, let next = waiting else { return }
-        waiting = nil
+        guard running == nil, !isSealed, !waiting.isEmpty else { return }
+        let next = waiting.removeFirst()
         let key = next.request.key
         let pipeline = pipeline
         let task = Task { @MainActor in
@@ -118,7 +141,7 @@ final class CleanupSpeculator {
     /// longer busy with such a job.
     func beginFinal(needed: Set<CleanupRequestKey>) async {
         isSealed = true
-        waiting = nil
+        waiting.removeAll()
         guard let running, !needed.contains(running.key) else { return }
         if running.key != stoppedKey {
             stoppedKey = running.key
@@ -134,7 +157,7 @@ final class CleanupSpeculator {
     /// caller.
     func claim(_ key: CleanupRequestKey) async -> CleanupAttempt? {
         isSealed = true
-        waiting = nil
+        waiting.removeAll()
         if let running {
             let attempt = await running.task.value
             store(attempt, for: running.key)
@@ -153,7 +176,7 @@ final class CleanupSpeculator {
     func cancelAll() {
         isCancelled = true
         isSealed = true
-        waiting = nil
+        waiting.removeAll()
         guard let running, running.key != stoppedKey else { return }
         stoppedKey = running.key
         cancelledCount += 1

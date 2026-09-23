@@ -36,6 +36,13 @@ struct SpeechSegmenter {
     /// seconds, so a sentence's level carries across the pause that ends it.
     static let peakDecay: Float = 0.995
 
+    /// A closed piece, and where the last sound in it ended. Everything from
+    /// `speechEnd` to the end of `range` was quiet by this segmenter's measure.
+    struct ClosedPiece: Equatable, Sendable {
+        let range: Range<Int>
+        let speechEnd: Int
+    }
+
     let configuration: Configuration
     private let frameLength = AudioSegmenter.frameLength
 
@@ -48,6 +55,8 @@ struct SpeechSegmenter {
     private var pieceHasSpeech = false
     private var quietRunStart: Int?
     private var peakEnergy: Float = 0
+    /// End of the last frame that wasn't quiet, over the whole recording.
+    private(set) var lastSpeechEnd = 0
     /// Frames of the open piece.
     private var frameOffsets: [Int] = []
     private var frameEnergies: [Float] = []
@@ -68,8 +77,13 @@ struct SpeechSegmenter {
 
     /// Feed samples in order. Returns the ranges of pieces closed by this chunk.
     mutating func append(_ samples: [Float]) -> [Range<Int>] {
+        appendPieces(samples).map(\.range)
+    }
+
+    /// Feed samples in order. Returns the pieces closed by this chunk.
+    mutating func appendPieces(_ samples: [Float]) -> [ClosedPiece] {
         guard !samples.isEmpty else { return [] }
-        var closed: [Range<Int>] = []
+        var closed: [ClosedPiece] = []
         var index = 0
         if !carry.isEmpty {
             let needed = frameLength - carry.count
@@ -93,26 +107,40 @@ struct SpeechSegmenter {
     /// Close whatever is left. Normally one range; two if the tail ran past
     /// the length limit.
     mutating func finish() -> [Range<Int>] {
+        finishPieces().map(\.range)
+    }
+
+    /// Close whatever is left, as `finish` does.
+    mutating func finishPieces() -> [ClosedPiece] {
         let end = sampleCount
         guard end > pieceStart else { return [] }
-        var ranges: [Range<Int>] = []
+        // Samples short of a whole frame were never measured; if they are
+        // loud, the speech runs to the very end.
+        if !carry.isEmpty, !isQuiet(Self.energy(carry[...])) {
+            lastSpeechEnd = end
+        }
+        var pieces: [ClosedPiece] = []
         if end - pieceStart > maxSamples, let cut = limitCut(end: end) {
-            ranges.append(pieceStart..<cut)
+            pieces.append(ClosedPiece(range: pieceStart..<cut, speechEnd: speechEnd(before: cut)))
             pieceStart = cut
         }
-        ranges.append(pieceStart..<end)
+        pieces.append(ClosedPiece(range: pieceStart..<end, speechEnd: min(end, max(pieceStart, lastSpeechEnd))))
         pieceStart = end
         resetPiece(from: end)
-        return ranges
+        return pieces
     }
 
     // MARK: - Frames
 
-    private mutating func observeFrame(energy: Float, closed: inout [Range<Int>]) {
+    private func isQuiet(_ energy: Float) -> Bool {
+        energy <= max(Self.absoluteQuietEnergy, peakEnergy * Self.relativeQuietRatio)
+    }
+
+    private mutating func observeFrame(energy: Float, closed: inout [ClosedPiece]) {
         let offset = nextFrameOffset
         nextFrameOffset += frameLength
         peakEnergy = max(energy, peakEnergy * Self.peakDecay)
-        let quiet = energy <= max(Self.absoluteQuietEnergy, peakEnergy * Self.relativeQuietRatio)
+        let quiet = isQuiet(energy)
 
         frameOffsets.append(offset)
         frameEnergies.append(energy)
@@ -123,6 +151,7 @@ struct SpeechSegmenter {
         } else {
             quietRunStart = nil
             pieceHasSpeech = true
+            lastSpeechEnd = offset + frameLength
         }
 
         let frameEnd = offset + frameLength
@@ -162,11 +191,19 @@ struct SpeechSegmenter {
         return max(pieceStart + frameLength, min(cut, end))
     }
 
-    private mutating func close(at cut: Int, closed: inout [Range<Int>]) {
+    private mutating func close(at cut: Int, closed: inout [ClosedPiece]) {
         guard cut > pieceStart else { return }
-        closed.append(pieceStart..<cut)
+        closed.append(ClosedPiece(range: pieceStart..<cut, speechEnd: speechEnd(before: cut)))
         pieceStart = cut
         resetPiece(from: cut)
+    }
+
+    /// End of the last loud frame of the open piece that starts before `cut`.
+    private func speechEnd(before cut: Int) -> Int {
+        for (offset, quiet) in zip(frameOffsets, frameQuiet).reversed() where offset < cut && !quiet {
+            return min(offset + frameLength, cut)
+        }
+        return pieceStart
     }
 
     /// Drop frames that now belong to a closed piece, and re-derive the open
