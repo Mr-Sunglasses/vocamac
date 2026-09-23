@@ -294,6 +294,11 @@ struct StreamingCommitOptions: Sendable {
     /// together with what followed, correct that piece's words. Measured on
     /// 80 real dictations against the other engine's whole-recording decode:
     /// Canary 180M Flash errors 7.1% -> 6.6%, Parakeet v3 7.4% -> 7.2%.
+    ///
+    /// Free without cleanup. With it, a corrected piece is cleaned a second
+    /// time: on a 45 s dictation (Canary + Ministral 3 3B) the median wait
+    /// after stop went from 0.87 s to 1.66 s and energy from 51 J to 84 J,
+    /// so the app turns this off when it cleans pieces ahead.
     var revisesPrevious = true
 
     init(

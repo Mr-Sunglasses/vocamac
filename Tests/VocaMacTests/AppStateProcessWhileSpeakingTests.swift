@@ -137,6 +137,16 @@ final class AppStateProcessWhileSpeakingTests: XCTestCase {
 
     // MARK: - Follow-ups
 
+    func testCorrectionsOnlyWhenPiecesArentCleanedAhead() async {
+        let (app, mocks) = AppState.makeTestState()
+        app.processWhileSpeaking = true
+        app.transcriptCleanupEnabled = true
+        await app.startRecording()
+        XCTAssertEqual(mocks.whisperService.lastStreamingCommit?.revisesPrevious, false,
+                       "a corrected piece would be cleaned twice")
+        await app.cancelRecording()
+    }
+
     func testLowPowerModeKeepsRecordingsOnTheBatchPath() async {
         let (app, mocks) = AppState.makeTestState()
         app.processWhileSpeaking = true

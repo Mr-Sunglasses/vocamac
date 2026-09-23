@@ -125,6 +125,8 @@ final class ProcessWhileSpeakingBenchmarkTests: XCTestCase {
         let repeats = environment["VOCAMAC_BENCHMARK_RUNS"].flatMap(Int.init) ?? 3
         let liveWords = environment["VOCAMAC_BENCHMARK_LIVE_WORDS"] == "1"
         let earlyQuietSeconds = environment["VOCAMAC_BENCHMARK_EARLY_QUIET"].flatMap(Double.init)
+        // As the app: corrections only when pieces aren't cleaned ahead.
+        let revisesPrevious = environment["VOCAMAC_BENCHMARK_REVISE"].map { $0 != "0" } ?? (cleanupKind == nil)
         let samples = try AudioFileLoader().loadAudio(at: URL(fileURLWithPath: inputPath)).samples
 
         let modelManager = ModelManager()
@@ -181,7 +183,8 @@ final class ProcessWhileSpeakingBenchmarkTests: XCTestCase {
                 Task { @MainActor in speculator?.submit(piece, index: index) }
             }
             let commit = StreamingCommitOptions(
-                onPiece: submit, onTentativePiece: submit, earlyDecodeQuietSeconds: earlyQuietSeconds
+                onPiece: submit, onTentativePiece: submit, earlyDecodeQuietSeconds: earlyQuietSeconds,
+                revisesPrevious: revisesPrevious
             )
             var onPartial: (@Sendable (String) -> Void)?
             if liveWords { onPartial = { _ in } }

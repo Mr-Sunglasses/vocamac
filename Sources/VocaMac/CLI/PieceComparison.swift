@@ -173,7 +173,8 @@ extension HeadlessTranscriber {
                     let (decode, seconds) = try await timed {
                         try await IncrementalAudioTranscriber.decodeCommitted(
                             piece.range, samples: Array(samples[piece.range]), previous: pieces.last,
-                            maxPieceSamples: maxPieceSamples, revisesPrevious: commitOptions.revisesPrevious,
+                            // As the app: corrections only when pieces aren't cleaned ahead.
+                            maxPieceSamples: maxPieceSamples, revisesPrevious: cleanupModel == nil,
                             audio: { Array(samples[$0]) },
                             transcribe: { audio in
                                 try await transcriber.transcribe(

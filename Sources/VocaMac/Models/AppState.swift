@@ -2091,7 +2091,10 @@ final class AppState: ObservableObject {
             onTentativePiece: onPiece,
             vocabulary: readVocabulary,
             earlyDecodeQuietSeconds: stopsOnSilence ? Self.earlyDecodeQuietSeconds(silenceDuration: silenceDuration) : nil,
-            isReadyForEarlyDecode: isReadyForEarlyDecode
+            isReadyForEarlyDecode: isReadyForEarlyDecode,
+            // Corrections are free without cleanup; with it, each corrected
+            // piece would be cleaned twice (see `revisesPrevious`).
+            revisesPrevious: recordingSpeculator == nil
         )
     }
 
