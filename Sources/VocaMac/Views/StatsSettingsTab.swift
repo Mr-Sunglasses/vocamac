@@ -159,7 +159,7 @@ struct StatsSettingsTab: View {
                             stopWaitRow(waitWith == nil ? "Median wait" : "Without it", waitWithout)
                         }
                         Text(
-                            "Time from releasing the key to your text appearing, for dictations over "
+                            "Time from releasing the key to your text being sent to the app, for dictations over "
                                 + "\(Int(UserStats.comparedStopWaitSeconds)) seconds. "
                                 + "Process while speaking is in Settings → Dictation."
                         )

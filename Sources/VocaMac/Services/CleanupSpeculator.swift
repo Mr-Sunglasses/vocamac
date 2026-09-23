@@ -44,6 +44,10 @@ final class CleanupSpeculator {
     /// the way the final pass prepares the whole dictation: in the language
     /// of its first piece, judged English (or not) from all of it so far.
     private var submittedTexts: [Int: (text: String, language: String)] = [:]
+    /// The newest submission for each piece. Preparing a request suspends,
+    /// so an older one for the same piece can finish last; it is dropped.
+    private var latestSubmission: [Int: Int] = [:]
+    private var submissionCounter = 0
 
     private(set) var submittedCount = 0
     private var preparingCount = 0
@@ -65,6 +69,9 @@ final class CleanupSpeculator {
         submittedCount += 1
         preparingCount += 1
         submittedTexts[index] = (piece.text, piece.language)
+        submissionCounter += 1
+        let submission = submissionCounter
+        latestSubmission[index] = submission
         // The final pass reads the whole dictation in the language the engine
         // reported for its first piece; a later piece labelled differently
         // would otherwise build a request the final pass never makes.
@@ -81,7 +88,7 @@ final class CleanupSpeculator {
             guard let request = await self.pipeline.cleanupRequest(
                       for: piece.text, options: options, isEnglishText: isEnglishText
                   ),
-                  !self.isSealed else { return }
+                  !self.isSealed, self.latestSubmission[index] == submission else { return }
             self.enqueue(request, index: index)
         }
     }

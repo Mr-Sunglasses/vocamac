@@ -426,8 +426,8 @@ struct DictationSettingsPage: View {
                     title: "Process while speaking",
                     detail: "Transcribes each sentence as you finish it, and cleans it up when Smart Cleanup "
                         + "is on, so long dictations paste sooner. Your Mac works while you talk, which uses "
-                        + "more battery, and that work is wasted if you cancel. Paused in Low Power Mode and "
-                        + "when your Mac runs hot. Command Mode and previews are unaffected.",
+                        + "more battery, and that work is wasted if you cancel. Not used for dictations started in Low "
+                        + "Power Mode or while your Mac runs hot. Command Mode and previews are unaffected.",
                     isOn: $appState.processWhileSpeaking
                 )
             }

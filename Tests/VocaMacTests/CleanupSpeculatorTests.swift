@@ -262,4 +262,25 @@ extension CleanupSpeculatorTests {
         XCTAssertEqual(speculator.hitCount, 2)
         XCTAssertEqual(cleaner.cleanCallCount, 0, "nothing is left to clean at stop")
     }
+
+    func testAnOlderSubmissionFinishingLastIsDropped() async {
+        let cleaner = MockTranscriptCleanup()
+        let pipeline = DictationOutputPipeline(cleaner: cleaner, snippets: SnippetExpander())
+        var releaseFirst: CheckedContinuation<Void, Never>?
+        var calls = 0
+        let speculator = CleanupSpeculator(pipeline: pipeline) { _ in
+            calls += 1
+            // The first submission's preparation is held until the second
+            // has been queued.
+            if calls == 1 { await withCheckedContinuation { releaseFirst = $0 } }
+            return self.options()
+        }
+        speculator.submit(TranscribedPiece(range: 0..<16_000, text: "we ran out of flower.", language: "en"), index: 0)
+        await waitUntil { releaseFirst != nil }
+        speculator.submit(TranscribedPiece(range: 0..<16_000, text: "we ran out of flour.", language: "en"), index: 0)
+        await waitUntil { cleaner.speculateCallCount == 1 }
+        releaseFirst?.resume()
+        await speculator.waitUntilIdle()
+        XCTAssertEqual(cleaner.speculatedTexts, ["we ran out of flour."], "the newer text wins")
+    }
 }

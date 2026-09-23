@@ -815,7 +815,8 @@ final class AppState: ObservableObject {
     var isLidClosed: () -> Bool = { LidStateReader.isClosed() }
     /// Low Power Mode, or a Mac hot enough to throttle. "Process while
     /// speaking" does its work during the recording, when it competes with
-    /// whatever else is running; in these states it waits for stop instead.
+    /// whatever else is running; a recording that starts in these states
+    /// waits for stop instead. Checked at start: dictations are short.
     var isPowerConstrained: () -> Bool = { AppState.systemIsPowerConstrained() }
     /// Seam for tests, which must not depend on the host's Apple Intelligence.
     var appleIntelligenceAvailable: () -> Bool = { AppleIntelligenceTextService.isAvailable }

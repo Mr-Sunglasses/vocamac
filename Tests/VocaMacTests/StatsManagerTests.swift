@@ -609,4 +609,13 @@ final class StatsManagerTests: XCTestCase {
         XCTAssertEqual(decoded.stopWaits, [StopWait(seconds: 2, audioSeconds: 12, processedWhileSpeaking: false)])
         XCTAssertEqual(try JSONDecoder().decode(UserStats.self, from: Data("{}".utf8)).stopWaits, [])
     }
+
+    func testOneDamagedStopWaitKeepsTheOthers() throws {
+        let json = #"{"stopWaits":[{"seconds":1.2,"audioSeconds":20,"processedWhileSpeaking":true},{"seconds":"soon"},{"seconds":3,"audioSeconds":30,"processedWhileSpeaking":false}]}"#
+        let decoded = try JSONDecoder().decode(UserStats.self, from: Data(json.utf8))
+        XCTAssertEqual(decoded.stopWaits, [
+            StopWait(seconds: 1.2, audioSeconds: 20, processedWhileSpeaking: true),
+            StopWait(seconds: 3, audioSeconds: 30, processedWhileSpeaking: false),
+        ])
+    }
 }

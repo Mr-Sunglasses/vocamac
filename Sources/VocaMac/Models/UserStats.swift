@@ -96,14 +96,26 @@ extension UserStats {
         dailyTranscriptionCounts = decodedDailyTranscriptionCounts.mapValues { max(0, $0) }
 
         timeZoneIdentifier = container.decodeLossily(String.self, forKey: .timeZoneIdentifier)
-        let decodedStopWaits = container.decodeLossily([StopWait].self, forKey: .stopWaits) ?? []
+        // Entry by entry, so one damaged wait doesn't cost the rest.
+        let decodedStopWaits = (container.decodeLossily([LossyElement<StopWait>].self, forKey: .stopWaits) ?? [])
+            .compactMap(\.value)
         stopWaits = Array(decodedStopWaits.filter(\.isValid).suffix(Self.maxStopWaits))
     }
 }
 
-/// How long one dictation took to paste after the user stopped speaking.
+/// Decodes to nil instead of failing the array it is in.
+private struct LossyElement<Value: Decodable>: Decodable {
+    let value: Value?
+
+    init(from decoder: Decoder) throws {
+        value = try? Value(from: decoder)
+    }
+}
+
+/// How long one dictation took to reach the app after the user stopped.
 struct StopWait: Codable, Equatable {
-    /// From releasing the key to the text being pasted.
+    /// From releasing the key to the text being handed to the app. Delivery
+    /// itself (a paste, or an accessibility insert) follows within moments.
     let seconds: Double
     /// Length of the recording.
     let audioSeconds: Double
