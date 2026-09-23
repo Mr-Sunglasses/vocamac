@@ -174,6 +174,8 @@ final class AppState: ObservableObject {
     private var finishingSpeculator: CleanupSpeculator?
     /// Vocabulary a commit-mode Whisper session reads per piece.
     private var recordingVocabulary: LiveVocabulary?
+    /// The recording's live session decodes pieces while the user speaks.
+    private var recordingProcessesWhileSpeaking = false
     private var isStoppingAudio = false
     /// Every way a recording ends — stop, cancel, force recovery, a failed
     /// start, an input device change, auto-pause — sets this to `false`, so
@@ -189,6 +191,7 @@ final class AppState: ObservableObject {
                 recordingSpeculator?.cancelAll()
                 recordingSpeculator = nil
                 recordingVocabulary = nil
+                recordingProcessesWhileSpeaking = false
                 isHandsFreeSession = false
             }
             if oldValue && !isRecording {
@@ -810,6 +813,11 @@ final class AppState: ObservableObject {
     }
     var availableInputDevices: () -> [AudioDevice] = { AudioEngine.availableInputDevices() }
     var isLidClosed: () -> Bool = { LidStateReader.isClosed() }
+    /// Low Power Mode, or a Mac hot enough to throttle. "Process while
+    /// speaking" does its work during the recording, when it competes with
+    /// whatever else is running; a recording that starts in these states
+    /// waits for stop instead. Checked at start: dictations are short.
+    var isPowerConstrained: () -> Bool = { AppState.systemIsPowerConstrained() }
     /// Seam for tests, which must not depend on the host's Apple Intelligence.
     var appleIntelligenceAvailable: () -> Bool = { AppleIntelligenceTextService.isAvailable }
 
@@ -1942,6 +1950,7 @@ final class AppState: ObservableObject {
             recordingSpeculator = nil
             recordingVocabulary = nil
         }
+        recordingProcessesWhileSpeaking = commit != nil && session != nil
         // Only promise live words when an engine will actually send them:
         // Whisper and Parakeet decode partial snapshots, and so does ONNX when
         // it commits pieces; the Apple Speech session streams audio but
@@ -2031,8 +2040,12 @@ final class AppState: ObservableObject {
         guard processWhileSpeaking, injectResult, activeCommandSelection == nil,
               let engine = ModelSize(rawValue: selectedModelSize)?.engine,
               !(engine == .whisperKit && translatesSpeech) else { return nil }
+        guard !isPowerConstrained() else {
+            VocaLogger.info(.appState, "Process while speaking paused: Low Power Mode or thermal pressure")
+            return nil
+        }
 
-        let vocabulary = LiveVocabulary(recognitionHintVocabulary)
+        let vocabulary = LiveVocabulary(recognitionHintVocabulary, settled: screenContextTask == nil)
         recordingVocabulary = vocabulary
         if let contextTask = screenContextTask {
             let customVocabulary = customVocabulary
@@ -2061,10 +2074,45 @@ final class AppState: ObservableObject {
             }
         }
         var readVocabulary: (@Sendable () -> String)?
+        var isReadyForEarlyDecode: (@Sendable () -> Bool)?
         if engine == .whisperKit {
             readVocabulary = { vocabulary.read() }
+            isReadyForEarlyDecode = { vocabulary.isSettled }
         }
-        return StreamingCommitOptions(onPiece: onPiece, vocabulary: readVocabulary)
+        // A session that ends on silence stops after `silenceDuration` of
+        // quiet, which is time to decode (and clean) the last piece before
+        // stop. Push to talk ends when the key comes up, in recorded
+        // dictations usually within a third of a second of the last word:
+        // there, early decodes at every pause cost far more than they save.
+        let stopsOnSilence = activationMode == .doubleTapToggle || isHandsFreeSession
+        return StreamingCommitOptions(
+            onPiece: onPiece,
+            // The piece being spoken, decoded early: cleaned the same way, and
+            // simply not found at stop if speech went on.
+            onTentativePiece: onPiece,
+            vocabulary: readVocabulary,
+            earlyDecodeQuietSeconds: stopsOnSilence ? Self.earlyDecodeQuietSeconds(silenceDuration: silenceDuration) : nil,
+            isReadyForEarlyDecode: isReadyForEarlyDecode,
+            // Corrections are free without cleanup; with it, each corrected
+            // piece would be cleaned twice (see `revisesPrevious`).
+            revisesPrevious: recordingSpeculator == nil
+        )
+    }
+
+    /// Quiet before the last piece is decoded early, in a session that stops
+    /// after `silenceDuration` of it: a third of the way in, leaving the rest
+    /// for the decode and its cleanup, and no sooner than 0.3 s, so ordinary
+    /// pauses between words don't each cost a decode.
+    nonisolated static func earlyDecodeQuietSeconds(silenceDuration: Double) -> Double {
+        min(1.0, max(0.3, SilenceDetectionSettings.clampedDuration(silenceDuration) / 3))
+    }
+
+    nonisolated static func systemIsPowerConstrained(_ info: ProcessInfo = .processInfo) -> Bool {
+        if info.isLowPowerModeEnabled { return true }
+        switch info.thermalState {
+        case .serious, .critical: return true
+        default: return false
+        }
     }
 
     private func submitPiece(_ piece: TranscribedPiece, index: Int, generation: UUID) {
@@ -2169,6 +2217,7 @@ final class AppState: ObservableObject {
         if endsHotKeyToggle {
             endHotKeyToggleSession()
         }
+        let stopRequested = ProcessInfo.processInfo.systemUptime
 
         // A start that is still negotiating its input route holds the audio
         // engine's lifecycle queue. Calling stopRecording() here would block the
@@ -2195,6 +2244,7 @@ final class AppState: ObservableObject {
         finishingSpeculator = speculator
         let liveVocabulary = recordingVocabulary
         recordingVocabulary = nil
+        let processedWhileSpeaking = recordingProcessesWhileSpeaking
         let stopStarted = ProcessInfo.processInfo.systemUptime
         defer {
             session?.cancel()
@@ -2382,6 +2432,11 @@ final class AppState: ObservableObject {
                         return
                     }
                     textInjector.inject(text: output.text, preserveClipboard: preserveClipboard)
+                    statsManager.recordStopWait(StopWait(
+                        seconds: ProcessInfo.processInfo.systemUptime - stopRequested,
+                        audioSeconds: result.audioLengthSeconds,
+                        processedWhileSpeaking: processedWhileSpeaking
+                    ))
                     observeCorrections(to: output.text)
                 } else {
                     if nonInjectedOutputDestination == .scratchpad {

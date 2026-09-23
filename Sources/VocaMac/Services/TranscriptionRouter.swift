@@ -307,6 +307,10 @@ extension TranscriptionRouter: SpeechTranscribing {
                 guard activeEngine == expectedEngine else { throw RecordingTranscription.StreamError.incomplete }
                 return try await IncrementalAudioTranscriber.runCommitted(
                     chunks: chunks, segmenter: configuration, onPiece: commit.onPiece,
+                    onTentativePiece: commit.onTentativePiece,
+                    earlyDecodeQuietSeconds: commit.earlyDecodeQuietSeconds,
+                    isReadyForEarlyDecode: commit.isReadyForEarlyDecode,
+                    revisesPrevious: commit.revisesPrevious,
                     transcribe: transcribe, previewTranscribe: preview, onPartial: onPartial
                 )
             }

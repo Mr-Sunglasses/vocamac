@@ -269,25 +269,56 @@ struct StreamingCommitOptions: Sendable {
     var minPieceSeconds: Double = 8
     /// Called once per decoded piece, in order, including the tail decoded at
     /// stop. Runs on the decoder task; hop to the main actor before touching
-    /// app state.
+    /// app state. With `revisesPrevious`, it can be called a second time for
+    /// a piece whose words the next piece's decode corrected.
     var onPiece: (@Sendable (Int, TranscribedPiece) -> Void)?
+    /// Called with the piece still being spoken, decoded early in a short
+    /// quiet stretch, so its cleanup can start before stop too. If speech
+    /// resumes, the piece is decoded again and this text is never used.
+    var onTentativePiece: (@Sendable (Int, TranscribedPiece) -> Void)?
     /// Read before each piece is decoded, so recognition vocabulary that
     /// arrives after recording started (screen context) still reaches later
     /// pieces. Nil uses the vocabulary the session was started with. Live
     /// preview decodes never read it: their text is not part of the result,
     /// so they must not count as a piece decoded with older vocabulary.
     var vocabulary: (@Sendable () -> String)?
+    /// Quiet this long after speech decodes the piece being spoken, so a
+    /// stop that follows finds the last piece already decoded. For sessions
+    /// that stop on silence; nil never decodes early.
+    var earlyDecodeQuietSeconds: Double?
+    /// Whether an early decode may run yet. A decode kept with vocabulary
+    /// that has since changed would send the whole recording to the batch
+    /// path, so Whisper waits for its screen-context terms. Nil always may.
+    var isReadyForEarlyDecode: (@Sendable () -> Bool)?
+    /// Let each piece's decode, which hears the end of the piece before it
+    /// together with what followed, correct that piece's words. Measured on
+    /// 80 real dictations against the other engine's whole-recording decode:
+    /// Canary 180M Flash errors 7.1% -> 6.6%, Parakeet v3 7.4% -> 7.2%.
+    ///
+    /// Free without cleanup. With it, a corrected piece is cleaned a second
+    /// time: on a 45 s dictation (Canary + Ministral 3 3B) the median wait
+    /// after stop went from 0.87 s to 1.66 s and energy from 51 J to 84 J,
+    /// so the app turns this off when it cleans pieces ahead.
+    var revisesPrevious = true
 
     init(
         pauseSeconds: Double = 0.6,
         minPieceSeconds: Double = 8,
         onPiece: (@Sendable (Int, TranscribedPiece) -> Void)? = nil,
-        vocabulary: (@Sendable () -> String)? = nil
+        onTentativePiece: (@Sendable (Int, TranscribedPiece) -> Void)? = nil,
+        vocabulary: (@Sendable () -> String)? = nil,
+        earlyDecodeQuietSeconds: Double? = nil,
+        isReadyForEarlyDecode: (@Sendable () -> Bool)? = nil,
+        revisesPrevious: Bool = true
     ) {
         self.pauseSeconds = pauseSeconds
         self.minPieceSeconds = minPieceSeconds
         self.onPiece = onPiece
+        self.onTentativePiece = onTentativePiece
         self.vocabulary = vocabulary
+        self.earlyDecodeQuietSeconds = earlyDecodeQuietSeconds
+        self.isReadyForEarlyDecode = isReadyForEarlyDecode
+        self.revisesPrevious = revisesPrevious
     }
 
     /// Segmenter settings for an engine that decodes at most `maxPieceSeconds`
@@ -304,53 +335,70 @@ struct StreamingCommitOptions: Sendable {
 
 extension IncrementalAudioTranscriber {
     /// Samples, closed pieces waiting for a decode, and end of input. Audio
-    /// is kept from the start of the last decoded piece, so the tail can be
-    /// decoded together with it; anything older is dropped.
+    /// is kept from the start of the last decoded piece, so the next piece
+    /// can be decoded together with it; anything older is dropped.
     private actor CommitBuffer {
         private var samples: [Float] = []
         /// Absolute offset of `samples[0]`.
         private var base = 0
         /// Where the last piece taken for decoding started and ended. Its
-        /// audio is kept until the next piece is taken, and the tail's.
+        /// audio is kept until the next piece is taken.
         private var takenStart = 0
         private var takenEnd = 0
-        private var pending: [Range<Int>] = []
+        private var pending: [SpeechSegmenter.ClosedPiece] = []
         private var ended = false
+        private var lastSpeechEnd = 0
 
-        func append(_ chunk: [Float], closing closed: [Range<Int>]) {
-            samples.append(contentsOf: chunk)
-            pending.append(contentsOf: closed)
+        struct Status {
+            let total: Int
+            let hasPending: Bool
+            let ended: Bool
+            /// Where the piece still being spoken starts.
+            let openStart: Int
+            /// End of the last sound the segmenter heard.
+            let lastSpeechEnd: Int
         }
 
-        func finish(closing closed: [Range<Int>]) {
+        func append(_ chunk: [Float], closing closed: [SpeechSegmenter.ClosedPiece], lastSpeechEnd: Int) {
+            samples.append(contentsOf: chunk)
             pending.append(contentsOf: closed)
+            self.lastSpeechEnd = lastSpeechEnd
+        }
+
+        func finish(closing closed: [SpeechSegmenter.ClosedPiece], lastSpeechEnd: Int) {
+            pending.append(contentsOf: closed)
+            self.lastSpeechEnd = lastSpeechEnd
             ended = true
         }
 
         private var total: Int { base + samples.count }
+        private var openStart: Int { pending.last?.range.upperBound ?? takenEnd }
 
         /// Audio held but not yet decoded, plus the previous piece kept for
         /// context.
         var heldSamples: Int { samples.count }
 
-        func status() -> (total: Int, hasPending: Bool, ended: Bool) {
-            (total, !pending.isEmpty, ended)
+        func status() -> Status {
+            Status(
+                total: total, hasPending: !pending.isEmpty, ended: ended,
+                openStart: openStart, lastSpeechEnd: lastSpeechEnd
+            )
         }
 
         /// The next closed piece and its audio.
-        func takePending() -> (range: Range<Int>, samples: [Float], isLast: Bool)? {
+        func takePending() -> (piece: SpeechSegmenter.ClosedPiece, samples: [Float], isLast: Bool)? {
             guard !pending.isEmpty else { return nil }
-            let range = pending.removeFirst()
-            let lower = range.lowerBound - base
-            let upper = range.upperBound - base
+            let piece = pending.removeFirst()
+            let lower = piece.range.lowerBound - base
+            let upper = piece.range.upperBound - base
             guard lower >= 0, upper <= samples.count else { return nil }
             let audio = Array(samples[lower..<upper])
-            // Keep the previous piece too: the tail is decoded together with it.
+            // Keep the previous piece too: the next one is decoded with it.
             samples.removeFirst(takenStart - base)
             base = takenStart
-            takenStart = range.lowerBound
-            takenEnd = range.upperBound
-            return (range, audio, ended && pending.isEmpty)
+            takenStart = piece.range.lowerBound
+            takenEnd = piece.range.upperBound
+            return (piece, audio, ended && pending.isEmpty)
         }
 
         /// Audio still held for `range`, or nil once it has been dropped.
@@ -361,11 +409,12 @@ extension IncrementalAudioTranscriber {
             return Array(samples[lower..<upper])
         }
 
-        /// Audio of the piece still being spoken, at most `limit` samples.
-        func openPiece(limit: Int) -> [Float] {
-            let start = (pending.last?.upperBound ?? takenEnd) - base
-            guard start < samples.count else { return [] }
-            return Array(samples[max(start, samples.count - limit)...])
+        /// Audio of the piece still being spoken, at most its last `limit`
+        /// samples, and the absolute offset they start at.
+        func openPiece(limit: Int) -> (start: Int, samples: [Float]) {
+            let start = max(openStart, total - max(0, limit))
+            guard start < total else { return (start, []) }
+            return (start, Array(samples[(start - base)...]))
         }
     }
 
@@ -377,6 +426,12 @@ extension IncrementalAudioTranscriber {
     /// speech. Decoding silence on its own invites a hallucinated "Thank you."
     static let silentPieceEnergy: Float = 1e-6
 
+    /// Live previews in commit mode decode at most this much of the piece
+    /// being spoken (8 s). Some engines can't stop a decode halfway, so a
+    /// preview still running at stop delays the last piece by whatever it
+    /// has left; a short window keeps that small.
+    static let defaultCommitPreviewWindowSamples = 16_000 * 8
+
     /// Decode each piece once, as soon as a pause closes it, and return the
     /// joined text and the pieces at EOF, when only the tail is left.
     ///
@@ -384,26 +439,38 @@ extension IncrementalAudioTranscriber {
     /// then decodes the complete recording in batch. Partials show the
     /// committed text plus a preview of the open piece; the preview is never
     /// part of the result.
+    ///
+    /// With `earlyDecodeQuietSeconds`, the piece being spoken is also decoded
+    /// whenever the speaker goes quiet that long. If nothing near speech
+    /// level follows before the piece closes, that decode is the piece, so a
+    /// stop after a short silence has nothing left to decode.
     static func runCommitted(
         chunks: AsyncThrowingStream<[Float], Error>,
         segmenter configuration: SpeechSegmenter.Configuration,
         onPiece: (@Sendable (Int, TranscribedPiece) -> Void)?,
+        onTentativePiece: (@Sendable (Int, TranscribedPiece) -> Void)? = nil,
+        earlyDecodeQuietSeconds: Double? = nil,
+        isReadyForEarlyDecode: (@Sendable () -> Bool)? = nil,
+        revisesPrevious: Bool = false,
         updateEverySamples: Int = 32_000,
+        previewWindowSamples: Int = defaultCommitPreviewWindowSamples,
         transcribe: @escaping @Sendable ([Float]) async throws -> VocaTranscription,
         previewTranscribe: (@Sendable ([Float]) async throws -> VocaTranscription)? = nil,
         onPartial: (@Sendable (String) -> Void)?
     ) async throws -> VocaTranscription {
         let buffer = CommitBuffer()
         let transcribePreview = previewTranscribe ?? transcribe
+        let maxPieceSamples = Int(configuration.maxPieceSeconds * Double(configuration.sampleRate))
+        let earlyQuietSamples = earlyDecodeQuietSeconds.map { Int($0 * Double(configuration.sampleRate)) }
         return try await withThrowingTaskGroup(of: VocaTranscription?.self) { group in
             group.addTask {
                 var segmenter = SpeechSegmenter(configuration: configuration)
                 let maxHeldSamples = Int((2 * configuration.maxPieceSeconds + maxBacklogSeconds) * 16_000)
                 for try await chunk in chunks {
                     try Task.checkCancellation()
-                    let closed = segmenter.append(chunk)
+                    let closed = segmenter.appendPieces(chunk)
                     for _ in closed { PerformanceTrace.event("PieceClosed") }
-                    await buffer.append(chunk, closing: closed)
+                    await buffer.append(chunk, closing: closed, lastSpeechEnd: segmenter.lastSpeechEnd)
                     // Decoding has fallen behind the microphone. Holding the
                     // backlog would grow without bound; give up on pieces and
                     // let the batch path decode the recording at stop.
@@ -412,56 +479,66 @@ extension IncrementalAudioTranscriber {
                         throw RecordingTranscription.StreamError.overflow
                     }
                 }
-                await buffer.finish(closing: segmenter.finish())
+                let tail = segmenter.finishPieces()
+                await buffer.finish(closing: tail, lastSpeechEnd: segmenter.lastSpeechEnd)
                 return nil
             }
             group.addTask {
                 var pieces: [TranscribedPiece] = []
                 var modelUsed: ModelSize?
                 var lastPreviewCount = 0
+                /// The piece being spoken, decoded early, and where the audio
+                /// that decode heard ended.
+                var early: (decode: CommittedDecode, start: Int, heardEnd: Int)?
+                /// Speech end the last early decode was started for, so each
+                /// quiet stretch is decoded at most once.
+                var earlySpeechEnd = 0
+                let audio: @Sendable (Range<Int>) async -> [Float]? = { await buffer.audio($0) }
+
+                func keep(_ decode: CommittedDecode) {
+                    if let revised = decode.revisedPrevious, let last = pieces.indices.last {
+                        pieces[last] = revised
+                        onPiece?(last, revised)
+                    }
+                    modelUsed = decode.modelUsed ?? modelUsed
+                    pieces.append(decode.piece)
+                    onPiece?(pieces.count - 1, decode.piece)
+                    if let onPartial, !decode.piece.text.isEmpty {
+                        onPartial(TranscribedPiece.join(pieces))
+                    }
+                }
+
                 while true {
                     try Task.checkCancellation()
                     if let next = await buffer.takePending() {
                         let interval = PerformanceTrace.begin(next.isLast ? "TailDecode" : "PieceDecode")
                         defer { PerformanceTrace.end(interval) }
-                        // Every piece after the first is decoded together with
-                        // the piece before it, so it doesn't start cold after a
-                        // pause: on its own a piece loses the words that decide
-                        // "flour" from "flower", and drops repeated phrases.
-                        // Only the words after the previous piece's text are
-                        // kept; that piece, and any cleanup already done for
-                        // it, stays as it was.
-                        var contextual: TranscribedPiece?
-                        if let previous = pieces.last, !isSilent(next.samples),
-                           let audio = await buffer.audio(previous.range.lowerBound..<next.range.upperBound) {
-                            let merged = try await decodePiece(
-                                previous.range.lowerBound..<next.range.upperBound, samples: audio, transcribe: transcribe
-                            ) { modelUsed = $0 }
-                            if let text = textAfter(previous: previous, in: merged.text) {
-                                contextual = TranscribedPiece(range: next.range, text: text, language: merged.language)
-                            }
-                        }
-                        let piece: TranscribedPiece
-                        if let contextual, !(contextual.text.isEmpty && hasSpeech(next.samples)) {
-                            piece = contextual
+                        let earlyFits: Bool
+                        if let early, early.start == next.piece.range.lowerBound {
+                            let after = early.heardEnd < next.piece.range.upperBound
+                                ? await buffer.audio(early.heardEnd..<next.piece.range.upperBound) : []
+                            earlyFits = isEarlyDecode(heardEnd: early.heardEnd, usableFor: next.piece, audioAfter: after)
                         } else {
-                            // First piece, or the merged text couldn't be lined up
-                            // with the previous piece: decode this one alone.
-                            piece = try await decodePiece(next.range, samples: next.samples, transcribe: transcribe) {
-                                modelUsed = $0
-                            }
+                            earlyFits = false
                         }
-                        // Speech that decoded to nothing (a decoder that stopped on
-                        // its first token) must not vanish from the result.
-                        guard !(piece.text.isEmpty && hasSpeech(next.samples)) else {
-                            VocaLogger.warning(.general, "A piece with speech decoded to nothing; decoding the complete recording instead")
-                            throw RecordingTranscription.StreamError.incomplete
+                        if let early, earlyFits {
+                            PerformanceTrace.event("EarlyDecodeUsed")
+                            keep(CommittedDecode(
+                                piece: TranscribedPiece(
+                                    range: next.piece.range, text: early.decode.piece.text,
+                                    language: early.decode.piece.language
+                                ),
+                                revisedPrevious: early.decode.revisedPrevious,
+                                modelUsed: early.decode.modelUsed
+                            ))
+                        } else {
+                            keep(try await decodeCommitted(
+                                next.piece.range, samples: next.samples, previous: pieces.last,
+                                maxPieceSamples: maxPieceSamples, revisesPrevious: revisesPrevious,
+                                audio: audio, transcribe: transcribe
+                            ))
                         }
-                        pieces.append(piece)
-                        onPiece?(pieces.count - 1, piece)
-                        if let onPartial, !piece.text.isEmpty {
-                            onPartial(TranscribedPiece.join(pieces))
-                        }
+                        early = nil
                         continue
                     }
                     let status = await buffer.status()
@@ -478,20 +555,57 @@ extension IncrementalAudioTranscriber {
                             modelUsed: modelUsed, pieces: pieces
                         )
                     }
+                    if let earlyQuietSamples,
+                       status.lastSpeechEnd > status.openStart,
+                       status.lastSpeechEnd > earlySpeechEnd,
+                       status.total - status.lastSpeechEnd >= earlyQuietSamples,
+                       isReadyForEarlyDecode?() ?? true {
+                        earlySpeechEnd = status.lastSpeechEnd
+                        let open = await buffer.openPiece(limit: maxPieceSamples)
+                        guard open.start == status.openStart, !open.samples.isEmpty else { continue }
+                        let range = open.start..<(open.start + open.samples.count)
+                        let interval = PerformanceTrace.begin("EarlyDecode")
+                        defer { PerformanceTrace.end(interval) }
+                        do {
+                            let decode = try await decodeCommitted(
+                                range, samples: open.samples, previous: pieces.last,
+                                maxPieceSamples: maxPieceSamples, revisesPrevious: revisesPrevious,
+                                audio: audio, transcribe: transcribe
+                            )
+                            try Task.checkCancellation()
+                            early = (decode, range.lowerBound, range.upperBound)
+                            onTentativePiece?(pieces.count, decode.piece)
+                            if let onPartial, !decode.piece.text.isEmpty {
+                                onPartial(TranscribedPiece.join(pieces.map(\.text) + [decode.piece.text]))
+                                lastPreviewCount = status.total
+                            }
+                        } catch is CancellationError {
+                            throw CancellationError()
+                        } catch {
+                            // The piece is decoded again when it closes, and a
+                            // real failure then invalidates the session.
+                            try Task.checkCancellation()
+                            early = nil
+                        }
+                        continue
+                    }
                     if let onPartial, status.total - lastPreviewCount >= updateEverySamples {
                         lastPreviewCount = status.total
-                        let window = await buffer.openPiece(
-                            limit: Int(configuration.maxPieceSeconds * Double(configuration.sampleRate))
-                        )
-                        guard window.count >= updateEverySamples / 2 else { continue }
+                        let window = await buffer.openPiece(limit: previewWindowSamples)
+                        guard window.samples.count >= updateEverySamples / 2 else { continue }
                         do {
-                            let preview = try await decodePreview(window, transcribe: transcribePreview) {
+                            let preview = try await decodePreview(window.samples, transcribe: transcribePreview) {
                                 let status = await buffer.status()
                                 return status.ended || status.hasPending
                             }
                             try Task.checkCancellation()
                             if let preview {
-                                onPartial(TranscribedPiece.join(pieces.map(\.text) + [preview.text]))
+                                let text = preview.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                                // Mark a preview that starts partway into the
+                                // piece, so a cut first word doesn't read as a
+                                // mistake.
+                                let shown = window.start > status.openStart && !text.isEmpty ? "… " + text : text
+                                onPartial(TranscribedPiece.join(pieces.map(\.text) + [shown]))
                             }
                         } catch is CancellationError {
                             throw CancellationError()
@@ -515,25 +629,188 @@ extension IncrementalAudioTranscriber {
         }
     }
 
+    /// Whether an early decode of the piece being spoken can stand for the
+    /// piece that closed: it heard every sound the segmenter found in it, and
+    /// nothing after what it heard comes near speech level (a soft last word
+    /// the relative measure might call quiet).
+    static func isEarlyDecode(
+        heardEnd: Int, usableFor piece: SpeechSegmenter.ClosedPiece, audioAfter: [Float]?
+    ) -> Bool {
+        guard piece.speechEnd <= heardEnd else { return false }
+        guard let audioAfter else { return false }
+        return !containsSpeechLevel(audioAfter)
+    }
+
+    // MARK: - One piece
+
+    /// A piece decoded the way a session keeps it.
+    struct CommittedDecode: Sendable {
+        let piece: TranscribedPiece
+        /// The previous piece as this decode heard it, when its words differ
+        /// and the caller asked for revisions.
+        let revisedPrevious: TranscribedPiece?
+        /// Nil when nothing was decoded (a silent piece).
+        let modelUsed: ModelSize?
+    }
+
+    /// Decode `range`. Every piece after the first is decoded together with
+    /// as much of the piece before it as fits in one pass of the engine, so
+    /// it doesn't start cold after a pause: on its own a piece loses the
+    /// words that decide "flour" from "flower", and drops repeated phrases.
+    /// Only the words after the previous piece's text are kept; that piece,
+    /// and any cleanup already done for it, stays as it was unless
+    /// `revisesPrevious` lets the merged decode correct its last words. A
+    /// merged decode that can't be lined up with the previous piece is
+    /// dropped and the piece is decoded alone.
+    ///
+    /// Throws when the piece loops or its speech decodes to nothing, so the
+    /// session falls back to decoding the whole recording.
+    static func decodeCommitted(
+        _ range: Range<Int>,
+        samples: [Float],
+        previous: TranscribedPiece?,
+        maxPieceSamples: Int,
+        revisesPrevious: Bool = false,
+        audio: (Range<Int>) async -> [Float]?,
+        transcribe: @Sendable ([Float]) async throws -> VocaTranscription
+    ) async throws -> CommittedDecode {
+        var modelUsed: ModelSize?
+        var contextual: TranscribedPiece?
+        var revised: TranscribedPiece?
+        if let previous, !isSilent(samples),
+           let previousAudio = await audio(previous.range),
+           let start = contextStart(
+               previous: previous.range, next: range, maxSamples: maxPieceSamples, previousAudio: previousAudio
+           ),
+           let mergedAudio = await audio(start..<range.upperBound) {
+            let merged = try await decodePiece(
+                start..<range.upperBound, samples: mergedAudio, transcribe: transcribe
+            ) { modelUsed = $0 }
+            if let split = split(merged.text, previous: previous, contextStart: start) {
+                contextual = TranscribedPiece(range: range, text: split.newText, language: merged.language)
+                if revisesPrevious, let text = split.revisedPrevious {
+                    revised = TranscribedPiece(range: previous.range, text: text, language: previous.language)
+                }
+            }
+        }
+        let piece: TranscribedPiece
+        if let contextual, !(contextual.text.isEmpty && hasSpeech(samples)) {
+            piece = contextual
+        } else {
+            // First piece, or the merged text couldn't be lined up with the
+            // previous piece: decode this one alone.
+            revised = nil
+            piece = try await decodePiece(range, samples: samples, transcribe: transcribe) { modelUsed = $0 }
+        }
+        // Speech that decoded to nothing (a decoder that stopped on its first
+        // token) must not vanish from the result.
+        guard !(piece.text.isEmpty && hasSpeech(samples)) else {
+            VocaLogger.warning(.general, "A piece with speech decoded to nothing; decoding the complete recording instead")
+            throw RecordingTranscription.StreamError.incomplete
+        }
+        return CommittedDecode(piece: piece, revisedPrevious: revised, modelUsed: modelUsed)
+    }
+
+    /// Less context than this (2 s) barely helps a piece and still costs a
+    /// decode, so the piece is decoded alone instead.
+    static let minimumContextSamples = 32_000
+
+    /// Where to look for a pause to start the context in (2 s).
+    static let contextSearchSamples = 32_000
+
+    /// Where the context for `next` starts: the start of the previous piece
+    /// when both fit in one pass of the engine. Otherwise as much of the end
+    /// of the previous piece as fits, starting in a pause so the first word
+    /// isn't cut in half, or nil when less than `minimumContextSamples` fits.
+    ///
+    /// Engines split longer audio themselves (SherpaService at its segment
+    /// limit), usually at the very pause between the two pieces, which gives
+    /// back a cold start for twice the decode.
+    static func contextStart(
+        previous: Range<Int>, next: Range<Int>, maxSamples: Int, previousAudio: [Float]
+    ) -> Int? {
+        let budget = maxSamples - next.count
+        if budget >= previous.count { return previous.lowerBound }
+        guard budget >= minimumContextSamples, previousAudio.count == previous.count else { return nil }
+        let earliest = previous.upperBound - budget
+        let searchEnd = min(earliest + contextSearchSamples, previous.upperBound - minimumContextSamples)
+        let frame = AudioSegmenter.frameLength
+        var energies: [Float] = []
+        var offsets: [Int] = []
+        var offset = earliest
+        while offset + frame <= searchEnd {
+            let local = offset - previous.lowerBound
+            energies.append(SpeechSegmenter.energy(previousAudio[local..<(local + frame)]))
+            offsets.append(offset)
+            offset += frame
+        }
+        guard !energies.isEmpty else { return earliest }
+        let cut = AudioSegmenter.bestCutOffset(energies: energies, frameOffsets: offsets, fallback: earliest)
+        return min(max(cut, earliest), searchEnd)
+    }
+
     /// The words of `merged`, a decode of `previous` and the piece after it,
     /// that belong to the new piece. Nil when `previous`'s text can't be found
     /// at the start of it.
+    static func textAfter(previous: TranscribedPiece, in merged: String) -> String? {
+        split(merged, previous: previous, contextStart: previous.range.lowerBound)?.newText
+    }
+
+    /// Split a decode of context audio (from `contextStart` to the end of
+    /// `previous`) followed by a new piece into the new piece's words and,
+    /// when they differ from its text, the previous piece as this decode
+    /// heard it.
     ///
     /// An exact prefix is the common case. The merged decode often words the
     /// previous piece slightly differently ("hour." for "hour,"), so failing
-    /// that, the best word alignment with it decides where the new words start.
-    static func textAfter(previous: TranscribedPiece, in merged: String) -> String? {
+    /// that, the best word alignment with it decides where the new words
+    /// start.
+    static func split(
+        _ merged: String, previous: TranscribedPiece, contextStart: Int
+    ) -> (newText: String, revisedPrevious: String?)? {
         let prefix = previous.text
-        guard !prefix.isEmpty else { return merged }
-        if merged.hasPrefix(prefix) {
+        guard !prefix.isEmpty else { return (merged.trimmingCharacters(in: .whitespacesAndNewlines), nil) }
+        let wholeContext = contextStart <= previous.range.lowerBound
+        if wholeContext, merged.hasPrefix(prefix) {
             let rest = merged.dropFirst(prefix.count)
             if rest.isEmpty || rest.first?.isWhitespace == true {
-                return rest.trimmingCharacters(in: .whitespacesAndNewlines)
+                return (rest.trimmingCharacters(in: .whitespacesAndNewlines), nil)
             }
         }
-        return OverlapDeduplication.newText(
-            decoded: merged, previous: prefix, contextSeconds: Double(previous.range.count) / 16_000
-        )
+        let contextSamples = previous.range.upperBound - max(contextStart, previous.range.lowerBound)
+        guard let alignment = OverlapDeduplication.align(
+            decoded: merged, previous: prefix,
+            contextSeconds: Double(contextSamples) / 16_000,
+            contextShare: Double(contextSamples) / Double(max(1, previous.range.count))
+        ) else { return nil }
+        let decodedWords = OverlapDeduplication.words(merged)
+        let previousWords = OverlapDeduplication.words(prefix)
+        let newText = decodedWords.dropFirst(alignment.decodedEnd).joined(separator: " ")
+        let heard = Array(decodedWords[alignment.decodedStart..<alignment.decodedEnd])
+        let kept = Array(previousWords[alignment.previousStart...])
+        guard revision(of: kept, heard: heard) != nil else { return (newText, nil) }
+        // Keep the piece's own words up to the first real change: the merged
+        // decode starts at the context, and capitalizes whatever word it
+        // started on as if a sentence began there ("route, We are").
+        var shared = 0
+        while shared < min(kept.count, heard.count),
+              OverlapDeduplication.normalized(kept[shared]) == OverlapDeduplication.normalized(heard[shared]) {
+            shared += 1
+        }
+        let revised = previousWords[..<(alignment.previousStart + shared)] + heard[shared...]
+        return (newText, revised.joined(separator: " "))
+    }
+
+    /// The previous piece's last words as a later decode heard them, when
+    /// that decode changed a few words (not just punctuation or case). A
+    /// larger change more likely means a bad alignment than a better hearing.
+    static func revision(of kept: [String], heard: [String]) -> [String]? {
+        let keptWords = kept.map(OverlapDeduplication.normalized).filter { !$0.isEmpty }
+        let heardWords = heard.map(OverlapDeduplication.normalized).filter { !$0.isEmpty }
+        guard !heardWords.isEmpty, keptWords != heardWords else { return nil }
+        let allowed = max(1, keptWords.count / 5)
+        guard OverlapDeduplication.editDistance(keptWords, heardWords) <= allowed else { return nil }
+        return heard
     }
 
     private static func decodePiece(
@@ -589,6 +866,18 @@ extension IncrementalAudioTranscriber {
         return false
     }
 
+    /// Whether any frame of `samples` reaches speech level.
+    static func containsSpeechLevel(_ samples: [Float]) -> Bool {
+        let frame = AudioSegmenter.frameLength
+        var start = 0
+        while start < samples.count {
+            let end = min(samples.count, start + frame)
+            if SpeechSegmenter.energy(samples[start..<end]) >= speechEnergy { return true }
+            start = end
+        }
+        return false
+    }
+
     static func padded(_ samples: [Float]) -> [Float] {
         guard samples.count < minimumDecodeSamples else { return samples }
         return samples + [Float](repeating: 0, count: minimumDecodeSamples - samples.count)
@@ -614,11 +903,14 @@ final class LiveVocabulary: @unchecked Sendable {
     private struct State {
         var current: String
         var served: Set<String> = []
+        var isSettled: Bool
     }
     private let state: OSAllocatedUnfairLock<State>
 
-    init(_ initial: String) {
-        state = OSAllocatedUnfairLock(initialState: State(current: initial))
+    /// - Parameter settled: False while screen-context terms may still
+    ///   change the vocabulary.
+    init(_ initial: String, settled: Bool = true) {
+        state = OSAllocatedUnfairLock(initialState: State(current: initial, isSettled: settled))
     }
 
     /// The vocabulary for the next decode; remembered as served.
@@ -629,9 +921,16 @@ final class LiveVocabulary: @unchecked Sendable {
         }
     }
 
+    /// The final vocabulary for the recording.
     func update(_ vocabulary: String) {
-        state.withLock { $0.current = vocabulary }
+        state.withLock {
+            $0.current = vocabulary
+            $0.isSettled = true
+        }
     }
+
+    /// Whether the vocabulary can no longer change before stop.
+    var isSettled: Bool { state.withLock { $0.isSettled } }
 
     /// True when no decode so far used anything but `vocabulary`.
     func servedOnly(_ vocabulary: String) -> Bool {

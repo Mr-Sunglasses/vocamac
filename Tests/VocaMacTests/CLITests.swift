@@ -91,10 +91,11 @@ final class CLITests: XCTestCase {
         XCTAssertEqual(response.batch.text, "mock transcription")
         XCTAssertEqual(response.pieces.count, 2)
         // The fake engine answers the same for every decode, so the tail's
-        // merged decode only repeats the first piece and adds nothing.
-        XCTAssertEqual(response.pieces.map(\.text), ["mock transcription", ""])
-        XCTAssertEqual(response.pieceMode.text, "mock transcription")
-        XCTAssertEqual(response.pieceMode.wordDifferenceRate, 0)
+        // merged decode adds nothing after the first piece. The tail holds
+        // speech, so it is decoded alone, as a live session does.
+        XCTAssertEqual(response.pieces.map(\.text), ["mock transcription", "mock transcription"])
+        XCTAssertEqual(response.pieceMode.text, "mock transcription mock transcription")
+        XCTAssertEqual(response.pieceMode.wordDifferenceRate, 1)
         XCTAssertFalse(response.pieceMode.fallsBackToBatch)
         XCTAssertNil(response.batch.cleanedText)
     }

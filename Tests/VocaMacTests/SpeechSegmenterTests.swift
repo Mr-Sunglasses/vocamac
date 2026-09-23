@@ -172,3 +172,43 @@ final class FinalizedPieceTrackerTests: XCTestCase {
         XCTAssertEqual(tracker.pieces(sampleCount: 16_000), [])
     }
 }
+
+extension SpeechSegmenterTests {
+    // MARK: - Where speech ends
+
+    private func closedPieces(_ audio: [Float], min: Double = 4) -> [SpeechSegmenter.ClosedPiece] {
+        var segmenter = SpeechSegmenter(configuration: .init(pauseSeconds: 0.6, minPieceSeconds: min, maxPieceSeconds: 25))
+        var pieces: [SpeechSegmenter.ClosedPiece] = []
+        var offset = 0
+        while offset < audio.count {
+            let end = Swift.min(audio.count, offset + 1_600)
+            pieces += segmenter.appendPieces(Array(audio[offset..<end]))
+            offset = end
+        }
+        return pieces + segmenter.finishPieces()
+    }
+
+    func testClosedPiecesSayWhereTheirSpeechEnds() {
+        let audio = tone(5) + silence(1) + tone(3) + silence(0.5)
+        let pieces = closedPieces(audio)
+        XCTAssertEqual(pieces.count, 2)
+        XCTAssertEqual(pieces[0].speechEnd, 5 * rate, accuracy: AudioSegmenter.frameLength)
+        XCTAssertEqual(pieces[1].speechEnd, 9 * rate, accuracy: AudioSegmenter.frameLength,
+                       "the tail's trailing quiet is after its speech end")
+        XCTAssertEqual(pieces.map(\.range), segment(audio))
+    }
+
+    func testSilentTailEndsWhereItStarts() {
+        let audio = tone(5) + silence(3)
+        let pieces = closedPieces(audio, min: 4)
+        XCTAssertEqual(pieces.last?.speechEnd, pieces.last?.range.lowerBound)
+    }
+
+    func testLastSpeechEndFollowsTheLatestSound() {
+        var segmenter = SpeechSegmenter(configuration: .init(pauseSeconds: 0.6, minPieceSeconds: 4, maxPieceSeconds: 25))
+        _ = segmenter.appendPieces(tone(2) + silence(0.4))
+        XCTAssertEqual(segmenter.lastSpeechEnd, 2 * rate, accuracy: AudioSegmenter.frameLength)
+        _ = segmenter.appendPieces(tone(1))
+        XCTAssertEqual(segmenter.lastSpeechEnd, segmenter.sampleCount, accuracy: AudioSegmenter.frameLength)
+    }
+}

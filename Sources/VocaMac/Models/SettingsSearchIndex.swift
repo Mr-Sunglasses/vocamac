@@ -118,6 +118,16 @@ enum SettingsSearchIndex {
             subtitle: "“crying emoji” becomes 😭",
             keywords: ["emoji", "emojis", "smiley", "output"]
         ),
+        SettingsSearchEntry(
+            id: "process-while-speaking",
+            page: .dictation,
+            title: "Process While Speaking",
+            subtitle: "Transcribe and clean up each sentence before you stop",
+            keywords: [
+                "speed", "faster", "latency", "wait", "streaming", "sentence", "live", "battery",
+                "long dictation", "low power",
+            ]
+        ),
 
         // Writing Styles
         SettingsSearchEntry(
@@ -227,13 +237,6 @@ enum SettingsSearchIndex {
             title: "Cleanup Level",
             subtitle: "None, Light, Medium, or High",
             keywords: ["level", "none", "light", "medium", "high", "corrections"]
-        ),
-        SettingsSearchEntry(
-            id: "process-while-speaking",
-            page: .cleanup,
-            title: "Process While Speaking",
-            subtitle: "Transcribe and clean up each sentence before you stop",
-            keywords: ["speed", "faster", "latency", "wait", "streaming", "sentence", "live", "battery", "long dictation"]
         ),
         SettingsSearchEntry(
             id: "cleanup-provider",

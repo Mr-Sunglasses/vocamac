@@ -568,4 +568,54 @@ final class StatsManagerTests: XCTestCase {
         XCTAssertEqual(statsManager.stats.totalWords, Int.max)
         XCTAssertEqual(statsManager.stats.totalTranscriptions, Int.max)
     }
+
+    // MARK: - Wait after stop
+
+    func testStopWaitsReportMediansForLongDictations() {
+        var stats = UserStats()
+        for seconds in [0.8, 1.0, 1.4] {
+            stats.recordStopWait(StopWait(seconds: seconds, audioSeconds: 30, processedWhileSpeaking: true))
+        }
+        stats.recordStopWait(StopWait(seconds: 3.5, audioSeconds: 30, processedWhileSpeaking: false))
+        stats.recordStopWait(StopWait(seconds: 4.5, audioSeconds: 40, processedWhileSpeaking: false))
+        // Short dictations barely wait either way; they don't count.
+        stats.recordStopWait(StopWait(seconds: 0.3, audioSeconds: 2, processedWhileSpeaking: true))
+
+        XCTAssertEqual(stats.medianStopWait(processedWhileSpeaking: true)?.seconds, 1.0)
+        XCTAssertEqual(stats.medianStopWait(processedWhileSpeaking: true)?.count, 3)
+        XCTAssertEqual(stats.medianStopWait(processedWhileSpeaking: false)?.seconds, 4.0)
+        XCTAssertNil(UserStats().medianStopWait(processedWhileSpeaking: true))
+    }
+
+    func testStopWaitsKeepOnlyTheMostRecent() {
+        var stats = UserStats()
+        for index in 0..<(UserStats.maxStopWaits + 5) {
+            stats.recordStopWait(StopWait(seconds: Double(index), audioSeconds: 20, processedWhileSpeaking: true))
+        }
+        XCTAssertEqual(stats.stopWaits.count, UserStats.maxStopWaits)
+        XCTAssertEqual(stats.stopWaits.first?.seconds, 5)
+        stats.recordStopWait(StopWait(seconds: .nan, audioSeconds: 20, processedWhileSpeaking: true))
+        XCTAssertEqual(stats.stopWaits.last?.seconds, Double(UserStats.maxStopWaits + 4), "invalid waits are ignored")
+    }
+
+    func testStopWaitsSurviveASaveAndDropBadEntries() throws {
+        var stats = UserStats()
+        stats.recordStopWait(StopWait(seconds: 0.9, audioSeconds: 25, processedWhileSpeaking: true))
+        let data = try JSONEncoder().encode(stats)
+        XCTAssertEqual(try JSONDecoder().decode(UserStats.self, from: data).stopWaits, stats.stopWaits)
+
+        let json = #"{"stopWaits":[{"seconds":-1,"audioSeconds":10,"processedWhileSpeaking":true},{"seconds":2,"audioSeconds":12,"processedWhileSpeaking":false}]}"#
+        let decoded = try JSONDecoder().decode(UserStats.self, from: Data(json.utf8))
+        XCTAssertEqual(decoded.stopWaits, [StopWait(seconds: 2, audioSeconds: 12, processedWhileSpeaking: false)])
+        XCTAssertEqual(try JSONDecoder().decode(UserStats.self, from: Data("{}".utf8)).stopWaits, [])
+    }
+
+    func testOneDamagedStopWaitKeepsTheOthers() throws {
+        let json = #"{"stopWaits":[{"seconds":1.2,"audioSeconds":20,"processedWhileSpeaking":true},{"seconds":"soon"},{"seconds":3,"audioSeconds":30,"processedWhileSpeaking":false}]}"#
+        let decoded = try JSONDecoder().decode(UserStats.self, from: Data(json.utf8))
+        XCTAssertEqual(decoded.stopWaits, [
+            StopWait(seconds: 1.2, audioSeconds: 20, processedWhileSpeaking: true),
+            StopWait(seconds: 3, audioSeconds: 30, processedWhileSpeaking: false),
+        ])
+    }
 }

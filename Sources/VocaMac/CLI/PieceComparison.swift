@@ -146,63 +146,57 @@ extension HeadlessTranscriber {
                 try await transcriber.transcribe(audioData: samples, language: language, translate: false, vocabulary: "")
             }
 
-            var segmenter = SpeechSegmenter(configuration: StreamingCommitOptions(
+            let commitOptions = StreamingCommitOptions(
                 pauseSeconds: options.pauseSeconds, minPieceSeconds: options.minPieceSeconds
-            ).segmenterConfiguration(
+            )
+            let configuration = commitOptions.segmenterConfiguration(
                 maxPieceSeconds: TranscriptionRouter.maxPieceSeconds(for: prepared.model)
-            ))
-            var ranges: [Range<Int>] = []
+            )
+            var segmenter = SpeechSegmenter(configuration: configuration)
+            var closed: [SpeechSegmenter.ClosedPiece] = []
             var offset = 0
             while offset < samples.count {
                 let end = min(samples.count, offset + 1_600)
-                ranges += segmenter.append(Array(samples[offset..<end]))
+                closed += segmenter.appendPieces(Array(samples[offset..<end]))
                 offset = end
             }
-            ranges += segmenter.finish()
+            closed += segmenter.finishPieces()
 
+            // Exactly what a live session keeps: each piece decoded with as
+            // much of the one before it as fits in one engine pass.
+            let maxPieceSamples = Int(configuration.maxPieceSeconds * Double(configuration.sampleRate))
             var pieces: [TranscribedPiece] = []
             var decodeSeconds: [Double] = []
-            for range in ranges {
-                let audio = Array(samples[range])
-                guard !IncrementalAudioTranscriber.isSilent(audio) else {
-                    pieces.append(TranscribedPiece(range: range, text: "", language: "auto"))
-                    decodeSeconds.append(0)
-                    continue
+            var fallsBack = false
+            for piece in closed {
+                do {
+                    let (decode, seconds) = try await timed {
+                        try await IncrementalAudioTranscriber.decodeCommitted(
+                            piece.range, samples: Array(samples[piece.range]), previous: pieces.last,
+                            // As the app: corrections only when pieces aren't cleaned ahead.
+                            maxPieceSamples: maxPieceSamples, revisesPrevious: cleanupModel == nil,
+                            audio: { Array(samples[$0]) },
+                            transcribe: { audio in
+                                try await transcriber.transcribe(
+                                    audioData: audio, language: language, translate: false, vocabulary: ""
+                                )
+                            }
+                        )
+                    }
+                    if let revised = decode.revisedPrevious, !pieces.isEmpty {
+                        pieces[pieces.count - 1] = revised
+                    }
+                    pieces.append(decode.piece)
+                    decodeSeconds.append(seconds)
+                } catch RecordingTranscription.StreamError.incomplete {
+                    // A looping or vanished piece: the session would decode
+                    // the whole recording at stop.
+                    fallsBack = true
+                    break
                 }
-                let (result, seconds) = try await timed {
-                    try await transcriber.transcribe(
-                        audioData: IncrementalAudioTranscriber.padded(audio),
-                        language: language, translate: false, vocabulary: ""
-                    )
-                }
-                pieces.append(TranscribedPiece(
-                    range: range, text: result.text.trimmingCharacters(in: .whitespacesAndNewlines),
-                    language: result.detectedLanguage
-                ))
-                decodeSeconds.append(seconds)
-            }
-            // As a live session does: each piece after the first is decoded
-            // together with the one before it.
-            for index in pieces.indices.dropFirst() where !IncrementalAudioTranscriber.isSilent(Array(samples[pieces[index].range])) {
-                let previous = pieces[index - 1]
-                let range = previous.range.lowerBound..<pieces[index].range.upperBound
-                let (result, seconds) = try await timed {
-                    try await transcriber.transcribe(
-                        audioData: IncrementalAudioTranscriber.padded(Array(samples[range])),
-                        language: language, translate: false, vocabulary: ""
-                    )
-                }
-                let merged = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard let text = IncrementalAudioTranscriber.textAfter(previous: previous, in: merged) else {
-                    decodeSeconds[index] += seconds
-                    continue
-                }
-                pieces[index] = TranscribedPiece(range: pieces[index].range, text: text, language: result.detectedLanguage)
-                decodeSeconds[index] = seconds
             }
             let pieceText = TranscribedPiece.join(pieces)
             let tailSeconds = decodeSeconds.last ?? 0
-            let fallsBack = pieces.contains { RunawayText.isRunaway($0.text) }
 
             var cleanup: PieceCleanupMeasurement?
             if let cleanupModel, !fallsBack {

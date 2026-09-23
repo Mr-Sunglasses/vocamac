@@ -137,26 +137,53 @@ final class CleanupSpeculatorTests: XCTestCase {
         XCTAssertNil(claimed)
     }
 
-    func testOnlyTheNewestWaitingPieceIsKept() async {
+    func testOnlyTheNewestWaitingPiecesAreKept() async {
         let cleaner = MockTranscriptCleanup()
         var releases: [CheckedContinuation<Void, Never>] = []
         cleaner.onSpeculate = { await withCheckedContinuation { releases.append($0) } }
         let pipeline = DictationOutputPipeline(cleaner: cleaner, snippets: SnippetExpander())
         let speculator = CleanupSpeculator(pipeline: pipeline) { _ in self.options() }
-        let parts = pieces(["the first sentence is here.", "a second one follows it.", "and then a third one arrives."])
+        let parts = pieces([
+            "the first sentence is here.", "a second one follows it.",
+            "and then a third one arrives.", "a fourth one closes it.",
+        ])
 
         speculator.submit(parts[0], index: 0)
         await waitUntil { releases.count == 1 }
         speculator.submit(parts[1], index: 1)
         speculator.submit(parts[2], index: 2)
+        speculator.submit(parts[3], index: 3)
         try? await Task.sleep(nanoseconds: 50_000_000)
-        releases.removeFirst().resume()
-        await waitUntil { releases.count == 1 }
-        releases.removeFirst().resume()
+        for _ in 0..<3 {
+            await waitUntil { releases.count == 1 }
+            releases.removeFirst().resume()
+        }
         try? await Task.sleep(nanoseconds: 50_000_000)
 
-        XCTAssertEqual(cleaner.speculateCallCount, 2)
-        XCTAssertEqual(cleaner.speculatedTexts.last, parts[2].text)
+        XCTAssertEqual(cleaner.speculatedTexts, [parts[0].text, parts[2].text, parts[3].text],
+                       "the oldest waiting piece is left for the final pass")
+    }
+
+    func testACorrectedPieceWaitsAlongsideTheNextOne() async {
+        let cleaner = MockTranscriptCleanup()
+        var releases: [CheckedContinuation<Void, Never>] = []
+        cleaner.onSpeculate = { await withCheckedContinuation { releases.append($0) } }
+        let pipeline = DictationOutputPipeline(cleaner: cleaner, snippets: SnippetExpander())
+        let speculator = CleanupSpeculator(pipeline: pipeline) { _ in self.options() }
+        let parts = pieces(["we ran out of flower.", "for the bread tonight."])
+        let corrected = TranscribedPiece(range: parts[0].range, text: "we ran out of flour", language: "en")
+
+        speculator.submit(parts[0], index: 0)
+        await waitUntil { releases.count == 1 }
+        speculator.submit(corrected, index: 0)
+        speculator.submit(parts[1], index: 1)
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        for _ in 0..<3 {
+            await waitUntil { releases.count == 1 }
+            releases.removeFirst().resume()
+        }
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(cleaner.speculatedTexts, [parts[0].text, corrected.text, parts[1].text])
     }
 }
 
@@ -197,5 +224,63 @@ extension CleanupSpeculatorTests {
 
         XCTAssertEqual(speculator.hitCount, 0)
         XCTAssertEqual(cleaner.cleanCallCount, 2, "both pieces are cleaned with the selected model")
+    }
+
+    // MARK: - Requests the final pass will make
+
+    func testEveryPieceIsPreparedInTheFirstPiecesLanguage() async {
+        let cleaner = MockTranscriptCleanup()
+        let pipeline = DictationOutputPipeline(cleaner: cleaner, snippets: SnippetExpander())
+        var languages: [String] = []
+        let speculator = CleanupSpeculator(pipeline: pipeline) { language in
+            languages.append(language)
+            var options = self.options()
+            options.language = language
+            return options
+        }
+        speculator.submit(TranscribedPiece(range: 0..<16_000, text: firstSentence, language: "en"), index: 0)
+        speculator.submit(TranscribedPiece(range: 16_000..<32_000, text: secondSentence, language: "de"), index: 1)
+        await waitUntil { languages.count == 2 }
+        XCTAssertEqual(languages, ["en", "en"], "the final pass reads the whole dictation in its first piece's language")
+        await speculator.finish()
+    }
+
+    func testAPieceDecodedEarlyIsReusedWhenItDidntChange() async {
+        let cleaner = MockTranscriptCleanup()
+        cleaner.cleanHandler = { $0.replacingOccurrences(of: "could could", with: "could") }
+        let pipeline = DictationOutputPipeline(cleaner: cleaner, snippets: SnippetExpander())
+        let speculator = CleanupSpeculator(pipeline: pipeline) { _ in self.options() }
+        let parts = pieces([firstSentence, secondSentence])
+
+        speculator.submit(parts[0], index: 0)
+        // The tail, decoded early in the quiet before stop.
+        speculator.submit(parts[1], index: 1)
+        await waitUntil { cleaner.speculateCallCount == 2 }
+        _ = await pipeline.process(
+            TranscribedPiece.join(parts), options: options(), pieces: parts, speculator: speculator
+        )
+        XCTAssertEqual(speculator.hitCount, 2)
+        XCTAssertEqual(cleaner.cleanCallCount, 0, "nothing is left to clean at stop")
+    }
+
+    func testAnOlderSubmissionFinishingLastIsDropped() async {
+        let cleaner = MockTranscriptCleanup()
+        let pipeline = DictationOutputPipeline(cleaner: cleaner, snippets: SnippetExpander())
+        var releaseFirst: CheckedContinuation<Void, Never>?
+        var calls = 0
+        let speculator = CleanupSpeculator(pipeline: pipeline) { _ in
+            calls += 1
+            // The first submission's preparation is held until the second
+            // has been queued.
+            if calls == 1 { await withCheckedContinuation { releaseFirst = $0 } }
+            return self.options()
+        }
+        speculator.submit(TranscribedPiece(range: 0..<16_000, text: "we ran out of flower.", language: "en"), index: 0)
+        await waitUntil { releaseFirst != nil }
+        speculator.submit(TranscribedPiece(range: 0..<16_000, text: "we ran out of flour.", language: "en"), index: 0)
+        await waitUntil { cleaner.speculateCallCount == 1 }
+        releaseFirst?.resume()
+        await speculator.waitUntilIdle()
+        XCTAssertEqual(cleaner.speculatedTexts, ["we ran out of flour."], "the newer text wins")
     }
 }

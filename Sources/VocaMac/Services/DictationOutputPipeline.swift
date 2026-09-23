@@ -527,9 +527,14 @@ struct DictationOutputPipeline {
     /// The model request `process` would make for `text` on its own, or nil
     /// when it would not ask the model. Lets a piece be cleaned while the
     /// user is still speaking, under exactly the key the final pass will use.
-    func cleanupRequest(for text: String, options: DictationOutputOptions) async -> CleanupRequest? {
+    ///
+    /// - Parameter isEnglishText: How the final pass will judge the whole
+    ///   text, when this is one piece of it.
+    func cleanupRequest(
+        for text: String, options: DictationOutputOptions, isEnglishText: Bool? = nil
+    ) async -> CleanupRequest? {
         guard options.profile.cleanup != .raw,
-              case .prepared(let prepared) = prepare(text, options: options),
+              case .prepared(let prepared) = prepare(text, options: options, isEnglishText: isEnglishText),
               case .model(let plan) = planCleanup(prepared, options: options) else { return nil }
         let source = prepared.masked.text
         let protected = await Task.detached(priority: .utility) { RewriteProtectedText(source) }.value

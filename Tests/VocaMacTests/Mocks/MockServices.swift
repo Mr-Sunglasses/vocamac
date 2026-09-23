@@ -664,6 +664,11 @@ final class MockStatsManager: StatsManaging, ObservableObject {
         recordCallCount += 1
     }
 
+    var recordedStopWaits: [StopWait] = []
+    func recordStopWait(_ wait: StopWait) {
+        recordedStopWaits.append(wait)
+    }
+
     func refreshCurrentStreak() {
         refreshCurrentStreakCallCount += 1
     }
