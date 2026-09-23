@@ -14,9 +14,8 @@ import Foundation
 /// changed since (a spoken correction reaching back, a different writing
 /// style), is cleaned again at stop. One generation runs at a time, because
 /// llama.cpp here serves a single sequence. If pieces arrive faster than the
-/// model answers, only the two newest waiting pieces are kept (a piece the
-/// next one's decode corrected, and that next piece); older ones are cleaned
-/// at stop.
+/// model answers, only the two newest waiting pieces are kept (a piece and
+/// the tail decoded early after it); older ones are cleaned at stop.
 ///
 /// Created per recording and never reused.
 @MainActor
