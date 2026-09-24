@@ -249,17 +249,23 @@ enum TranscriptRepetition {
     /// real dictations came close, and both loops ran past fifteen.
     static let minimumSymbolCopies = 6
 
+    /// Characters whose long runs are written on purpose: Markdown rules and
+    /// headings ("------", "***", "======", "###"), and plain-text dividers.
+    /// A run of them is never treated as a loop.
+    static let dividerCharacters: Set<Character> = ["-", "_", "=", "*", "~", "#"]
+
     /// The first loop of punctuation or symbols in `text`, if any.
     ///
-    /// Spaces between copies do not break a run; anything else does, so the
-    /// separators in "1,000,000,000,000" never line up into one.
+    /// Spaces and tabs between copies do not break a run; anything else does,
+    /// including a line break, so the separators in "1,000,000,000,000" never
+    /// line up into one, and neither do symbols on separate lines.
     static func symbolLoop(in text: String) -> SymbolLoop? {
         var run: [String.Index] = []
         for index in text.indices {
             let character = text[index]
-            if isSymbol(character) {
+            if isSymbol(character), !dividerCharacters.contains(character) {
                 run.append(index)
-            } else if !character.isWhitespace {
+            } else if !(character.isWhitespace && !character.isNewline) {
                 if let loop = symbolLoop(in: run, of: text) { return loop }
                 run.removeAll()
             }

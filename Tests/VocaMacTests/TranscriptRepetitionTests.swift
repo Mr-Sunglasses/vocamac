@@ -220,6 +220,18 @@ final class TranscriptRepetitionTests: XCTestCase {
             "Time is 10:30:00:00:00:00.",
             "Smile :-) :-) :-)",
             "Done. Next. Then. Okay. Fine. Good.",
+            // Dividers and headings are written on purpose.
+            "------",
+            "Notes\n------\nFirst item",
+            "---\n---",
+            "a ====== b",
+            "******",
+            "Name ______ here",
+            "~~~~~~",
+            "###### Heading",
+            // A line break ends a run: three on each line is not six.
+            "Wow!!!\n!!! Nice",
+            "Why???\n???",
         ] {
             XCTAssertNil(TranscriptRepetition.symbolLoop(in: text), text)
             XCTAssertEqual(TranscriptRepetition.collapsingLoops(in: text), text, text)
