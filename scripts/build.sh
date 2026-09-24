@@ -101,6 +101,12 @@ XCODE_CONFIG="$(echo "${CONFIG}" | sed 's/release/Release/; s/debug/Debug/')"
 # flags, xcodebuild stops for interactive "trust this plugin?" approval, which
 # never resolves in a script. Safe here because every package is version-pinned
 # in Package.swift, so the code being trusted only changes on a deliberate bump.
+#
+# CLANG_COVERAGE_MAPPING=NO: the package scheme xcodebuild generates turns code
+# coverage on, which compiles C targets with -fprofile-instr-generate and links
+# the app with -profile-generate. The shipped binary then carries the LLVM
+# profiling runtime (about 9 MB) and writes a multi-megabyte default.profraw
+# into the current directory every time the CLI exits.
 xcodebuild build \
     -scheme VocaMac \
     -configuration "$XCODE_CONFIG" \
@@ -108,6 +114,7 @@ xcodebuild build \
     -destination 'platform=macOS,arch=arm64' \
     -skipMacroValidation \
     -skipPackagePluginValidation \
+    CLANG_COVERAGE_MAPPING=NO \
     ONLY_ACTIVE_ARCH=YES \
     -quiet
 
