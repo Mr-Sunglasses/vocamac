@@ -251,7 +251,8 @@ enum TranscriptRepetition {
 
     /// Characters whose long runs are written on purpose: Markdown rules and
     /// headings ("------", "***", "======", "###"), and plain-text dividers.
-    /// A run of them is never treated as a loop.
+    /// A repeated unit made only of these is never a loop; one that mixes in
+    /// anything else ("-:-:-:") still is.
     static let dividerCharacters: Set<Character> = ["-", "_", "=", "*", "~", "#"]
 
     /// The first loop of punctuation or symbols in `text`, if any.
@@ -263,7 +264,7 @@ enum TranscriptRepetition {
         var run: [String.Index] = []
         for index in text.indices {
             let character = text[index]
-            if isSymbol(character), !dividerCharacters.contains(character) {
+            if isSymbol(character) {
                 run.append(index)
             } else if !(character.isWhitespace && !character.isNewline) {
                 if let loop = symbolLoop(in: run, of: text) { return loop }
@@ -292,7 +293,8 @@ enum TranscriptRepetition {
                     copies += 1
                     next += unitLength
                 }
-                guard copies >= minimumSymbolCopies else { continue }
+                guard copies >= minimumSymbolCopies,
+                      !unit.allSatisfy(dividerCharacters.contains) else { continue }
                 // A copy cut off at the end belongs to the loop.
                 var partial = 0
                 while next + partial < characters.count, partial < unitLength - 1,

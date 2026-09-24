@@ -207,6 +207,9 @@ final class TranscriptRepetitionTests: XCTestCase {
         XCTAssertEqual(TranscriptRepetition.collapsingLoops(in: "okay. :::::::: then"), "okay. then")
         XCTAssertEqual(TranscriptRepetition.collapsingLoops(in: "?!?!?!?!?!?!?!"), "")
         XCTAssertEqual(TranscriptRepetition.collapsingLoops(in: "::::::: hello"), "hello")
+        // A unit that mixes a divider character with anything else still loops.
+        XCTAssertEqual(TranscriptRepetition.collapsingLoops(in: "okay -:-:-:-:-:-:-:"), "okay -:")
+        XCTAssertEqual(TranscriptRepetition.collapsingLoops(in: "Done.#!#!#!#!#!#!"), "Done.")
     }
 
     func testPunctuationPeopleWriteIsNotALoop() {
@@ -229,6 +232,8 @@ final class TranscriptRepetitionTests: XCTestCase {
             "Name ______ here",
             "~~~~~~",
             "###### Heading",
+            "*-*-*-*-*-*-*-",
+            "Done? ------",
             // A line break ends a run: three on each line is not six.
             "Wow!!!\n!!! Nice",
             "Why???\n???",
