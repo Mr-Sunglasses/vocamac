@@ -125,6 +125,13 @@ if [ ! -f "$BINARY" ]; then
     exit 1
 fi
 
+# Fail rather than ship the profiling runtime if an Xcode update stops honoring
+# CLANG_COVERAGE_MAPPING=NO above.
+if otool -l "$BINARY" | grep '__llvm_prf_' >/dev/null; then
+    echo "❌ Build failed — $BINARY is instrumented for code coverage (__llvm_prf sections)"
+    exit 1
+fi
+
 # Check if this is a fresh bundle creation or an update
 FIRST_TIME=false
 if [ ! -d "${APP_DIR}" ]; then
