@@ -202,7 +202,6 @@ final class TranscriptRepetitionTests: XCTestCase {
     func testRepeatedPunctuationKeepsWhatTheSentenceNeeds() {
         XCTAssertEqual(TranscriptRepetition.collapsingLoops(in: "Wait!!!!!!!!"), "Wait!")
         XCTAssertEqual(TranscriptRepetition.collapsingLoops(in: "So.........."), "So...")
-        XCTAssertEqual(TranscriptRepetition.collapsingLoops(in: "Done? ? ? ? ? ? ? ?"), "Done?")
         XCTAssertEqual(TranscriptRepetition.collapsingLoops(in: "okay ::::::::: then"), "okay : then")
         XCTAssertEqual(TranscriptRepetition.collapsingLoops(in: "okay. :::::::: then"), "okay. then")
         XCTAssertEqual(TranscriptRepetition.collapsingLoops(in: "?!?!?!?!?!?!?!"), "")
@@ -234,12 +233,25 @@ final class TranscriptRepetitionTests: XCTestCase {
             "###### Heading",
             "*-*-*-*-*-*-*-",
             "Done? ------",
-            // A line break ends a run: three on each line is not six.
+            // Only back-to-back symbols form a run: spaced tokens and three on
+            // each of two lines are not six copies.
+            "Smile :-) :-) :-) :-) :-) :-)",
+            "a -> b -> c -> d -> e -> f -> g",
+            "-> -> -> -> -> -> ->",
+            "Done? ? ? ? ? ? ? ?",
             "Wow!!!\n!!! Nice",
             "Why???\n???",
         ] {
             XCTAssertNil(TranscriptRepetition.symbolLoop(in: text), text)
             XCTAssertEqual(TranscriptRepetition.collapsingLoops(in: text), text, text)
         }
+    }
+
+    func testLongDividersAreSkippedWithoutScanning() {
+        let divider = String(repeating: "-", count: 20_000)
+        let text = "Notes " + divider + " " + divider
+        let started = Date()
+        XCTAssertNil(TranscriptRepetition.symbolLoop(in: text))
+        XCTAssertLessThan(Date().timeIntervalSince(started), 1)
     }
 }

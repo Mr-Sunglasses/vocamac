@@ -235,7 +235,7 @@ enum TranscriptRepetition {
     struct SymbolLoop: Equatable {
         /// From the first copy through any copy cut off at the end.
         let range: Range<String.Index>
-        /// One copy, without the spaces a spaced run ("? ? ? ?") puts between.
+        /// One copy.
         let unit: String
         /// Complete copies, including the first.
         let copies: Int
@@ -257,16 +257,16 @@ enum TranscriptRepetition {
 
     /// The first loop of punctuation or symbols in `text`, if any.
     ///
-    /// Spaces and tabs between copies do not break a run; anything else does,
-    /// including a line break, so the separators in "1,000,000,000,000" never
-    /// line up into one, and neither do symbols on separate lines.
+    /// Only symbols written back to back form a run. A space, a line break or
+    /// anything else ends it, so separate tokens ("-> -> ->", ":-) :-) :-)"),
+    /// the separators in "1,000,000,000,000" and symbols on separate lines
+    /// never add up. Both loops seen so far were unbroken.
     static func symbolLoop(in text: String) -> SymbolLoop? {
         var run: [String.Index] = []
         for index in text.indices {
-            let character = text[index]
-            if isSymbol(character) {
+            if isSymbol(text[index]) {
                 run.append(index)
-            } else if !(character.isWhitespace && !character.isNewline) {
+            } else {
                 if let loop = symbolLoop(in: run, of: text) { return loop }
                 run.removeAll()
             }
@@ -280,7 +280,11 @@ enum TranscriptRepetition {
 
     /// A loop inside one run of symbols, given as their positions in `text`.
     private static func symbolLoop(in run: [String.Index], of text: String) -> SymbolLoop? {
+        guard run.count >= minimumSymbolCopies else { return nil }
         let characters = run.map { text[$0] }
+        // A divider can be long, and nothing in it is a loop; don't scan it
+        // from every position.
+        guard !characters.allSatisfy(dividerCharacters.contains) else { return nil }
         for start in characters.indices {
             let longestUnit = min(maximumSymbolUnitLength, (characters.count - start) / 2)
             guard longestUnit >= 1 else { break }
