@@ -250,12 +250,16 @@ jobs:
           EOF
 
           ASSETS=(dist/VocaMac-*.dmg dist/VocaMac-*.zip dist/checksums.txt)
-          # A re-run of this workflow for the same tag replaces the assets on the
-          # existing (possibly draft) release instead of failing.
-          EXISTING=$(gh api "repos/${GH_REPO}/releases" --paginate \
-            --jq ".[] | select(.tag_name == \"${GITHUB_REF_NAME}\") | .id")
-          if [ -n "$EXISTING" ]; then
+          # A re-run for the same tag replaces the assets on the draft. Once the
+          # release is published, its DMG checksum is in the Homebrew tap and
+          # the in-app updater, so a rebuild must not replace it: cut a new tag.
+          IS_DRAFT=$(gh api "repos/${GH_REPO}/releases" --paginate \
+            --jq ".[] | select(.tag_name == \"${GITHUB_REF_NAME}\") | .draft")
+          if [ "$IS_DRAFT" = "true" ]; then
             gh release upload "$GITHUB_REF_NAME" "${ASSETS[@]}" --clobber
+          elif [ -n "$IS_DRAFT" ]; then
+            echo "::error::Release ${GITHUB_REF_NAME} is already published; not replacing its assets. Tag a new version instead."
+            exit 1
           else
             gh release create "$GITHUB_REF_NAME" "${ASSETS[@]}" \
               --draft \
