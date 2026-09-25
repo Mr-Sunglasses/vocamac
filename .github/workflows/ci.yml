@@ -41,6 +41,7 @@ jobs:
               - 'scripts/**'
               - 'Makefile'
               - 'VocaMac.entitlements'
+              - '.swiftlint.yml'
               # A change to this workflow must exercise the jobs it defines,
               # or a CI edit merges having proven nothing. Scoped to this file
               # so editing an unrelated workflow does not book three macOS
@@ -221,6 +222,28 @@ jobs:
           test -f VocaMac.app/Contents/Resources/Assets.car || echo "⚠️ Assets.car missing"
           echo "App bundle verified"
 
+  lint:
+    name: SwiftLint
+    needs: changes
+    if: needs.changes.outputs.app == 'true'
+    runs-on: macos-15
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # SwiftLint loads SourceKit from the selected Xcode; use the same one as
+      # the build jobs so new Swift syntax parses.
+      - name: Select Xcode 26
+        run: ./scripts/select-xcode-26.sh
+
+      # Same pinned, checksum-verified binary as `make lint`.
+      - name: Lint
+        run: ./scripts/swiftlint.sh --reporter github-actions-logging
+
   # Build website (only when web files change)
   build-website:
     name: Build Website
@@ -259,7 +282,7 @@ jobs:
   # instead of tracking each job above.
   ci:
     name: CI
-    needs: [changes, test, release-build, app-bundle, build-website]
+    needs: [changes, test, release-build, app-bundle, lint, build-website]
     if: always()
     runs-on: ubuntu-latest
     steps:
