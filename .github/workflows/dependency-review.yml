@@ -1,7 +1,12 @@
 name: Dependency Review
 
-# Fails a PR that adds a dependency (Swift package or workflow action) with a
-# known high or critical vulnerability. Uses the repository dependency graph.
+# Fails a PR that adds or bumps a Swift package to a version with a known high
+# or critical advisory. The dependency graph reads Package.resolved (the
+# swift ecosystem in the GitHub Advisory Database) and records the version.
+#
+# It does not cover actions: they are pinned to commit SHAs, which advisory
+# version ranges never match. Actions are kept current by Dependabot and
+# audited by zizmor (workflow-security.yml) instead.
 
 on:
   pull_request:

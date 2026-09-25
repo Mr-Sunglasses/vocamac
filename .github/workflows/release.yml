@@ -218,31 +218,49 @@ jobs:
           security delete-keychain "$KEYCHAIN_PATH" 2>/dev/null || true
 
       # ── Release ─────────────────────────────────────────────────────────────
+      # gh ships on the runner, so the job that holds a write token runs no
+      # third-party release action. Generated notes are appended to the body.
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
-        with:
-          generate_release_notes: true
-          draft: true
-          files: |
-            dist/VocaMac-*.dmg
-            dist/VocaMac-*.zip
-            dist/checksums.txt
-          body: |
-            ## VocaMac ${{ steps.version.outputs.VERSION }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ steps.version.outputs.VERSION }}
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/release-body.md" <<EOF
+          ## VocaMac ${VERSION}
 
-            ### Installation
+          ### Installation
 
-            1. Download `VocaMac-${{ steps.version.outputs.VERSION }}-arm64.dmg`
-            2. Open the DMG and drag VocaMac to Applications
-            3. Open VocaMac from Applications
-            4. Grant **Microphone**, **Accessibility**, and **Input Monitoring** permissions when prompted
+          1. Download \`VocaMac-${VERSION}-arm64.dmg\`
+          2. Open the DMG and drag VocaMac to Applications
+          3. Open VocaMac from Applications
+          4. Grant **Microphone**, **Accessibility**, and **Input Monitoring** permissions when prompted
 
-            > This release is **Developer ID signed and notarized** by Apple.
-            > macOS will open it without any security warnings.
+          > This release is **Developer ID signed and notarized** by Apple.
+          > macOS will open it without any security warnings.
 
-            ### Requirements
-            - macOS 14 (Sonoma) or later
-            - Apple Silicon (arm64)
+          ### Requirements
+          - macOS 14 (Sonoma) or later
+          - Apple Silicon (arm64)
 
-            ### Checksums (SHA-256)
-            See `checksums.txt` for verification.
+          ### Checksums (SHA-256)
+          See \`checksums.txt\` for verification. To check that a file was built by
+          this repository's release workflow: \`gh attestation verify <file> -R ${GH_REPO}\`
+          EOF
+
+          ASSETS=(dist/VocaMac-*.dmg dist/VocaMac-*.zip dist/checksums.txt)
+          # A re-run of this workflow for the same tag replaces the assets on the
+          # existing (possibly draft) release instead of failing.
+          EXISTING=$(gh api "repos/${GH_REPO}/releases" --paginate \
+            --jq ".[] | select(.tag_name == \"${GITHUB_REF_NAME}\") | .id")
+          if [ -n "$EXISTING" ]; then
+            gh release upload "$GITHUB_REF_NAME" "${ASSETS[@]}" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" "${ASSETS[@]}" \
+              --draft \
+              --verify-tag \
+              --title "$GITHUB_REF_NAME" \
+              --generate-notes \
+              --notes-file "$RUNNER_TEMP/release-body.md"
+          fi

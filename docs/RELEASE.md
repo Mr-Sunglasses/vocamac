@@ -199,7 +199,7 @@ swift build -c release --arch arm64 --arch x86_64
 
 ### Security workflows
 
-- **`dependency-review.yml`**: fails a PR that adds a Swift package or action with a known high or critical vulnerability
+- **`dependency-review.yml`**: fails a PR that adds or bumps a Swift package to a version with a known high or critical advisory. SHA-pinned actions fall outside its version matching; Dependabot and zizmor cover them
 - **`workflow-security.yml`**: runs [zizmor](https://docs.zizmor.sh) on workflow changes and reports findings to code scanning (config: `.github/zizmor.yml`)
 - **`scorecard.yml`**: weekly and on every push to `main`, runs [OpenSSF Scorecard](https://scorecard.dev) and reports to code scanning
 - **`.github/dependabot.yml`**: weekly update PRs for workflow actions and Swift packages, after a 7-day cooldown
