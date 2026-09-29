@@ -1,7 +1,7 @@
 import XCTest
 @testable import VocaMac
 
-private struct StubCleanupCredentials: CleanupCredentialStoring {
+private struct StubCleanupCredentials: EndpointCredentialStoring {
     let apiKey: String?
     func readAPIKey() -> String? { apiKey }
     func saveAPIKey(_ value: String) throws {}
@@ -429,6 +429,23 @@ final class SettingsArchiveTests: XCTestCase {
         XCTAssertEqual(archive.values[PreferenceKey.mouseTriggerButton], .integer(1))
         XCTAssertEqual(archive.values["vocamac.silenceDuration"], .double(2.0))
         XCTAssertEqual(archive.values[PreferenceKey.historyEnabled], .bool(true))
+    }
+
+    func testCustomEndpointSelectionIsNeverImported() throws {
+        defaults.set(ModelSize.tiny.rawValue, forKey: PreferenceKey.selectedModelSize)
+        let archive = SettingsArchive(values: [
+            PreferenceKey.selectedModelSize: .string(ModelSize.customEndpoint.rawValue),
+        ])
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        try SettingsArchiveService.restore(try encoder.encode(archive), defaults: defaults)
+        XCTAssertEqual(defaults.string(forKey: PreferenceKey.selectedModelSize), ModelSize.tiny.rawValue)
+
+        let local = SettingsArchive(values: [
+            PreferenceKey.selectedModelSize: .string(ModelSize.small.rawValue),
+        ])
+        try SettingsArchiveService.restore(try encoder.encode(local), defaults: defaults)
+        XCTAssertEqual(defaults.string(forKey: PreferenceKey.selectedModelSize), ModelSize.small.rawValue)
     }
 
     func testClipboardConsentIsNeverImported() throws {

@@ -235,6 +235,156 @@ struct CleanupEndpointConfiguration: Codable, Equatable {
     }
 }
 
+/// Which request shape a remote speech endpoint expects. These are the two
+/// contracts VocaLinux's Remote API engine speaks, so a server that works
+/// with one app works with the other.
+enum SpeechEndpointKind: String, CaseIterable, Codable, Identifiable {
+    /// OpenAI's audio API: `POST <base>/v1/audio/transcriptions`.
+    case openAICompatible
+    /// A whisper.cpp server's built-in endpoint: `POST <base>/inference`.
+    case whisperCpp
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .openAICompatible: return "OpenAI-compatible"
+        case .whisperCpp:       return "whisper.cpp server"
+        }
+    }
+
+    /// Request path appended to the base URL, without a leading slash.
+    var path: String {
+        switch self {
+        case .openAICompatible: return "v1/audio/transcriptions"
+        case .whisperCpp:       return "inference"
+        }
+    }
+}
+
+/// Non-secret settings for the Custom Endpoint speech model: where audio is
+/// sent and which contract the server speaks. The optional API key lives in
+/// Keychain and is never exported.
+struct SpeechEndpointConfiguration: Codable, Equatable {
+    var kind: SpeechEndpointKind = .openAICompatible
+    var baseURL: String = ""
+    var model: String = ""
+
+    private enum CodingKeys: String, CodingKey {
+        case kind, baseURL, model
+    }
+
+    /// Partial or hand-edited JSON falls back to the defaults per field
+    /// instead of dropping the whole config.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        kind = try container.decodeIfPresent(SpeechEndpointKind.self, forKey: .kind) ?? .openAICompatible
+        baseURL = try container.decodeIfPresent(String.self, forKey: .baseURL) ?? ""
+        model = try container.decodeIfPresent(String.self, forKey: .model) ?? ""
+    }
+
+    init() {}
+
+    var resolvedBaseURL: String {
+        baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// The `model` field OpenAI's API requires; whisper.cpp ignores it.
+    var resolvedModel: String {
+        let trimmed = model.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "whisper-1" : trimmed
+    }
+
+    func validationProblem() -> String? {
+        guard let url = URL(string: resolvedBaseURL) else {
+            return "Enter an HTTP or HTTPS endpoint."
+        }
+        return Self.validationProblem(for: url)
+    }
+
+    /// Whether this URL may receive a speech recording (configured base or
+    /// a redirect hop). HTTPS is broadly OK; plain HTTP is limited to
+    /// loopback, RFC1918, and `.local` names.
+    static func allowsRecordingDestination(_ url: URL) -> Bool {
+        validationProblem(for: url) == nil
+    }
+
+    /// Hosts that may receive a recording over plain HTTP: this Mac's
+    /// loopback, RFC1918 private IPv4, and `.local` mDNS names. Link-local
+    /// (169.254/16, fe80::/10) and bare hostnames without a dot are not
+    /// enough; recordings are more sensitive than cleanup text, so this
+    /// list is tighter than `CleanupEndpointConfiguration.isLocalNetworkHost`.
+    static func isCleartextAllowedHost(_ host: String?) -> Bool {
+        guard let host = host?.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "[]")),
+              !host.isEmpty else { return false }
+        if host == "localhost" || host == "::1" { return true }
+        if host.hasSuffix(".local") { return true }
+        if host.contains(":") { return false }
+        let parts = host.split(separator: ".")
+        let octets = parts.compactMap { UInt8($0) }
+        guard octets.count == 4, octets.count == parts.count else { return false }
+        switch (octets[0], octets[1]) {
+        case (127, _), (10, _), (192, 168): return true
+        case (172, 16...31): return true
+        default: return false
+        }
+    }
+
+    /// Base URL safe to write to logs: host and path only, never userinfo.
+    var loggableBaseURL: String {
+        guard var components = URLComponents(string: resolvedBaseURL) else {
+            return resolvedBaseURL.contains("@") ? "(endpoint URL)" : resolvedBaseURL
+        }
+        components.user = nil
+        components.password = nil
+        return components.string ?? resolvedBaseURL
+    }
+
+    static func validationProblem(for url: URL) -> String? {
+        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: true)
+                ?? URLComponents(string: url.absoluteString),
+              let scheme = components.scheme?.lowercased(),
+              scheme == "https" || scheme == "http",
+              components.host != nil else {
+            return "Enter an HTTP or HTTPS endpoint."
+        }
+        if components.user != nil || components.password != nil {
+            return "Don't put a username or password in the endpoint URL. Save an API key instead."
+        }
+        guard scheme == "https" || isCleartextAllowedHost(components.host) else {
+            return "Use HTTPS for servers outside this Mac or your local network."
+        }
+        return nil
+    }
+
+    /// Where recordings are posted, or nil while the settings are invalid.
+    ///
+    /// OpenAI-compatible clients often paste a base that already ends in `/v1`
+    /// (matching cleanup's defaults). Strip that suffix before appending
+    /// `v1/audio/transcriptions` so we never post to `/v1/v1/...`.
+    var transcriptionsURL: URL? {
+        guard validationProblem() == nil else { return nil }
+        var base = resolvedBaseURL.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        if kind == .openAICompatible, base.lowercased().hasSuffix("/v1") {
+            base = String(base.dropLast(3))
+                .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        }
+        return URL(string: base + "/" + kind.path)
+    }
+
+    static func decode(_ json: String?) -> SpeechEndpointConfiguration {
+        guard let data = json?.data(using: .utf8),
+              let value = try? JSONDecoder().decode(Self.self, from: data) else { return Self() }
+        return value
+    }
+
+    func encoded() -> String {
+        guard let data = try? JSONEncoder().encode(self),
+              let value = String(data: data, encoding: .utf8) else { return "" }
+        return value
+    }
+}
+
 /// A browser-specific writing rule. The app binding remains the fallback.
 struct WebsiteStyleBinding: Codable, Identifiable, Hashable {
     var id: UUID = UUID()
