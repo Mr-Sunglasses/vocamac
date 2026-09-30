@@ -174,15 +174,25 @@ final class AppleSpeechService: @unchecked Sendable {
             try Task.checkCancellation()
             let hints = RecognitionHints.contextualStrings(from: vocabulary)
             let detectedLanguage = language ?? locale.language.languageCode?.identifier ?? "auto"
-            let tracker = onPiece.map { FinalizedPieceTracker(language: detectedLanguage, onPiece: $0) }
+            // Always track finalized results so batch (no onPiece) still gets
+            // segment timings for history. Live callers keep their callback.
+            let tracker = FinalizedPieceTracker(
+                language: detectedLanguage, onPiece: onPiece ?? { _, _ in }
+            )
             let (text, count) = try await session.transcribe(chunks, contextualStrings: hints) { text, endSeconds in
-                tracker?.finalized(text, endSeconds: endSeconds)
+                tracker.finalized(text, endSeconds: endSeconds)
             }
+            let pieces = tracker.pieces(sampleCount: count)
+            // pieces() needs >= 2 aligned results for live commit mode. Batch
+            // and single-result decodes still need a segment for history.
+            let segments = pieces.isEmpty
+                ? tracker.timedSegments(sampleCount: count, fallbackText: text)
+                : pieces.map(TimedSegment.init(piece:))
             return VocaTranscription(
                 text: text, duration: CFAbsoluteTimeGetCurrent() - start,
                 detectedLanguage: detectedLanguage,
                 audioLengthSeconds: Double(count) / 16_000, modelUsed: .appleSpeech,
-                pieces: tracker?.pieces(sampleCount: count) ?? []
+                pieces: pieces, segments: segments
             )
         } catch {
             await session.cancel()
@@ -480,6 +490,75 @@ final class FinalizedPieceTracker: @unchecked Sendable {
             let joined = finalized.map(\.text).joined().trimmingCharacters(in: .whitespacesAndNewlines)
             guard pieces.count >= 2, TranscribedPiece.join(pieces) == joined else { return [] }
             return pieces
+        }
+    }
+
+    /// Segment timings from finalized results for history, even when they are
+    /// not usable as live pieces (a single result, or a join mismatch). Each
+    /// result becomes a segment; with no usable results, one segment covers
+    /// the full audio using `fallbackText`.
+    ///
+    /// When Apple reports result ends past the recording, a plain clamp would
+    /// hand the whole `[0, sampleCount]` range to the first overshooting
+    /// result and drop later text. Keep in-bounds ends as reported, then
+    /// split the space left after them evenly between the results that no
+    /// longer fit — scaling overshooting ends against the last end can map
+    /// one below an earlier in-bounds boundary and erase its range.
+    func timedSegments(sampleCount: Int, fallbackText: String) -> [TimedSegment] {
+        lock.withLock {
+            var segments: [TimedSegment] = []
+            var start = 0
+            // Only non-last ends that already reach past the recording force a
+            // remap: a plain clamp would consume `[0, sampleCount]` and drop
+            // later text. If only the last result overshoots, stretching it to
+            // `sampleCount` already keeps every earlier in-bounds range.
+            let firstOvershoot = finalized.dropLast().firstIndex { $0.end > sampleCount }
+            var keptNonEmpty = 0
+            var seenNonEmpty = 0
+            for (index, result) in finalized.enumerated() {
+                let trimmed = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty { seenNonEmpty += 1 }
+                let rawEnd: Int
+                if index == finalized.count - 1 {
+                    rawEnd = sampleCount
+                } else if let first = firstOvershoot, index >= first {
+                    // Results from the first overshoot onward share the
+                    // remaining `[start, sampleCount]` tail evenly.
+                    let left = finalized.count - index
+                    rawEnd = start + Int((Double(sampleCount - start) / Double(left)).rounded())
+                } else {
+                    rawEnd = result.end
+                }
+                let end = min(max(rawEnd, start), sampleCount)
+                if end > start, !trimmed.isEmpty {
+                    segments.append(TimedSegment(
+                        start: Double(start) / 16_000,
+                        end: Double(end) / 16_000,
+                        text: trimmed, words: []
+                    ))
+                    keptNonEmpty += 1
+                }
+                start = max(start, end)
+            }
+            // Scaling / rounding can still collapse a gap; never hide finalized
+            // text that the transcript kept — fall back to one full-audio segment.
+            if keptNonEmpty < seenNonEmpty {
+                let trimmed = fallbackText.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty, sampleCount > 0 else {
+                    return segments.isEmpty ? [] : segments
+                }
+                return [TimedSegment(
+                    start: 0, end: Double(sampleCount) / 16_000, text: trimmed, words: []
+                )]
+            }
+            if segments.isEmpty {
+                let trimmed = fallbackText.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty, sampleCount > 0 else { return [] }
+                return [TimedSegment(
+                    start: 0, end: Double(sampleCount) / 16_000, text: trimmed, words: []
+                )]
+            }
+            return segments
         }
     }
 }

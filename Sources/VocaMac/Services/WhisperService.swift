@@ -172,12 +172,17 @@ final class WhisperService: @unchecked Sendable {
     ///   - translate: Whether to translate to English (if true) or transcribe as-is (if false)
     ///   - vocabulary: Custom terms (newline/comma separated) to bias transcription toward,
     ///     e.g. proper nouns and jargon like names. Empty string disables it.
+    ///   - includeWordTimestamps: When true, WhisperKit runs DTW word alignment so
+    ///     history Timestamps can show per-word ranges. Off by default — that path
+    ///     is a latency cost and is not needed for streaming/commit piece decodes
+    ///     that only need the transcript text.
     /// - Returns: VocaTranscription with the transcribed text and metadata
     func transcribe(
         audioData: [Float],
         language: String? = nil,
         translate: Bool = false,
-        vocabulary: String = ""
+        vocabulary: String = "",
+        includeWordTimestamps: Bool = false
     ) async throws -> VocaTranscription {
         guard let kit = whisperKit else {
             throw WhisperError.modelNotLoaded
@@ -205,7 +210,10 @@ final class WhisperService: @unchecked Sendable {
             ? Self.promptTokens(for: vocabulary, tokenizer: kit.tokenizer)
             : nil
 
-        // Configure decoding options — optimized for low latency dictation
+        // Low-latency dictation defaults: no temperature fallback. Word-level
+        // timestamps ask WhisperKit for DTW alignment — only when the caller
+        // needs them for history Timestamps (batch/final), not on every
+        // streaming or commit-piece decode.
         var options = DecodingOptions(
             task: translate ? .translate : .transcribe,
             language: language,
@@ -213,7 +221,7 @@ final class WhisperService: @unchecked Sendable {
             temperatureFallbackCount: 0,  // No fallback for speed
             usePrefillPrompt: language != nil || promptTokens != nil,
             detectLanguage: language == nil,
-            wordTimestamps: false,
+            wordTimestamps: includeWordTimestamps,
             windowClipTime: Self.windowClipTime(sampleCount: audioData.count),
             promptTokens: promptTokens,
             chunkingStrategy: nil
@@ -338,7 +346,12 @@ final class WhisperService: @unchecked Sendable {
                 duration: elapsed,
                 detectedLanguage: detectedLanguage,
                 audioLengthSeconds: audioLengthSeconds,
-                modelUsed: modelUsed
+                modelUsed: modelUsed,
+                segments: Self.filteredTimedSegments(
+                    from: results.flatMap(\.segments),
+                    model: modelUsed,
+                    audioSeconds: audioLengthSeconds
+                )
             )
         } catch {
             throw WhisperError.transcriptionFailed(reason: error.localizedDescription)
@@ -374,7 +387,8 @@ final class WhisperService: @unchecked Sendable {
             return try await kit.transcribe(audioArray: audioData, decodeOptions: options)
         }
 
-        let chunks = try await VADAudioChunker(vad: EnergyVAD()).chunkAll(
+        let chunker = VADAudioChunker(vad: EnergyVAD())
+        let chunks = try await chunker.chunkAll(
             audioArray: audioData,
             maxChunkLength: maxChunkSamples,
             decodeOptions: options
@@ -405,7 +419,263 @@ final class WhisperService: @unchecked Sendable {
                 ordered[finished] = results
             }
         }
-        return ordered.flatMap { $0 }
+        // Every result above is a success (a failure throws): shift each
+        // chunk's segment and word times onto the recording's timeline.
+        return chunker.updateSeekOffsetsForResults(
+            chunkedResults: ordered.map { .success($0) },
+            audioChunks: chunks
+        )
+    }
+
+    /// The segments of `results` as engine-neutral timings for the
+    /// transcript: each segment's range and, when WhisperKit aligned them,
+    /// its words' ranges. Seconds on the decoded audio's timeline.
+    /// Special tokens are stripped from segment text; hallucination / loop /
+    /// script filtering happens in `filteredTimedSegments` so Timestamps
+    /// matches the cleaned transcript.
+    static func timedSegments(from segments: [TranscriptionSegment]) -> [TimedSegment] {
+        segments.map { segment in
+            let words = (segment.words ?? []).map { word in
+                TimedWord(
+                    word: word.word, start: Double(word.start), end: Double(word.end),
+                    probability: Double(word.probability)
+                )
+            }
+            return TimedSegment(
+                start: Double(segment.start), end: Double(segment.end),
+                text: Self.removingSpecialTokens(from: segment.text), words: words
+            )
+        }
+    }
+
+    /// `timedSegments` after the same post-processing `transcribe` applies to
+    /// `fullText`, so history Timestamps never shows content the main
+    /// transcript already hid. Empty-after-filter segments are dropped.
+    /// Loop collapse runs per segment and again across the joined result so
+    /// repeats that only appear across boundaries match the main transcript.
+    static func filteredTimedSegments(
+        from segments: [TranscriptionSegment],
+        model: ModelSize,
+        audioSeconds: Double
+    ) -> [TimedSegment] {
+        let filtered = timedSegments(from: segments).compactMap { segment in
+            filteredTimedSegment(segment, model: model, audioSeconds: audioSeconds)
+        }
+        return collapsingCrossSegmentLoops(in: filtered, audioSeconds: audioSeconds)
+    }
+
+    /// One timing segment with hallucination tokens, loops, and unexpected
+    /// scripts removed from its text and words.
+    static func filteredTimedSegment(
+        _ segment: TimedSegment,
+        model: ModelSize,
+        audioSeconds: Double
+    ) -> TimedSegment? {
+        let words = segment.words.compactMap { word -> TimedWord? in
+            guard let cleaned = filteredTimingWord(word.word, model: model) else { return nil }
+            return TimedWord(
+                word: cleaned, start: word.start, end: word.end,
+                probability: word.probability
+            )
+        }
+        let text: String
+        if words.isEmpty {
+            text = filteredTimingText(segment.text, model: model, audioSeconds: audioSeconds)
+        } else {
+            // Rebuild from kept words so text and the word list stay aligned,
+            // then collapse any phrase loop the same way fullText does.
+            let joined = words.map(\.word).joined()
+            text = filteredTimingText(joined, model: model, audioSeconds: audioSeconds)
+        }
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        // When a phrase loop was collapsed out of the joined words, keep the
+        // words that still appear in the collapsed text (first copy plus any
+        // trailing words after the loop, not only a leading prefix).
+        let keptWords: [TimedWord]
+        if words.isEmpty {
+            keptWords = []
+        } else if words.map(\.word).joined() == text {
+            keptWords = words
+        } else {
+            keptWords = wordsAligning(with: text, from: words)
+        }
+        return TimedSegment(start: segment.start, end: segment.end, text: text, words: keptWords)
+    }
+
+    /// Collapse phrase loops that only show up once segments are joined, the
+    /// same way `transcribe` collapses `fullText`. Within-segment loops are
+    /// already handled in `filteredTimedSegment`.
+    static func collapsingCrossSegmentLoops(
+        in segments: [TimedSegment], audioSeconds: Double
+    ) -> [TimedSegment] {
+        guard segments.count >= 2 else { return segments }
+        let joined = segments.map(\.text).joined()
+        let collapsed = TranscriptRepetition.collapsingLoops(in: joined, audioSeconds: audioSeconds)
+        let joinedTrimmed = joined.trimmingCharacters(in: .whitespacesAndNewlines)
+        let collapsedTrimmed = collapsed.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard collapsedTrimmed != joinedTrimmed else { return segments }
+
+        let allWords = segments.flatMap(\.words)
+        if allWords.isEmpty {
+            return [TimedSegment(
+                start: segments.first!.start, end: segments.last!.end,
+                text: collapsed, words: []
+            )]
+        }
+        let kept = wordsAligning(with: collapsed, from: allWords)
+        let keptJoined = kept.map(\.word).joined()
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        // If word realignment could not rebuild the collapsed text, keep one
+        // segment spanning the whole range rather than partial timings.
+        if keptJoined != collapsedTrimmed {
+            return [TimedSegment(
+                start: segments.first!.start, end: segments.last!.end,
+                text: collapsed, words: kept
+            )]
+        }
+        // Re-bucket kept words into the original segments by their times so
+        // Timestamps still shows multiple ranges when speech spans them.
+        return segments.compactMap { segment -> TimedSegment? in
+            let words = kept.filter { word in
+                word.end > segment.start && word.start < segment.end
+            }
+            guard !words.isEmpty else { return nil }
+            let text = words.map(\.word).joined()
+            let start = min(segment.start, words.map(\.start).min() ?? segment.start)
+            let end = max(segment.end, words.map(\.end).max() ?? segment.end)
+            return TimedSegment(start: start, end: end, text: text, words: words)
+        }
+    }
+
+    /// Hallucination filter + loop collapse + unexpected-script strip — the
+    /// same pipeline `transcribe` runs on `fullText`.
+    static func filteredTimingText(_ text: String, model: ModelSize, audioSeconds: Double) -> String {
+        var cleaned = filterHallucinationTokens(text)
+        cleaned = TranscriptRepetition.collapsingLoops(in: cleaned, audioSeconds: audioSeconds)
+        return removingUnexpectedScripts(from: cleaned, model: model)
+    }
+
+    /// A single timing word after hallucination and unexpected-script strip.
+    /// Preserves a leading space when Whisper embedded one so joining words
+    /// still reads naturally. Returns nil when nothing usable remains.
+    static func filteredTimingWord(_ word: String, model: ModelSize) -> String? {
+        let hadLeadingSpace = word.first?.isWhitespace == true
+        var cleaned = removingSpecialTokens(from: word)
+        for pattern in hallucinationPatterns {
+            cleaned = cleaned.replacingOccurrences(of: pattern, with: "", options: .caseInsensitive)
+        }
+        cleaned = removingUnexpectedScripts(from: cleaned, model: model)
+        let core = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !core.isEmpty else { return nil }
+        return hadLeadingSpace ? " " + core : core
+    }
+
+    /// Leading words whose concatenation is a prefix of `text` (after the
+    /// same whitespace the joined words use). Used when loop collapse
+    /// shortened the segment text and there is no trailing remainder.
+    static func wordsPrefix(_ words: [TimedWord], matching text: String) -> [TimedWord] {
+        wordsPrefix(words, matching: text, limit: words.count)
+    }
+
+    /// Leading words among `words[0..<limit]` whose concatenation is a
+    /// prefix of `text`. Avoids copying the head slice for alignment search.
+    static func wordsPrefix(_ words: [TimedWord], matching text: String, limit: Int) -> [TimedWord] {
+        let end = min(max(limit, 0), words.count)
+        guard end > 0 else { return [] }
+        var kept: [TimedWord] = []
+        var built = ""
+        let target = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        for index in 0..<end {
+            let word = words[index]
+            let next = built + word.word
+            let trimmed = next.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard target.hasPrefix(trimmed) || trimmed.hasPrefix(target) else { break }
+            kept.append(word)
+            built = next
+            if trimmed == target || trimmed.count >= target.count { break }
+        }
+        return kept
+    }
+
+    /// Words from `words` whose concatenation matches collapsed `text`.
+    /// Loop collapse keeps the first copy of a repeated phrase and anything
+    /// said after it; a leading-only prefix would drop that trailing tail
+    /// (e.g. "go go… go home" -> "go home" must keep timing for "home").
+    ///
+    /// Searches a capped suffix window and reuses one joined buffer so a long
+    /// recording does not pay O(n²) array copies / joins during timing
+    /// post-processing. Correctness matches the uncapped split search: first
+    /// copy of the looped phrase plus any trailing words after it.
+    static func wordsAligning(with text: String, from words: [TimedWord]) -> [TimedWord] {
+        let target = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !words.isEmpty else { return [] }
+        let parts = words.map(\.word)
+        let allJoined = parts.joined()
+        if allJoined.trimmingCharacters(in: .whitespacesAndNewlines) == target {
+            return words
+        }
+        var best = wordsPrefix(words, matching: text)
+        if best.map(\.word).joined().trimmingCharacters(in: .whitespacesAndNewlines) == target {
+            return best
+        }
+        // Bound the suffix window by how many trailing pieces are needed to
+        // cover `target` by character length (plus a short unit of slack).
+        // Whitespace token count under-counts space-free Whisper pieces
+        // (CJK / BPE fragments): a floor of 32 alone can miss long post-loop
+        // tails while loop cleanup still keeps that text. Cap so long
+        // recordings stay near-linear without full O(n²) rejoins.
+        var charsCovered = 0
+        var piecesCoveringTarget = 0
+        for part in parts.reversed() {
+            piecesCoveringTarget += 1
+            charsCovered += part.count
+            if charsCovered >= target.count { break }
+        }
+        let maxSuffix = min(
+            words.count,
+            max(piecesCoveringTarget + TranscriptRepetition.maximumUnitLength, 32)
+        )
+        // Character offsets into `allJoined` — each suffix is a slice, not a
+        // fresh `map/joined` of a copied word array.
+        var charStarts: [String.Index] = []
+        charStarts.reserveCapacity(parts.count + 1)
+        var cursor = allJoined.startIndex
+        charStarts.append(cursor)
+        for part in parts {
+            cursor = allJoined.index(cursor, offsetBy: part.count)
+            charStarts.append(cursor)
+        }
+        for suffixCount in 1...maxSuffix {
+            let suffixStart = words.count - suffixCount
+            let suffixSlice = allJoined[charStarts[suffixStart]..<charStarts[words.count]]
+            let suffixJoined = suffixSlice.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !suffixJoined.isEmpty, target.hasSuffix(suffixJoined) else { continue }
+            let remainder = String(target.dropLast(suffixJoined.count))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let headWords = wordsPrefix(words, matching: remainder, limit: suffixStart)
+            let headJoined = headWords.map(\.word).joined()
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard headJoined == remainder else { continue }
+            let firstSuffix = words[suffixStart]
+            if let lastHead = headWords.last, firstSuffix.start < lastHead.end {
+                continue
+            }
+            var combined = headWords
+            combined.append(contentsOf: words[suffixStart..<words.count])
+            let combinedJoined = combined.map(\.word).joined()
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard combinedJoined == target else { continue }
+            if combined.count > best.count { best = combined }
+        }
+        return best
+    }
+
+    /// `TranscriptionSegment.text` still carries the decoder's control
+    /// tokens — `<|startoftranscript|>`, `<|en|>`, `<|transcribe|>`, and a
+    /// `<|0.00|>` time marker every few seconds — where `result.text` is
+    /// already cleaned. Drop them so a segment's text is words only.
+    static func removingSpecialTokens(from text: String) -> String {
+        text.replacingOccurrences(of: "<\\|[^|]*\\|>", with: "", options: .regularExpression)
     }
 
     // MARK: - Device Recommendations
@@ -609,6 +879,18 @@ final class WhisperService: @unchecked Sendable {
 // MARK: - SpeechTranscribing Conformance
 
 extension WhisperService: SpeechTranscribing {
+    /// The protocol's word-timestamp-free entry point: live and commit piece
+    /// decodes land here, so DTW stays off the latency-sensitive path. The
+    /// batch `transcribe` call opts in via `includeWordTimestamps`.
+    func transcribe(
+        audioData: [Float], language: String?, translate: Bool, vocabulary: String
+    ) async throws -> VocaTranscription {
+        try await transcribe(
+            audioData: audioData, language: language, translate: translate,
+            vocabulary: vocabulary, includeWordTimestamps: false
+        )
+    }
+
     func _loadModel(name: String?, folder: URL?, onPhaseChange: ((String) -> Void)?) async throws {
         try await loadModel(name: name, folder: folder, onPhaseChange: onPhaseChange)
     }
