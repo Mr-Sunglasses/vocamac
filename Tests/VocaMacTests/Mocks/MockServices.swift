@@ -174,6 +174,33 @@ final class MockAudioDucker: AudioDucking {
     }
 }
 
+// MARK: - MockSpotifyPauser
+
+final class MockSpotifyPauser: SpotifyPausing {
+    var pauseCallCount = 0
+    var resumeCallCount = 0
+    var resumeSynchronouslyForTerminationCallCount = 0
+    var lastTerminationResumeTimeout: TimeInterval?
+    var resumeAfterUnexpectedExitCallCount = 0
+
+    func pause() {
+        pauseCallCount += 1
+    }
+
+    func resume() {
+        resumeCallCount += 1
+    }
+
+    func resumeSynchronouslyForTermination(timeout: TimeInterval) {
+        resumeSynchronouslyForTerminationCallCount += 1
+        lastTerminationResumeTimeout = timeout
+    }
+
+    func resumeAfterUnexpectedExit() {
+        resumeAfterUnexpectedExitCallCount += 1
+    }
+}
+
 // MARK: - MockHotKeyManager
 
 final class MockHotKeyManager: HotKeyMonitoring, HotKeyShortcutMonitoring {
@@ -878,6 +905,7 @@ extension AppState {
         UserDefaults.standard.removeObject(forKey: PreferenceKey.writingIntent)
         UserDefaults.standard.removeObject(forKey: PreferenceKey.writingRewriteEnabled)
         UserDefaults.standard.removeObject(forKey: PreferenceKey.duckOtherAudioEnabled)
+        UserDefaults.standard.removeObject(forKey: PreferenceKey.pauseSpotifyEnabled)
         UserDefaults.standard.removeObject(forKey: PreferenceKey.transcriptCleanupEnabled)
         UserDefaults.standard.removeObject(forKey: PreferenceKey.transcriptCleanupModel)
         UserDefaults.standard.removeObject(forKey: PreferenceKey.transcriptCleanupPrompt)
@@ -900,6 +928,7 @@ extension AppState {
         let audioEngine = MockAudioEngine()
         let soundManager = MockSoundManager()
         let audioDucker = MockAudioDucker()
+        let spotifyPauser = MockSpotifyPauser()
         let hotKeyManager = MockHotKeyManager()
         let permissionManager = MockPermissionManager()
         let cursorOverlay = MockCursorOverlay()
@@ -912,6 +941,7 @@ extension AppState {
             audioEngine: audioEngine,
             soundManager: soundManager,
             audioDucker: audioDucker,
+            spotifyPauser: spotifyPauser,
             hotKeyManager: hotKeyManager,
             permissionManager: permissionManager,
             cursorOverlay: cursorOverlay,
@@ -930,6 +960,7 @@ extension AppState {
             modelManager: modelManager,
             soundManager: soundManager,
             audioDucker: audioDucker,
+            spotifyPauser: spotifyPauser,
             cursorOverlay: cursorOverlay,
             statsManager: statsManager,
             snippetExpander: SnippetExpander(),
@@ -958,6 +989,7 @@ struct TestMocks {
     let audioEngine: MockAudioEngine
     let soundManager: MockSoundManager
     let audioDucker: MockAudioDucker
+    let spotifyPauser: MockSpotifyPauser
     let hotKeyManager: MockHotKeyManager
     let permissionManager: MockPermissionManager
     let cursorOverlay: MockCursorOverlay

@@ -196,6 +196,7 @@ final class AppState: ObservableObject {
             }
             if oldValue && !isRecording {
                 audioDucker.restore()
+                spotifyPauser.resume()
             }
         }
     }
@@ -281,6 +282,7 @@ final class AppState: ObservableObject {
     @AppStorage("vocamac.soundEffectsEnabled") var soundEffectsEnabled: Bool = true
     @AppStorage(PreferenceKey.dictationTone) var dictationTone: DictationTone = .voca
     @AppStorage(PreferenceKey.duckOtherAudioEnabled) var duckOtherAudioEnabled: Bool = false
+    @AppStorage(PreferenceKey.pauseSpotifyEnabled) var pauseSpotifyEnabled: Bool = false
     @AppStorage("vocamac.overlayStyle") var overlayStyle: OverlayStyle = .minimal
     @AppStorage("vocamac.overlayPosition") var overlayPosition: OverlayPosition = .bottom
     /// Legacy preference retained so existing installs that disabled the old
@@ -709,6 +711,7 @@ final class AppState: ObservableObject {
     let modelManager: ModelManaging
     let soundManager: SoundPlaying
     let audioDucker: AudioDucking
+    let spotifyPauser: SpotifyPausing
     let cursorOverlay: CursorOverlayManaging
 
     /// The Settings overlay preview. Owned here so a real dictation can end it
@@ -851,6 +854,7 @@ final class AppState: ObservableObject {
         modelManager: ModelManaging = ModelManager(),
         soundManager: SoundPlaying = SoundManager(),
         audioDucker: AudioDucking = AudioDucker(),
+        spotifyPauser: SpotifyPausing = SpotifyPauser(),
         cursorOverlay: CursorOverlayManaging,
         statsManager: StatsManaging,
         snippetExpander: SnippetExpanding = SnippetExpander(),
@@ -873,6 +877,7 @@ final class AppState: ObservableObject {
         self.modelManager = modelManager
         self.soundManager = soundManager
         self.audioDucker = audioDucker
+        self.spotifyPauser = spotifyPauser
         self.cursorOverlay = cursorOverlay
         self.statsManager = statsManager
         self.frontmostAppResolver = frontmostAppResolver ?? FrontmostAppResolver()
@@ -1198,9 +1203,17 @@ final class AppState: ObservableObject {
         // Quit and Restart call `terminate` without setting `isRecording` to
         // false, so the didSet restore never runs. Unmute other audio here
         // directly. A second restore is a no-op when nothing is pending.
+        // Mirror AudioDucker: core unmute/resume runs before we return from
+        // willTerminate (ducker sync; Spotify sync-with-timeout so Automation
+        // consent or a hung Spotify cannot stall quit forever). Only the
+        // ducker's settle check is deferred. Pending-pause recovers on the
+        // next launch if play does not finish before the timeout.
         NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)
             .sink { [weak self] _ in
                 self?.audioDucker.restore()
+                self?.spotifyPauser.resumeSynchronouslyForTermination(
+                    timeout: SpotifyPauser.terminationResumeTimeout
+                )
                 self?.statsManager.flushPendingSaves()
                 self?.historyStore.saveIfNeeded()
             }
@@ -2058,9 +2071,15 @@ final class AppState: ObservableObject {
         // gets a route leaves playback alone. Undone from `isRecording`'s
         // observer on every exit. The recording may have ended, or a new one
         // begun, while the cue played.
-        if duckOtherAudioEnabled && isRecording && appStatus == .recording
-            && recordingGeneration == generation {
-            audioDucker.duck()
+        if isRecording && appStatus == .recording && recordingGeneration == generation {
+            if duckOtherAudioEnabled {
+                audioDucker.duck()
+            }
+            // Spotify Connect plays through another device, outside the Mac's
+            // mixer, so muting cannot reach it — only a transport pause can.
+            if pauseSpotifyEnabled {
+                spotifyPauser.pause()
+            }
         }
     }
 
@@ -3317,6 +3336,8 @@ final class AppState: ObservableObject {
 
         // A crash while dictating would otherwise leave the Mac quiet.
         audioDucker.restoreAfterUnexpectedExit()
+        // Or leave Spotify paused — same idea, farther away (Connect).
+        spotifyPauser.resumeAfterUnexpectedExit()
 
         // 1. Detect hardware
         systemCapabilities = SystemInfo.detect()
