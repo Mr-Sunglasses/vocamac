@@ -61,7 +61,7 @@
 <p align="center">
   <img src="docs/screenshots/popover-panel.png" alt="VocaMac Popover" width="400">
   <br>
-  <em>Menu bar popover with status, model, and microphone</em>
+  <em>Menu bar popover with status, model, microphone, style, and last dictation</em>
 </p>
 
 <p align="center">
@@ -110,6 +110,22 @@
   <img src="docs/screenshots/settings-about.png" alt="Settings - About" width="400">
   <br>
   <em>Settings: Cleanup (left) and About (right)</em>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/settings-writing-styles.png" alt="Settings - Writing Styles" width="400">
+  &nbsp;&nbsp;
+  <img src="docs/screenshots/settings-dictionary.png" alt="Settings - Dictionary" width="400">
+  <br>
+  <em>Settings: Writing Styles (left) and Dictionary (right)</em>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/settings-history.png" alt="Settings - History" width="400">
+  &nbsp;&nbsp;
+  <img src="docs/screenshots/update-ux.png" alt="In-app update window with release notes" width="400">
+  <br>
+  <em>Settings: History (left) and the in-app update window (right)</em>
 </p>
 
 <p align="center">
