@@ -76,7 +76,19 @@ struct CommandModeSession: Equatable {
         case rewriting
     }
 
+    /// What the session will do with what is said.
+    enum Kind: Equatable {
+        /// Change the selected text.
+        case edit
+        /// Nothing is selected: write at the cursor, or carry on from the
+        /// last edit.
+        case compose
+        /// The selection can't be edited: answer about it.
+        case answer
+    }
+
     var phase: Phase
+    let kind: Kind
     /// The start of the selection on one line, for "Editing “…”".
     let selectionPreview: String
     let characterCount: Int
@@ -84,21 +96,90 @@ struct CommandModeSession: Equatable {
     let engineName: String
     /// The transcribed instruction, once known.
     var instruction: String?
+    /// The result so far, while a model that streams is writing it.
+    var preview: String?
 
     init(
         phase: Phase = .listening,
+        kind: Kind = .edit,
         selection: String,
         appName: String?,
         engineName: String,
         instruction: String? = nil
     ) {
         self.phase = phase
+        self.kind = kind
         let oneLine = selection.split(whereSeparator: \.isWhitespace).joined(separator: " ")
         self.selectionPreview = oneLine.count > 80 ? String(oneLine.prefix(79)) + "…" : oneLine
         self.characterCount = selection.count
         self.appName = appName
         self.engineName = engineName
         self.instruction = instruction
+    }
+
+    /// The end of `preview` on one line, for the overlay: the newest words
+    /// are the ones still being written.
+    var previewTail: String? {
+        guard let preview else { return nil }
+        let oneLine = preview.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        guard !oneLine.isEmpty else { return nil }
+        return oneLine.count > 90 ? "…" + String(oneLine.suffix(89)) : oneLine
+    }
+}
+
+/// What a Command Mode session acts on.
+enum CommandTarget {
+    /// Selected text that can be replaced.
+    case selection(SelectedTextSnapshot)
+    /// Selected text that can only be read: a web page, a PDF.
+    case readOnly(SelectedTextSnapshot)
+    /// Nothing is selected. `insertionPoint` is where the cursor was, when
+    /// the app says, so text written there can be edited again.
+    case cursor(insertionPoint: InsertionPoint?)
+
+    var selectedText: String? {
+        switch self {
+        case .selection(let snapshot), .readOnly(let snapshot): return snapshot.text
+        case .cursor: return nil
+        }
+    }
+
+    var sessionKind: CommandModeSession.Kind {
+        switch self {
+        case .selection: return .edit
+        case .readOnly: return .answer
+        case .cursor: return .compose
+        }
+    }
+}
+
+/// When a Command Mode edit waits for approval instead of replacing the
+/// selection straight away.
+enum CommandReviewMode: String, CaseIterable, Identifiable {
+    case never
+    case longSelections
+    case always
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .never: return "Never"
+        case .longSelections: return "Long selections"
+        case .always: return "Always"
+        }
+    }
+
+    /// Selections at least this long are reviewed under `longSelections`:
+    /// about a paragraph, where a bad rewrite is no longer obvious at a glance.
+    static let longSelectionCharacters = 400
+
+    func reviews(selection: String) -> Bool {
+        switch self {
+        case .never: return false
+        case .longSelections: return selection.count >= Self.longSelectionCharacters
+        case .always: return true
+        }
     }
 }
 
@@ -116,10 +197,24 @@ struct CleanupTryResult: Equatable {
 
 /// One completed Command Mode edit.
 struct CommandModeEdit: Equatable {
+    enum Kind: Equatable {
+        /// The selection was replaced.
+        case edit
+        /// New text was written at the cursor.
+        case composed
+        /// An answer about text that couldn't be edited.
+        case answer
+        /// Something was done on the Mac; no text changed.
+        case action
+    }
+
     let instruction: String
     let original: String
     let replacement: String
     let engineName: String
+    var kind: Kind = .edit
+    /// Something the checks noticed about the result ("a link is missing").
+    var note: String?
 }
 
 enum ScratchpadOutputDestination {
@@ -163,7 +258,7 @@ final class AppState: ObservableObject {
     private var recordingInjectsResult = true
     /// Whether the active recording belongs to an in-window practice control.
     var isPracticeRecording: Bool {
-        (isRecording || appStatus == .recording) && !recordingInjectsResult && activeCommandSelection == nil
+        (isRecording || appStatus == .recording) && !recordingInjectsResult && activeCommandTarget == nil
     }
 
     private var recordingTranscription: RecordingTranscription?
@@ -218,6 +313,9 @@ final class AppState: ObservableObject {
     @Published private(set) var commandModeSession: CommandModeSession? {
         didSet { cursorOverlay.setCommandSession(commandModeSession) }
     }
+    /// A Command Mode result waiting on the user: an edit to approve, or an
+    /// answer to read.
+    @Published private(set) var commandReview: CommandReview?
     /// A file or system-audio capture is being transcribed.
     @Published private(set) var isTranscribingMedia = false
 
@@ -337,6 +435,17 @@ final class AppState: ObservableObject {
     /// Opt-in: let Command Mode copy a selection an app won't share through
     /// Accessibility. Off by default; see `AccessibilitySelectedTextService`.
     @AppStorage(PreferenceKey.commandModeClipboardFallback) var commandModeClipboardFallback: Bool = false
+    /// Paste a dictation without the cleanup model when the rules already
+    /// left it nothing to do (see `CleanupNeed`).
+    @AppStorage(PreferenceKey.cleanupSkipsCleanText) var skipCleanDictations: Bool = true
+    @AppStorage(PreferenceKey.commandModeReview) var commandModeReview: CommandReviewMode = .never
+    /// JSON `[SavedCommand]`; read and written through `savedCommands`.
+    @AppStorage(PreferenceKey.savedCommands) var savedCommandsJSON: String = ""
+    /// Opt-in: let a spoken instruction open apps and pages, search the web,
+    /// run allow-listed Shortcuts, and add reminders.
+    @AppStorage(PreferenceKey.voiceActionsEnabled) var voiceActionsEnabled: Bool = false
+    /// Names of the Shortcuts a spoken instruction may run, one per line.
+    @AppStorage(PreferenceKey.voiceActionShortcuts) var voiceActionShortcuts: String = ""
     @AppStorage(PreferenceKey.mouseTriggerButton) var mouseTriggerButton: Int = MouseTriggerButton.off.rawValue
     @AppStorage(PreferenceKey.learnCorrectionsMode) var learnCorrectionsMode: LearnCorrectionsMode = .defaultMode
     @AppStorage(PreferenceKey.useScreenContext) var useScreenContext: Bool = true
@@ -673,8 +782,17 @@ final class AppState: ObservableObject {
     private var screenContextTask: Task<[String], Never>?
     private var screenDocumentURLTask: Task<URL?, Never>?
 
-    /// Selection captured before Command Mode starts recording its instruction.
-    private var activeCommandSelection: SelectedTextSnapshot?
+    /// What Command Mode captured before it started recording its instruction.
+    private var activeCommandTarget: CommandTarget?
+    /// The llama.cpp slot the session's local model runs in.
+    private var activeCommandService: TranscriptCleaning?
+    /// Where the last edit landed, so "shorter still" and "undo that" have
+    /// something to act on.
+    private var lastCommandTarget: (snapshot: SelectedTextSnapshot, original: String, replacement: String, at: Date)?
+    /// How long after an edit a follow-up still means that edit.
+    static let commandFollowUpWindow: TimeInterval = 300
+    /// The edit a review panel is holding until it is approved.
+    private var pendingReviewEdit: PendingCommandEdit?
     private var commandModePressStartedAt: Date?
     /// Engine chosen when the current Command Mode session began.
     private var activeCommandEngine: CommandModeEngine?
@@ -741,6 +859,13 @@ final class AppState: ObservableObject {
     /// Notices the user fixing dictated words; nil when disabled.
     let correctionObserver: (any CorrectionObserving)?
     let selectedTextService: (any SelectedTextAccessing)?
+    /// A second llama.cpp slot for a Command Mode model that differs from the
+    /// cleanup model, on Macs with the memory for both. Nil shares one slot.
+    let commandModelSlot: TranscriptCleaning?
+    /// Carries out spoken actions; nil turns them off whatever the setting.
+    let voiceActionPerformer: (any VoiceActionPerforming)?
+    /// Shows results held for the user; nil keeps them in `commandReview` only.
+    let commandReviewPresenter: (any CommandReviewPresenting)?
 
     /// Polls configured apps and pauses dictation while they run.
     let autoPauseMonitor = AutoPauseMonitor()
@@ -868,6 +993,9 @@ final class AppState: ObservableObject {
         screenContextReader: (any ScreenContextReading)? = nil,
         correctionObserver: (any CorrectionObserving)? = nil,
         selectedTextService: (any SelectedTextAccessing)? = nil,
+        commandModelSlot: TranscriptCleaning? = nil,
+        voiceActionPerformer: (any VoiceActionPerforming)? = nil,
+        commandReviewPresenter: (any CommandReviewPresenting)? = nil,
         skipSystemIntegration: Bool = false
     ) {
         self.audioEngine = audioEngine
@@ -897,6 +1025,10 @@ final class AppState: ObservableObject {
         self.correctionObserver = correctionObserver ?? (skipSystemIntegration ? nil : CorrectionObserver())
         self.selectedTextService = selectedTextService
             ?? (skipSystemIntegration ? nil : AccessibilitySelectedTextService(textInjector: textInjector))
+        self.commandModelSlot = commandModelSlot
+        self.voiceActionPerformer = voiceActionPerformer ?? (skipSystemIntegration ? nil : SystemVoiceActionPerformer())
+        self.commandReviewPresenter = commandReviewPresenter
+            ?? (skipSystemIntegration ? nil : CommandReviewPanelController())
         self.isKnownWord = { word, language in
             MainActor.assumeIsolated { SpellingOracle.shared.isKnownWord(word, language: language) }
         }
@@ -959,7 +1091,8 @@ final class AppState: ObservableObject {
     private static let sharedProductionInstance = AppState(
         cursorOverlay: CursorOverlayManager(),
         statsManager: StatsManager(),
-        transcriptCleanup: TranscriptCleanupService()
+        transcriptCleanup: TranscriptCleanupService(),
+        commandModelSlot: TranscriptCleanupService()
     )
 
     /// Convenience factory for creating AppState with all real services.
@@ -1958,7 +2091,16 @@ final class AppState: ObservableObject {
         let generation = recordingGeneration
         recordingInjectsResult = injectResult
         nonInjectedOutputDestination = outputDestination
+        // Typing into the field would move the selection an edit under
+        // review is waiting on.
+        dismissCommandReview()
         startScreenContextCapture(injectResult: injectResult)
+        // A dictation is coming: have the cleanup model loaded and its prompt
+        // read by the time the user stops speaking.
+        if injectResult, activeCommandTarget == nil {
+            let target = frontmostAppResolver.currentFrontmostApp() ?? pendingTargetApp
+            Task { @MainActor [weak self] in await self?.warmCleanupModel(for: target) }
+        }
         appStatus = .recording
         liveTranscript = ""
         isRecording = true
@@ -2057,7 +2199,7 @@ final class AppState: ObservableObject {
         // Muting other audio would silence the cue too, so when that is on,
         // let the cue finish first.
         if soundEffectsEnabled && isRecording && appStatus == .recording {
-            let isCommand = activeCommandSelection != nil
+            let isCommand = activeCommandTarget != nil
             if duckOtherAudioEnabled {
                 if isCommand { await soundManager.playCommandStartSoundAsync() }
                 else { await soundManager.playStartSoundAsync() }
@@ -2096,7 +2238,7 @@ final class AppState: ObservableObject {
         recordingVocabulary = nil
         // The custom endpoint is batch-only: one upload per recording. Commit
         // mode would mean an upload per piece, so it stays off for it.
-        guard processWhileSpeaking, injectResult, activeCommandSelection == nil,
+        guard processWhileSpeaking, injectResult, activeCommandTarget == nil,
               let model = ModelSize(rawValue: selectedModelSize),
               model.engine != .customEndpoint,
               !(model.engine == .whisperKit && translatesSpeech) else { return nil }
@@ -2204,17 +2346,7 @@ final class AppState: ObservableObject {
                 cachedTerms = await Self.awaitContextTerms(contextTask)
             }
             guard let profile = cachedProfile else { return nil }
-            return DictationOutputOptions(
-                profile: profile, snippetList: self.snippets,
-                cleanupEnabled: self.transcriptCleanupEnabled, rewritingEnabled: self.writingRewriteEnabled,
-                model: self.selectedCleanupModelKind, customPrompt: self.effectiveCleanupPrompt,
-                cleanupLevel: self.transcriptCleanupLevel, language: language,
-                autoCapitalize: self.autoCapitalize, trailingSpace: self.appendTrailingSpace,
-                preview: false,
-                dictionary: self.dictionaryContext(contextTerms: cachedTerms ?? [], language: language),
-                numbersAsDigits: self.numbersAsDigits, numberSymbols: self.numberSymbols,
-                spokenEmoji: self.spokenEmoji
-            )
+            return self.dictationOptions(profile: profile, language: language, contextTerms: cachedTerms ?? [])
         }
     }
 
@@ -2410,14 +2542,15 @@ final class AppState: ObservableObject {
 
             // A spoken edit command isn't a dictation: it stays out of the
             // last-dictation card and the dictated-words stats.
-            if let selection = activeCommandSelection {
-                activeCommandSelection = nil
+            if let target = activeCommandTarget {
+                activeCommandTarget = nil
                 commandModeSession?.phase = .rewriting
                 commandModeSession?.instruction = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
                 await finishCommandMode(
                     instruction: result.text,
-                    transcription: result,
-                    selection: selection,
+                    language: result.detectedLanguage,
+                    audioSeconds: result.audioLengthSeconds,
+                    target: target,
                     engine: activeCommandEngine ?? commandModeEngine,
                     generation: generation
                 )
@@ -2426,6 +2559,9 @@ final class AppState: ObservableObject {
 
             lastTranscription = result
             lastCommandEdit = nil
+            // The text there has changed; "shorter still" no longer has
+            // anything to refer to.
+            lastCommandTarget = nil
             statsManager.recordTranscription(result)
 
             let trimmedText = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -2459,6 +2595,7 @@ final class AppState: ObservableObject {
                     trailingSpace: appendTrailingSpace, preview: !injectResult,
                     dictionary: dictionaryContext(contextTerms: contextTerms, language: result.detectedLanguage),
                     numbersAsDigits: numbersAsDigits, numberSymbols: numberSymbols, spokenEmoji: spokenEmoji,
+                    skipWhenClean: skipCleanDictations,
                     // Cleaning piece by piece only pays off with answers from
                     // while recording; an endpoint would get one call per piece.
                     pieces: speculator == nil ? [] : result.pieces, speculator: speculator
@@ -2618,7 +2755,11 @@ final class AppState: ObservableObject {
             await cancelRecording()
             return
         }
-        guard isTranscribing else { return }
+        guard isTranscribing else {
+            // Nothing is running: Escape closes a result waiting on screen.
+            dismissCommandReview()
+            return
+        }
         recordingGeneration = UUID()
         // Escape cancels everything, including a dictation waiting to start.
         queuedRecordingStart = nil
@@ -3525,9 +3666,11 @@ final class AppState: ObservableObject {
         let kind = selectedCleanupModelKind
         if transcriptCleanupEnabled, transcriptCleanup.isDownloaded(kind) {
             await transcriptCleanup.load(kind)
+            await warmCleanupModel()
         } else if !transcriptCleanupEnabled {
             transcriptCleanup.unload()
         }
+        syncCommandModelSlot()
     }
 
     func downloadCleanupModel(_ kind: CleanupModelKind) async {
@@ -3539,7 +3682,9 @@ final class AppState: ObservableObject {
         transcriptCleanupModel = kind.rawValue
         if transcriptCleanupEnabled {
             await transcriptCleanup.load(kind)
+            await warmCleanupModel()
         }
+        syncCommandModelSlot()
     }
 
     /// Run text the user typed into Settings through the same cleanup a
@@ -3557,7 +3702,8 @@ final class AppState: ObservableObject {
             // Like an engine that reports no language: the pipeline judges it.
             language: selectedLanguage == "auto" ? nil : selectedLanguage, autoCapitalize: autoCapitalize,
             trailingSpace: false, preview: true,
-            numbersAsDigits: numbersAsDigits, numberSymbols: numberSymbols, spokenEmoji: spokenEmoji
+            numbersAsDigits: numbersAsDigits, numberSymbols: numberSymbols, spokenEmoji: spokenEmoji,
+            skipWhenClean: skipCleanDictations
         )
         return CleanupTryResult(
             input: text, text: output.text, summary: output.summary,
@@ -3681,6 +3827,8 @@ final class AppState: ObservableObject {
         if role != .cleanup {
             commandModeEngine = .local(kind)
         }
+        syncCommandModelSlot()
+        if role != .commandMode { await warmCleanupModel() }
     }
 
     /// Turn sharing on or off. On adopts the cleanup model when it can edit
@@ -3710,6 +3858,7 @@ final class AppState: ObservableObject {
     func selectCommandModeEngine(_ engine: CommandModeEngine) {
         aiModelChoiceGeneration += 1
         commandModeEngine = engine
+        syncCommandModelSlot()
     }
 
     func downloadAIModel(_ kind: CleanupModelKind) async {
@@ -3744,6 +3893,8 @@ final class AppState: ObservableObject {
         // working one stays in RAM unselected.
         guard transcriptCleanup.loadedKind == kind else { return }
         transcriptCleanupModel = kind.rawValue
+        syncCommandModelSlot()
+        await warmCleanupModel()
     }
 
     func deleteCleanupModel(_ kind: CleanupModelKind) {
@@ -3916,7 +4067,8 @@ extension AppState {
                     language: result.detectedLanguage, autoCapitalize: autoCapitalize,
                     trailingSpace: appendTrailingSpace,
                     dictionary: dictionaryContext(contextTerms: [], language: result.detectedLanguage),
-                    numbersAsDigits: numbersAsDigits, numberSymbols: numberSymbols, spokenEmoji: spokenEmoji
+                    numbersAsDigits: numbersAsDigits, numberSymbols: numberSymbols, spokenEmoji: spokenEmoji,
+                    skipWhenClean: skipCleanDictations
                 )
             }
             historyStore.recordRetry(
@@ -4001,9 +4153,27 @@ extension AppState {
         if let combo = HotKeyCombo(storageString: commandModeShortcut) {
             shortcuts[.commandMode] = combo
         }
+        for command in savedCommands where command.isUsable {
+            if let combo = HotKeyCombo(storageString: command.shortcut) {
+                shortcuts[.savedCommand(command.id)] = combo
+            }
+        }
         monitor.updateShortcuts(shortcuts)
         monitor.updateMouseTrigger(button: MouseTriggerButton.resolved(stored: mouseTriggerButton).rawValue)
         refreshCancelKeyArming()
+    }
+
+    /// Every action that can have a shortcut: the built-in ones and each
+    /// saved command.
+    var shortcutActions: [HotKeyShortcutAction] {
+        HotKeyShortcutAction.builtIn + savedCommands.map { .savedCommand($0.id) }
+    }
+
+    /// What `action` is called in a "that's already the … shortcut" message.
+    func shortcutName(for action: HotKeyShortcutAction) -> String {
+        guard case .savedCommand(let id) = action else { return action.displayName.lowercased() }
+        let name = savedCommands.first { $0.id == id }?.name ?? ""
+        return name.isEmpty ? "saved command" : "“\(name)”"
     }
 
     func shortcut(for action: HotKeyShortcutAction) -> HotKeyCombo? {
@@ -4011,6 +4181,8 @@ extension AppState {
         case .pasteLastDictation: return HotKeyCombo(storageString: pasteLastShortcut)
         case .handsFreeToggle: return HotKeyCombo(storageString: handsFreeShortcut)
         case .commandMode: return HotKeyCombo(storageString: commandModeShortcut)
+        case .savedCommand(let id):
+            return savedCommands.first { $0.id == id }.flatMap { HotKeyCombo(storageString: $0.shortcut) }
         }
     }
 
@@ -4020,6 +4192,13 @@ extension AppState {
         case .pasteLastDictation: pasteLastShortcut = stored
         case .handsFreeToggle: handsFreeShortcut = stored
         case .commandMode: commandModeShortcut = stored
+        case .savedCommand(let id):
+            var commands = savedCommands
+            guard let index = commands.firstIndex(where: { $0.id == id }) else { return }
+            commands[index].shortcut = stored
+            // The setter pushes the new shortcuts to the listener.
+            savedCommands = commands
+            return
         }
         syncShortcutConfiguration()
     }
@@ -4031,8 +4210,12 @@ extension AppState {
         case .handsFreeToggle:
             await toggleHandsFreeDictation()
         case .commandMode:
-            if activeCommandSelection != nil,
-               isRecording || appStatus == .recording {
+            if pendingReviewEdit != nil {
+                // The edit on screen is waiting for exactly this: the same
+                // keys that asked for it approve it.
+                await acceptCommandReview()
+            } else if activeCommandTarget != nil,
+                      isRecording || appStatus == .recording {
                 // A second press completes a Command Mode session that was
                 // started with a quick press instead of a hold.
                 commandModePressStartedAt = nil
@@ -4041,10 +4224,12 @@ extension AppState {
                 commandModePressStartedAt = Date()
                 commandModeReleasedBeforeRecording = false
                 await beginCommandMode()
-                if activeCommandSelection == nil {
+                if activeCommandTarget == nil {
                     commandModePressStartedAt = nil
                 }
             }
+        case .savedCommand(let id):
+            await runSavedCommand(id)
         }
     }
 
@@ -4067,7 +4252,7 @@ extension AppState {
         // user said while holding was recorded, and turning the session into
         // a press-again one would record speech they meant as done. Call it
         // off instead and say how to time it.
-        guard activeCommandSelection != nil,
+        guard activeCommandTarget != nil,
               isRecording || appStatus == .recording else {
             commandModeReleasedBeforeRecording = true
             VocaLogger.debug(.appState, "Command Mode released before recording began — cancelling")
@@ -4115,55 +4300,68 @@ extension AppState {
         switch engine {
         case .appleIntelligence: return appleIntelligenceService
         case .endpoint: return RemoteCleanupService(configuration: cleanupEndpoint)
-        case .local: return transcriptCleanup
+        case .local(let kind): return activeCommandService ?? commandModelService(for: kind)
         }
     }
 
-    /// Capture the current selection before recording the spoken edit command.
+    /// Whether a local Command Mode model gets a llama.cpp slot of its own.
+    ///
+    /// Cleanup and Command Mode used to share one slot, so two different
+    /// models swapped in and out around every edit — seconds each way, and
+    /// the cleanup prompt read again afterwards. With memory for both, the
+    /// small cleanup model stays resident and the edit model loads beside it.
+    func usesSeparateCommandSlot(for kind: CleanupModelKind) -> Bool {
+        commandModelSlot != nil && cleanupUsesLocalModel && kind != selectedCleanupModelKind
+            && (systemCapabilities?.physicalMemoryGB ?? SystemInfo.physicalMemoryGB) >= CleanupModelCatalog.sharedModelMemoryGB
+    }
+
+    private func commandModelService(for kind: CleanupModelKind) -> TranscriptCleaning {
+        guard let commandModelSlot, usesSeparateCommandSlot(for: kind) else { return transcriptCleanup }
+        return commandModelSlot
+    }
+
+    /// Free the second slot when nothing uses it any more: the models were
+    /// set to share again, or another engine or model was chosen.
+    func syncCommandModelSlot() {
+        guard let commandModelSlot, commandModelSlot.isLoaded, activeCommandService == nil else { return }
+        if case .local(let kind) = commandModeEngine, usesSeparateCommandSlot(for: kind),
+           commandModelSlot.loadedKind == kind {
+            return
+        }
+        commandModelSlot.unload()
+    }
+
+    /// End a Command Mode session that produced nothing, saying why on
+    /// screen and in the log. Without the log line, a session that ended
+    /// without an edit left no trace of the reason.
+    private func failCommand(_ message: String, detail: String? = nil, started: Date? = nil) {
+        cursorOverlay.hide()
+        var line = "Command Mode ended without a result: \(detail ?? message)"
+        if let engine = activeCommandEngine { line += " [\(engine.displayName)]" }
+        if let started { line += String(format: " after %.2fs", Date().timeIntervalSince(started)) }
+        VocaLogger.warning(.appState, line)
+        showTemporaryError(message)
+    }
+
+    /// Capture what Command Mode will act on, then record the spoken
+    /// instruction.
     func beginCommandMode() async {
-        guard appStatus == .idle, !isRecording else { return }
+        // An error banner from the last attempt is not a reason to ignore
+        // this one; a dictation can start over it too.
+        guard appStatus == .idle || appStatus == .error, !isRecording else { return }
+        dismissCommandReview()
         let engine = commandModeEngine
         if let problem = commandModeProblem(for: engine) {
-            showTemporaryError(problem)
+            failCommand(problem)
             return
         }
-        guard let selectedTextService else {
-            showTemporaryError(SelectionCaptureFailure.noFocusedApp.message)
-            return
-        }
-        let selection: SelectedTextSnapshot
-        switch await selectedTextService.captureSelection() {
-        case .success(let captured):
-            selection = captured
-        case .failure(let failure):
-            showTemporaryError(failure.message)
-            return
-        }
+        guard let target = await captureCommandTarget() else { return }
         if commandModeReleasedBeforeRecording {
             commandModeReleasedBeforeRecording = false
             showTemporaryError(Self.commandReleasedEarlyMessage)
             return
         }
-        activeCommandSelection = selection
-        activeCommandEngine = engine
-        commandTargetApp = frontmostAppResolver.currentFrontmostApp()
-        commandModeSession = CommandModeSession(
-            selection: selection.text,
-            appName: commandTargetApp?.displayName,
-            engineName: engine.displayName
-        )
-        VocaLogger.info(
-            .appState,
-            "Command Mode captured a " + String(selection.text.count) + "-character selection"
-                + (selection.source == .clipboard ? " via the clipboard" : "")
-        )
-        // Load a local model while the user speaks, so its load time isn't
-        // added to the wait after they stop.
-        commandModelIdleUnload?.cancel()
-        if case .local(let kind) = engine {
-            let cleanup = transcriptCleanup
-            commandModelWarmup = Task { await cleanup.load(kind) }
-        }
+        beginCommandSession(target: target, engine: engine)
         await startRecording(injectResult: false)
         // Released while the speech model was still loading for this session.
         if commandModeReleasedBeforeRecording {
@@ -4173,16 +4371,125 @@ extension AppState {
             showTemporaryError(Self.commandReleasedEarlyMessage)
             return
         }
-        if !isRecording, activeCommandSelection != nil, !isTranscribing {
+        if !isRecording, activeCommandTarget != nil, !isTranscribing {
             // The microphone never started; nothing will finish this session.
             resetCommandModeState()
         }
     }
 
+    /// Read the selection, or settle for the cursor when nothing is selected.
+    /// Nil after reporting why Command Mode can't run here.
+    private func captureCommandTarget() async -> CommandTarget? {
+        guard let selectedTextService else {
+            failCommand(SelectionCaptureFailure.noFocusedApp.message)
+            return nil
+        }
+        switch await selectedTextService.captureSelection() {
+        case .success(let captured):
+            return captured.isEditable ? .selection(captured) : .readOnly(captured)
+        case .failure(.nothingSelected):
+            return .cursor(insertionPoint: await selectedTextService.captureInsertionPoint())
+        case .failure(let failure):
+            failCommand(failure.message, detail: "the selection could not be read (\(failure))")
+            return nil
+        }
+    }
+
+    private func beginCommandSession(target: CommandTarget, engine: CommandModeEngine) {
+        activeCommandTarget = target
+        activeCommandEngine = engine
+        commandTargetApp = frontmostAppResolver.currentFrontmostApp()
+        commandModeSession = CommandModeSession(
+            kind: target.sessionKind,
+            selection: target.selectedText ?? "",
+            appName: commandTargetApp?.displayName,
+            engineName: engine.displayName
+        )
+        let what: String
+        switch target {
+        case .selection(let snapshot):
+            what = "a \(snapshot.text.count)-character selection" + (snapshot.source == .clipboard ? " via the clipboard" : "")
+        case .readOnly(let snapshot):
+            what = "a \(snapshot.text.count)-character read-only selection"
+        case .cursor:
+            what = "no selection"
+        }
+        VocaLogger.info(.appState, "Command Mode captured \(what)")
+        // Load a local model while the user speaks, so its load time isn't
+        // added to the wait after they stop.
+        commandModelIdleUnload?.cancel()
+        if case .local(let kind) = engine {
+            let service = commandModelService(for: kind)
+            activeCommandService = service
+            commandModelWarmup = Task { await service.load(kind) }
+        }
+    }
+
+    /// Run `instruction` on the current selection without recording anything:
+    /// a saved command's shortcut, or the Shortcuts action.
+    func runCommand(instruction: String) async {
+        guard appStatus == .idle || appStatus == .error, !isRecording, !isTranscribing else { return }
+        dismissCommandReview()
+        let engine = commandModeEngine
+        if let problem = commandModeProblem(for: engine) {
+            failCommand(problem)
+            return
+        }
+        guard let target = await captureCommandTarget() else { return }
+        recordingGeneration = UUID()
+        let generation = recordingGeneration
+        beginCommandSession(target: target, engine: engine)
+        activeCommandTarget = nil
+        commandModeSession?.phase = .rewriting
+        commandModeSession?.instruction = instruction
+        if showCursorIndicator && overlayStyle != .off {
+            cursorOverlay.show(style: overlayStyle, position: overlayPosition)
+            cursorOverlay.setCommandSession(commandModeSession)
+            cursorOverlay.transitionToProcessing()
+        }
+        appStatus = .processing
+        isTranscribing = true
+        defer {
+            if generation == recordingGeneration {
+                isTranscribing = false
+                if appStatus == .processing { appStatus = .idle }
+            }
+        }
+        await finishCommandMode(
+            instruction: instruction, language: nil, audioSeconds: 0,
+            target: target, engine: engine, generation: generation
+        )
+    }
+
+    /// One Command Mode request, from the instruction to where its result goes.
+    private struct CommandRun {
+        var instruction: String
+        var target: CommandTarget
+        let engine: CommandModeEngine
+        let generation: UUID
+        let language: String?
+        let audioSeconds: Double
+        let started: Date
+    }
+
+    /// An edit that is ready, and everything needed to apply and record it.
+    private struct PendingCommandEdit {
+        let snapshot: SelectedTextSnapshot
+        let replacement: String
+        let instruction: String
+        let engineName: String
+        let summary: String
+        let note: String?
+        let app: RunningAppSnapshot?
+        let language: String?
+        let audioSeconds: Double
+    }
+
     private func finishCommandMode(
         instruction: String,
-        transcription: VocaTranscription,
-        selection: SelectedTextSnapshot,
+        language: String?,
+        audioSeconds: Double,
+        target: CommandTarget,
         engine: CommandModeEngine,
         generation: UUID
     ) async {
@@ -4193,99 +4500,472 @@ extension AppState {
         var instruction = instruction.trimmingCharacters(in: .whitespacesAndNewlines)
         // "um, make this shorter" — the model doesn't need the hesitation, and
         // History and the Last Edit card shouldn't show it.
-        if DictationOutputPipeline.knownLanguage(transcription.detectedLanguage).map(DictationOutputPipeline.isEnglish)
+        if DictationOutputPipeline.knownLanguage(language).map(DictationOutputPipeline.isEnglish)
             ?? RewriteValidation.likelyEnglish(instruction) {
             instruction = WritingStyleEngine.removeHesitations(instruction).text
         }
         guard !instruction.isEmpty else {
-            cursorOverlay.hide()
-            showTemporaryError("No editing command was detected. Your selection was not changed.")
+            failCommand("No editing command was detected. Your selection was not changed.", detail: "no instruction was heard")
             return
         }
+        // The user's own spellings: "address it to Kanishk" should not go to
+        // the model as "Kanishka".
+        let dictionary = dictionaryContext(contextTerms: [], language: language)
+        if !dictionary.isEmpty {
+            instruction = DictionaryCorrector.correct(instruction, context: dictionary, allowIdentifierJoins: false).text
+        }
+        // A saved command, said by name.
+        if let saved = SavedCommandStore.command(named: instruction, in: savedCommands) {
+            instruction = saved.instruction
+        }
+        commandModeSession?.instruction = instruction
+        await performCommand(CommandRun(
+            instruction: instruction, target: target, engine: engine, generation: generation,
+            language: language, audioSeconds: audioSeconds, started: Date()
+        ))
+    }
+
+    /// Decide what the instruction asks for and do it: take back the last
+    /// edit, act on the Mac, apply a rule, or ask the model.
+    private func performCommand(_ run: CommandRun) async {
+        var run = run
+        let instruction = run.instruction
+
+        if CommandInstruction.isUndo(instruction) {
+            await undoLastCommandEdit(run)
+            return
+        }
+        // Only the user's own words choose an action. The selection is, at
+        // most, what the action is given to work on.
+        if voiceActionsEnabled, voiceActionPerformer != nil,
+           let action = VoiceActionParser.parse(instruction, selection: run.target.selectedText) {
+            await performVoiceAction(action, run: run)
+            return
+        }
+
+        let intent = CommandInstruction.intent(for: instruction)
+        if case .cursor = run.target,
+           intent.editsExistingText || CommandExactEdit.isExactEdit(instruction),
+           !CommandInstruction.asksForNewText(instruction) {
+            // "shorter still", "now make it formal": the text meant is the
+            // one the last edit left behind.
+            guard let reselected = await reselectLastCommandEdit() else {
+                failCommand(SelectionCaptureFailure.nothingSelected.message, detail: "nothing was selected and there was no recent edit to continue", started: run.started)
+                return
+            }
+            run.target = .selection(reselected)
+        }
+
+        switch run.target {
+        case .selection(let snapshot):
+            if let exact = CommandExactEdit.apply(instruction: instruction, to: snapshot.text, keeping: establishedSpellings) {
+                guard exact.text != snapshot.text else {
+                    failCommand("Command Mode did not change the text: it is already that way.", detail: "\(exact.name) changed nothing", started: run.started)
+                    return
+                }
+                VocaLogger.info(.appState, "Command Mode applied a rule edit (\(exact.name)) without the model")
+                await deliverEdit(PendingCommandEdit(
+                    snapshot: snapshot, replacement: exact.text, instruction: instruction,
+                    engineName: "VocaMac", summary: "Command Mode · \(exact.name)", note: nil,
+                    app: commandTargetApp, language: run.language, audioSeconds: run.audioSeconds
+                ), run: run, reviews: false)
+                return
+            }
+            guard let result = await runCommandModel(text: snapshot.text, intent: intent, mode: .replace, run: run) else { return }
+            await deliverEdit(PendingCommandEdit(
+                snapshot: snapshot,
+                replacement: TranscriptCleanup.preservingOuterWhitespace(of: snapshot.text, in: result.output),
+                instruction: instruction, engineName: run.engine.displayName,
+                summary: "Command Mode · \(run.engine.displayName)", note: result.problem?.message,
+                app: commandTargetApp, language: run.language, audioSeconds: run.audioSeconds
+            ), run: run, reviews: commandModeReview.reviews(selection: snapshot.text))
+        case .readOnly(let snapshot):
+            // A rule edit of text that can't be replaced is still exact, and
+            // still needs no model: show it to copy.
+            if let exact = CommandExactEdit.apply(instruction: instruction, to: snapshot.text, keeping: establishedSpellings) {
+                deliverAnswer(exact.text, about: snapshot.text, note: nil, run: run, engineName: "VocaMac")
+                return
+            }
+            guard let result = await runCommandModel(text: snapshot.text, intent: intent, mode: .answer, run: run) else { return }
+            deliverAnswer(result.output, about: snapshot.text, note: result.problem?.message, run: run)
+        case .cursor(let insertionPoint):
+            guard let result = await runCommandModel(text: instruction, intent: intent, mode: .compose, run: run) else { return }
+            await deliverComposedText(result.output, at: insertionPoint, note: result.problem?.message, run: run)
+        }
+    }
+
+    // MARK: Command Mode: the model
+
+    /// Spellings the user has settled on, which a rule edit must not undo.
+    private var establishedSpellings: [String] {
+        vocabularyTerms + wordReplacements.map(\.replacement)
+    }
+
+    /// What the session can tell the model about where the text lives.
+    private func commandContext(instruction: String, text: String) -> CommandContext {
+        let haystack = (instruction + "\n" + text).lowercased()
+        let terms = (vocabularyTerms + wordReplacements.map(\.replacement))
+            .filter { $0.count >= 3 && haystack.contains($0.lowercased()) }
+        var seen = Set<String>()
+        return CommandContext(
+            appName: commandTargetApp?.displayName,
+            style: writingStyleEnabled ? resolveWritingStyle(for: commandTargetApp).profile.format : nil,
+            terms: terms.filter { seen.insert($0.lowercased()).inserted }
+        )
+    }
+
+    /// Ask the model, check what it wrote, and ask once more when the answer
+    /// is plainly not what was asked for. Nil after reporting a failure, or
+    /// when the session was cancelled.
+    private func runCommandModel(
+        text: String, intent: CommandIntent, mode: CommandMode, run: CommandRun
+    ) async -> (output: String, problem: CommandOutputProblem?)? {
+        let engine = run.engine, generation = run.generation
         if case .local(let kind) = engine {
             await commandModelWarmup?.value
             commandModelWarmup = nil
-            guard generation == recordingGeneration else { return }
+            guard generation == recordingGeneration else { return nil }
+            var service = activeCommandService ?? commandModelService(for: kind)
             // Joins or no-ops when the warm-up already loaded it.
-            await transcriptCleanup.load(kind)
+            await service.load(kind)
+            if service.loadedKind != kind, service !== transcriptCleanup {
+                // No room for a second model after all: borrow cleanup's
+                // slot, as a Mac with less memory does.
+                VocaLogger.info(.appState, "Command Mode is borrowing the cleanup model's slot for \(kind.descriptor.displayName)")
+                service = transcriptCleanup
+                activeCommandService = service
+                await service.load(kind)
+            }
             // Check the kind, not just "something is loaded": a load refused
             // before it starts leaves the cleanup model resident, and a 0.5B
             // cleanup model must not be handed an editing command.
-            guard transcriptCleanup.loadedKind == kind else {
-                cursorOverlay.hide()
+            guard service.loadedKind == kind else {
                 let detail: String
-                if case .error(let message) = transcriptCleanup.modelState { detail = message }
+                if case .error(let message) = service.modelState { detail = message }
                 else { detail = "\(kind.descriptor.displayName) could not be loaded." }
-                showTemporaryError("Command Mode did not change the text: \(detail)")
-                return
+                failCommand("Command Mode did not change the text: \(detail)", detail: "the model could not be loaded — \(detail)", started: run.started)
+                return nil
             }
         }
-        guard generation == recordingGeneration else { return }
+        guard generation == recordingGeneration else { return nil }
 
+        let context = commandContext(instruction: run.instruction, text: mode == .compose ? "" : text)
         let transformer = commandTransformer(for: engine)
+        var options = TransformOptions(allowsSplitting: mode == .replace && intent.appliesPerPart)
+        options.onPartial = { [weak self] partial in
+            guard let self, generation == self.recordingGeneration else { return }
+            self.commandModeSession?.preview = partial
+        }
         activeCommandTransformer = transformer
-        let attempt = await transformer.transform(
-            selection.text,
-            prompt: CommandModePrompt.make(instruction: instruction)
+        let result = await CommandModelRunner.run(
+            text: text, instruction: run.instruction, intent: intent, mode: mode, context: context,
+            transformer: transformer, options: options,
+            // Escape while the model was running: the user no longer wants
+            // this edit, even if the model finished anyway.
+            isCurrent: { generation == self.recordingGeneration },
+            willAsk: { retryReason in
+                self.commandModeSession?.preview = nil
+                if let retryReason {
+                    VocaLogger.info(.appState, "Command Mode is asking again: \(retryReason)")
+                }
+            }
         )
         activeCommandTransformer = nil
-        // Escape while the model was running: the user no longer wants this
-        // edit, even if the model finished anyway.
-        guard generation == recordingGeneration else {
+        switch result {
+        case .success(let answer):
+            return (answer.output, answer.problem)
+        case .failure(.cancelled):
             VocaLogger.info(.appState, "Command Mode cancelled; selection left unchanged")
-            return
+            return nil
+        case .failure(.failed(let why)):
+            failCommand("Command Mode did not change the text: \(why).", started: run.started)
+            return nil
         }
+    }
 
-        let replacement = TranscriptCleanup.preservingOuterWhitespace(
-            of: selection.text, in: attempt.output
-        )
-        guard case .cleaned = attempt.outcome,
-              let selectedTextService,
-              await selectedTextService.replaceSelection(selection, with: replacement) else {
+    // MARK: Command Mode: results
+
+    /// Replace the selection with an edit, or hold it for approval first.
+    private func deliverEdit(_ edit: PendingCommandEdit, run: CommandRun, reviews: Bool) async {
+        if reviews {
+            pendingReviewEdit = edit
+            presentCommandReview(CommandReview(
+                kind: .edit, instruction: edit.instruction, original: edit.snapshot.text,
+                result: edit.replacement, engineName: edit.engineName, note: edit.note,
+                acceptShortcut: shortcut(for: .commandMode).map { KeyCodeReference.displayName(for: $0) }
+            ))
+            VocaLogger.info(.appState, String(
+                format: "Command Mode is holding a %d-character edit for review after %.2fs",
+                edit.replacement.count, Date().timeIntervalSince(run.started)
+            ))
             cursorOverlay.hide()
-            let reason: String
-            switch attempt.outcome {
-            case .rejected(let why), .skipped(let why): reason = why
-            case .unchanged: reason = "the model returned the selection unchanged"
-            case .cleaned: reason = "the selection changed or its app is no longer in front"
-            }
-            showTemporaryError("Command Mode did not change the text: \(reason).")
+            appStatus = .idle
+            errorMessage = nil
             return
         }
-        lastCommandEdit = CommandModeEdit(
-            instruction: instruction,
-            original: selection.text,
-            replacement: replacement,
-            engineName: engine.displayName
-        )
-        if historyEnabled {
-            // Same retention as dictations, applied now rather than at the
-            // next dictation, so a run of edits can't outlive the setting.
-            defer { historyStore.applyRetention(historyRetention) }
-            historyStore.recordCommandEdit(
-                instruction: instruction,
-                original: selection.text,
-                replacement: replacement,
-                summary: "Command Mode · \(engine.displayName)",
-                target: commandTargetApp,
-                modelID: selectedModelSize,
-                language: transcription.detectedLanguage,
-                audioSeconds: transcription.audioLengthSeconds
-            )
+        guard await applyEdit(edit) else {
+            failCommand("Command Mode did not change the text: the selection changed or its app is no longer in front.", detail: "the selection changed or its app is no longer in front", started: run.started)
+            return
         }
-        VocaLogger.info(
-            .appState,
-            "Command Mode queued a " + String(replacement.count) + "-character replacement"
-        )
+        VocaLogger.info(.appState, String(
+            format: "Command Mode queued a %d-character replacement after %.2fs",
+            edit.replacement.count, Date().timeIntervalSince(run.started)
+        ))
         cursorOverlay.hide()
         appStatus = .idle
         errorMessage = nil
     }
 
+    /// Put an edit into the document and remember it.
+    private func applyEdit(_ edit: PendingCommandEdit) async -> Bool {
+        guard let selectedTextService,
+              await selectedTextService.replaceSelection(edit.snapshot, with: edit.replacement) else { return false }
+        lastCommandEdit = CommandModeEdit(
+            instruction: edit.instruction, original: edit.snapshot.text, replacement: edit.replacement,
+            engineName: edit.engineName, kind: .edit, note: edit.note
+        )
+        lastCommandTarget = (edit.snapshot, edit.snapshot.text, edit.replacement, Date())
+        recordCommandHistory(
+            instruction: edit.instruction, original: edit.snapshot.text, replacement: edit.replacement,
+            summary: edit.summary, app: edit.app, language: edit.language, audioSeconds: edit.audioSeconds
+        )
+        return true
+    }
+
+    /// Show an answer about text that can't be replaced.
+    private func deliverAnswer(
+        _ answer: String, about original: String, note: String?, run: CommandRun, engineName: String? = nil
+    ) {
+        let engineName = engineName ?? run.engine.displayName
+        lastCommandEdit = CommandModeEdit(
+            instruction: run.instruction, original: original, replacement: answer,
+            engineName: engineName, kind: .answer, note: note
+        )
+        recordCommandHistory(
+            instruction: run.instruction, original: original, replacement: answer,
+            summary: "Command Mode · \(engineName) · answer", app: commandTargetApp,
+            language: run.language, audioSeconds: run.audioSeconds
+        )
+        presentCommandReview(CommandReview(
+            kind: .answer, instruction: run.instruction, original: original,
+            result: answer, engineName: engineName, note: note
+        ))
+        VocaLogger.info(.appState, String(
+            format: "Command Mode answered about read-only text (%d characters) after %.2fs",
+            answer.count, Date().timeIntervalSince(run.started)
+        ))
+        cursorOverlay.hide()
+        appStatus = .idle
+        errorMessage = nil
+    }
+
+    /// Type new text where the cursor was when the session began.
+    ///
+    /// The model ran for seconds, and typing goes to whatever has focus now.
+    /// The same app in front is not enough: the cursor may have moved to
+    /// another field of it, one that sends what is typed. So where the app
+    /// reported its cursor at the start, it has to report the same field,
+    /// position, and text now, or the result is kept in the menu bar instead.
+    /// An app that reports no cursor gets the check a dictation gets: the
+    /// same app must still be in front.
+    private func deliverComposedText(_ text: String, at insertionPoint: InsertionPoint?, note: String?, run: CommandRun) async {
+        let current = frontmostAppResolver.currentFrontmostApp() ?? frontmostAppResolver.lastActiveApp()
+        guard Self.sameOutputTarget(commandTargetApp, current) else {
+            heldOutput = text
+            failCommand("The destination app changed. The text is saved in the menu bar; copy it to paste where you want.", detail: "the app changed before the text could be typed", started: run.started)
+            return
+        }
+        if let insertionPoint {
+            let now = await selectedTextService?.captureInsertionPoint()
+            guard run.generation == recordingGeneration else { return }
+            guard insertionPoint.matches(now) else {
+                heldOutput = text
+                failCommand("The cursor moved while the text was being written. It is saved in the menu bar; copy it to paste where you want.", detail: "the cursor moved before the text could be typed", started: run.started)
+                return
+            }
+        }
+        textInjector.inject(text: text, preserveClipboard: preserveClipboard)
+        let engineName = run.engine.displayName
+        lastCommandEdit = CommandModeEdit(
+            instruction: run.instruction, original: "", replacement: text,
+            engineName: engineName, kind: .composed, note: note
+        )
+        // Where it landed, so "make it shorter" can pick it up.
+        lastCommandTarget = insertionPoint.map { ($0.snapshot, "", text, Date()) }
+        recordCommandHistory(
+            instruction: run.instruction, original: "", replacement: text,
+            summary: "Command Mode · \(engineName) · new text", app: commandTargetApp,
+            language: run.language, audioSeconds: run.audioSeconds
+        )
+        VocaLogger.info(.appState, String(
+            format: "Command Mode typed %d new characters after %.2fs",
+            text.count, Date().timeIntervalSince(run.started)
+        ))
+        cursorOverlay.hide()
+        appStatus = .idle
+        errorMessage = nil
+    }
+
+    private func recordCommandHistory(
+        instruction: String, original: String, replacement: String, summary: String,
+        app: RunningAppSnapshot?, language: String?, audioSeconds: Double
+    ) {
+        guard historyEnabled else { return }
+        // Same retention as dictations, applied now rather than at the next
+        // dictation, so a run of edits can't outlive the setting.
+        defer { historyStore.applyRetention(historyRetention) }
+        historyStore.recordCommandEdit(
+            instruction: instruction, original: original, replacement: replacement,
+            summary: summary, target: app, modelID: selectedModelSize,
+            language: language, audioSeconds: audioSeconds
+        )
+    }
+
+    // MARK: Command Mode: follow-ups and undo
+
+    /// The last edit, selected again, when it is recent and still there.
+    private func reselectLastCommandEdit() async -> SelectedTextSnapshot? {
+        guard let last = lastCommandTarget, let selectedTextService,
+              Date().timeIntervalSince(last.at) <= Self.commandFollowUpWindow else { return nil }
+        return await selectedTextService.reselect(last.snapshot, replacement: last.replacement)
+    }
+
+    /// "Undo that": put back what the last edit replaced.
+    ///
+    /// Not the app's own Undo. That takes back whatever the app did last, and
+    /// once the user has typed anything since, that is their typing and not
+    /// the edit. Instead the result is selected again where it was put, which
+    /// only succeeds if it is still there unchanged, and the original is
+    /// written over it. Where the app won't let text be selected that way,
+    /// nothing is touched and the user is pointed at ⌘Z.
+    private func undoLastCommandEdit(_ run: CommandRun) async {
+        guard let last = lastCommandTarget, let selectedTextService else {
+            failCommand("There's no Command Mode edit to undo here.", detail: "undo was asked for with no edit to undo", started: run.started)
+            return
+        }
+        guard let reselected = await selectedTextService.reselect(last.snapshot, replacement: last.replacement) else {
+            failCommand("VocaMac can't take that edit back here: the text has changed since, or this app doesn't let it be selected. Press ⌘Z in the app instead.", detail: "the last edit could not be selected again to undo it", started: run.started)
+            return
+        }
+        // Text that was written, not replaced, has nothing to put back.
+        let undone = last.original.isEmpty
+            ? await selectedTextService.deleteSelection(reselected)
+            : await selectedTextService.replaceSelection(reselected, with: last.original)
+        guard undone else {
+            failCommand("VocaMac couldn't take that edit back: the selection changed. Press ⌘Z in the app instead.", detail: "the reselected edit changed before it could be undone", started: run.started)
+            return
+        }
+        lastCommandTarget = nil
+        lastCommandEdit = nil
+        VocaLogger.info(.appState, "Command Mode undid the last edit")
+        cursorOverlay.hide()
+        appStatus = .idle
+        errorMessage = nil
+    }
+
+    // MARK: Command Mode: actions
+
+    /// Shortcuts a spoken instruction may run, as the user listed them.
+    var allowedVoiceShortcuts: [String] {
+        SavedCommandStore.shortcutNames(from: voiceActionShortcuts)
+    }
+
+    private func performVoiceAction(_ action: VoiceAction, run: CommandRun) async {
+        guard let voiceActionPerformer else { return }
+        let permitted: VoiceAction
+        switch VoiceActionPolicy.permitted(action, allowedShortcuts: allowedVoiceShortcuts) {
+        case .success(let allowed): permitted = allowed
+        case .failure(let error):
+            failCommand(error.message, detail: "\(action.summary) was not allowed", started: run.started)
+            return
+        }
+        // A shortcut gets the selection as its input; nothing else does.
+        var input: String?
+        if case .runShortcut = permitted { input = run.target.selectedText }
+        switch await voiceActionPerformer.perform(permitted, input: input) {
+        case .failure(let error):
+            failCommand(error.message, detail: "\(permitted.summary) failed — \(error.message)", started: run.started)
+        case .success:
+            lastCommandEdit = CommandModeEdit(
+                instruction: run.instruction, original: "", replacement: permitted.summary,
+                engineName: "VocaMac", kind: .action
+            )
+            recordCommandHistory(
+                instruction: run.instruction, original: "", replacement: permitted.summary,
+                summary: "Command Mode · action", app: commandTargetApp,
+                language: run.language, audioSeconds: run.audioSeconds
+            )
+            VocaLogger.info(.appState, "Command Mode action: \(permitted.summary)")
+            cursorOverlay.hide()
+            appStatus = .idle
+            errorMessage = nil
+        }
+    }
+
+    // MARK: Command Mode: review
+
+    private func presentCommandReview(_ review: CommandReview) {
+        commandReview = review
+        refreshCancelKeyArming()
+        commandReviewPresenter?.show(
+            review,
+            onAccept: { [weak self] in Task { @MainActor in await self?.acceptCommandReview() } },
+            onCopy: { [weak self] in self?.copyCommandReview() },
+            onDismiss: { [weak self] in self?.dismissCommandReview() }
+        )
+    }
+
+    /// Apply the edit being reviewed.
+    func acceptCommandReview() async {
+        guard let edit = pendingReviewEdit else {
+            dismissCommandReview()
+            return
+        }
+        dismissCommandReview()
+        guard await applyEdit(edit) else {
+            failCommand("Command Mode did not change the text: the selection changed or its app is no longer in front.", detail: "a reviewed edit could not be applied: the selection changed")
+            return
+        }
+        VocaLogger.info(.appState, "Command Mode applied a reviewed \(edit.replacement.count)-character edit")
+    }
+
+    func copyCommandReview() {
+        guard let review = commandReview else { return }
+        copyToClipboard(review.result)
+        // An answer has nothing else to do; an edit stays up to be approved.
+        if review.kind == .answer { dismissCommandReview() }
+    }
+
+    func dismissCommandReview() {
+        guard commandReview != nil || pendingReviewEdit != nil else { return }
+        commandReview = nil
+        pendingReviewEdit = nil
+        commandReviewPresenter?.hide()
+        refreshCancelKeyArming()
+    }
+
+    // MARK: Command Mode: saved commands
+
+    var savedCommands: [SavedCommand] {
+        get { SavedCommandStore.decode(savedCommandsJSON) }
+        set {
+            savedCommandsJSON = SavedCommandStore.encode(newValue)
+            syncShortcutConfiguration()
+        }
+    }
+
+    /// Run a saved command on the current selection.
+    func runSavedCommand(_ id: UUID) async {
+        guard let command = savedCommands.first(where: { $0.id == id }), command.isUsable else { return }
+        await runCommand(instruction: command.instruction)
+    }
+
+    // MARK: Command Mode: model slots
+
     /// Drop a Command Mode session that ended without an edit: stop its
     /// model, and hand the llama.cpp slot back to cleanup.
     private func resetCommandModeState() {
-        activeCommandSelection = nil
+        activeCommandTarget = nil
         commandModeSession = nil
         commandModePressStartedAt = nil
         activeCommandTransformer?.cancelTransform()
@@ -4296,13 +4976,21 @@ extension AppState {
     /// Give the cleanup model back after a Command Mode model borrowed the
     /// shared llama.cpp slot, or free a large model that nothing else needs.
     private func finishCommandModelUse(_ engine: CommandModeEngine) {
+        let service = activeCommandService
         activeCommandEngine = nil
+        activeCommandService = nil
         guard case .local(let kind) = engine else { return }
         commandModelIdleUnload?.cancel()
-        if cleanupUsesLocalModel {
-            // The next dictation needs its cleanup model resident.
+        let usedOwnSlot = commandModelSlot != nil && service === commandModelSlot
+        if cleanupUsesLocalModel, !usedOwnSlot {
             if kind != selectedCleanupModelKind {
+                // The next dictation needs its cleanup model resident.
                 Task { await releaseCommandModelSlot() }
+            } else {
+                // One model does both. The edit left its own prompt in the
+                // model, so the next dictation would read cleanup's again
+                // from the top; read it now instead.
+                Task { await warmCleanupModel() }
             }
             return
         }
@@ -4313,7 +5001,11 @@ extension AppState {
         commandModelIdleUnload = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
             guard let self, !Task.isCancelled, self.commandModelIdleUnloadIsDue else { return }
-            await self.releaseCommandModelSlot()
+            if usedOwnSlot {
+                self.commandModelSlot?.unload()
+            } else {
+                await self.releaseCommandModelSlot()
+            }
         }
     }
 
@@ -4339,9 +5031,49 @@ extension AppState {
     private func releaseCommandModelSlot() async {
         if cleanupUsesLocalModel {
             await transcriptCleanup.load(selectedCleanupModelKind)
+            await warmCleanupModel()
         } else if transcriptCleanup.isLoaded {
             transcriptCleanup.unload()
         }
+    }
+
+    // MARK: Cleanup warm-up
+
+    /// The options a dictation into `profile` is processed with.
+    private func dictationOptions(
+        profile: WritingProfile, language: String?, contextTerms: [String], preview: Bool = false
+    ) -> DictationOutputOptions {
+        DictationOutputOptions(
+            profile: profile, snippetList: snippets,
+            cleanupEnabled: transcriptCleanupEnabled, rewritingEnabled: writingRewriteEnabled,
+            model: selectedCleanupModelKind, customPrompt: effectiveCleanupPrompt,
+            cleanupLevel: transcriptCleanupLevel, language: language,
+            autoCapitalize: autoCapitalize, trailingSpace: appendTrailingSpace,
+            preview: preview,
+            dictionary: dictionaryContext(contextTerms: contextTerms, language: language),
+            numbersAsDigits: numbersAsDigits, numberSymbols: numberSymbols,
+            spokenEmoji: spokenEmoji, skipWhenClean: skipCleanDictations
+        )
+    }
+
+    /// Load the cleanup model and have it read the prompt the next dictation
+    /// into `target` will use.
+    ///
+    /// llama.cpp keeps the tokens of its last request and reads only what is
+    /// new. The cleanup prompt is about a thousand tokens and comes first, so
+    /// once it has been read a dictation costs only its own words — but after
+    /// a load, a Command Mode edit, or a switch between a prose app and a
+    /// terminal, the next dictation used to read all of it while the user
+    /// waited. This reads it ahead: at launch, after an edit, and when a
+    /// recording starts, while the user is still speaking.
+    func warmCleanupModel(for target: RunningAppSnapshot? = nil) async {
+        guard cleanupUsesLocalModel else { return }
+        let target = target ?? frontmostAppResolver.styleTargetApp()
+        let profile = nextWritingProfile ?? resolveWritingStyle(for: target).profile
+        let language = selectedLanguage == "auto" ? nil : selectedLanguage
+        await outputPipeline.warmUp(
+            options: dictationOptions(profile: profile, language: language, contextTerms: [])
+        )
     }
 
     /// Start a dictation that runs until the shortcut is pressed again (or
@@ -4374,7 +5106,11 @@ extension AppState {
     fileprivate func refreshCancelKeyArming(status: AppStatus? = nil) {
         guard let monitor = hotKeyManager as? HotKeyShortcutMonitoring else { return }
         let current = status ?? appStatus
-        monitor.setCancelKeyArmed(escapeCancelsDictation && (current == .recording || isTranscribing))
+        // A result on screen is closed with Escape whatever the dictation
+        // setting says: it is the only key the panel has.
+        monitor.setCancelKeyArmed(
+            (escapeCancelsDictation && (current == .recording || isTranscribing)) || commandReview != nil
+        )
     }
 
     // MARK: Dictionary

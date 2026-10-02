@@ -49,7 +49,9 @@ enum SettingsArchiveService {
     /// Deliberate allowlist, with the kind each value must have: user content
     /// (history, stats, scratchpad) and the cleanup endpoint and API key are
     /// not settings backups. Neither is the Command Mode clipboard opt-in: a
-    /// privacy consent is given in Settings, never by importing a file.
+    /// privacy consent is given in Settings, never by importing a file. The
+    /// same goes for voice actions and the Shortcuts they may run: a file
+    /// must not be able to let spoken words start things on this Mac.
     /// Selecting Custom Endpoint is the same kind of consent (audio leaves
     /// this Mac), so `custom-endpoint` is skipped on restore even though
     /// `selectedModelSize` is otherwise imported.
@@ -67,7 +69,7 @@ enum SettingsArchiveService {
         PreferenceKey.numbersAsDigits: .bool, PreferenceKey.numberSymbols: .bool,
         PreferenceKey.spokenEmoji: .bool, PreferenceKey.processWhileSpeaking: .bool,
         PreferenceKey.transcriptCleanupEnabled: .bool, PreferenceKey.useScreenContext: .bool,
-        PreferenceKey.aiModelsKeptSeparate: .bool,
+        PreferenceKey.aiModelsKeptSeparate: .bool, PreferenceKey.cleanupSkipsCleanText: .bool,
         PreferenceKey.writingRewriteEnabled: .bool, PreferenceKey.writingStyleEnabled: .bool,
         // Whole numbers
         "vocamac.hotKeyCode": .integer, "vocamac.hotKeyModifiers": .integer,
@@ -83,7 +85,8 @@ enum SettingsArchiveService {
         "vocamac.overlayStyle": .string, "vocamac.selectedAudioChannelDeviceID": .string,
         "vocamac.selectedAudioDeviceID": .string, "vocamac.selectedAudioDeviceName": .string,
         PreferenceKey.autoPauseApps: .string, PreferenceKey.commandModeShortcut: .string,
-        PreferenceKey.commandModeEngine: .string, PreferenceKey.dictationTone: .string,
+        PreferenceKey.commandModeEngine: .string, PreferenceKey.commandModeReview: .string,
+        PreferenceKey.savedCommands: .string, PreferenceKey.dictationTone: .string,
         PreferenceKey.handsFreeShortcut: .string, PreferenceKey.historyRetention: .string,
         PreferenceKey.learnCorrectionsMode: .string, PreferenceKey.pasteLastShortcut: .string,
         PreferenceKey.selectedLanguage: .string, PreferenceKey.selectedModelSize: .string,

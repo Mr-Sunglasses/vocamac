@@ -983,9 +983,7 @@ struct MenuBarView: View {
             HStack(spacing: 6) {
                 Image(systemName: "wand.and.stars")
                     .foregroundStyle(VocaDesign.command)
-                Text(session.phase == .rewriting
-                     ? "Rewriting with \(session.engineName)"
-                     : "Say how to change the selection")
+                Text(commandSessionTitle(session))
                     .font(.callout.weight(.medium))
                 Spacer(minLength: 0)
             }
@@ -994,10 +992,17 @@ struct MenuBarView: View {
                     .font(.caption)
                     .lineLimit(2)
             }
-            Text("Editing “\(session.selectionPreview)”")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
+            if session.phase == .rewriting, let written = session.previewTail {
+                Text(written)
+                    .font(.caption)
+                    .lineLimit(2)
+            }
+            if session.kind != .compose {
+                Text("\(session.kind == .answer ? "About" : "Editing") “\(session.selectionPreview)”")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
             Text(commandSessionDetail(session))
                 .font(.caption2)
                 .foregroundStyle(.secondary)
@@ -1012,17 +1017,32 @@ struct MenuBarView: View {
         .accessibilityElement(children: .combine)
     }
 
+    private func commandSessionTitle(_ session: CommandModeSession) -> String {
+        switch (session.kind, session.phase) {
+        case (.edit, .listening): return "Say how to change the selection"
+        case (.compose, .listening): return "Say what to write"
+        case (.answer, .listening): return "Ask about the selection"
+        case (.edit, .rewriting): return "Rewriting with \(session.engineName)"
+        case (.compose, .rewriting): return "Writing with \(session.engineName)"
+        case (.answer, .rewriting): return "Answering with \(session.engineName)"
+        }
+    }
+
     private func commandSessionDetail(_ session: CommandModeSession) -> String {
+        guard session.kind != .compose else {
+            let place = session.appName.flatMap { $0.isEmpty ? nil : "Typed at the cursor in \($0)" } ?? "Typed at the cursor"
+            return "\(place) · Esc cancels"
+        }
         var parts = ["\(session.characterCount) characters"]
         if let app = session.appName, !app.isEmpty { parts[0] += " in \(app)" }
-        parts.append("Esc leaves it unchanged")
+        parts.append(session.kind == .answer ? "Esc cancels" : "Esc leaves it unchanged")
         return parts.joined(separator: " · ")
     }
 
     private func commandEditSection(_ edit: CommandModeEdit) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Label("Last Edit", systemImage: "wand.and.stars")
+                Label(commandEditTitle(edit), systemImage: "wand.and.stars")
                     .font(.subheadline)
                     .foregroundStyle(VocaDesign.command)
                 Spacer()
@@ -1039,13 +1059,32 @@ struct MenuBarView: View {
                 .lineLimit(4)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            HStack {
-                Button("Copy Original") { copyToPasteboard(edit.original) }
-                    .help("Copy the text as it was before the edit")
-                Button("Copy Result") { copyToPasteboard(edit.replacement) }
-                Spacer()
+            if let note = edit.note {
+                Label("Check this: \(note).", systemImage: "exclamationmark.triangle")
+                    .font(.caption2)
+                    .foregroundStyle(VocaDesign.warning)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            .controlSize(.small)
+            if edit.kind != .action {
+                HStack {
+                    if edit.kind == .edit {
+                        Button("Copy Original") { copyToPasteboard(edit.original) }
+                            .help("Copy the text as it was before the edit")
+                    }
+                    Button("Copy Result") { copyToPasteboard(edit.replacement) }
+                    Spacer()
+                }
+                .controlSize(.small)
+            }
+        }
+    }
+
+    private func commandEditTitle(_ edit: CommandModeEdit) -> String {
+        switch edit.kind {
+        case .edit: return "Last Edit"
+        case .composed: return "Last Written"
+        case .answer: return "Last Answer"
+        case .action: return "Last Action"
         }
     }
 

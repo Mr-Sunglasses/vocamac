@@ -105,6 +105,8 @@ Scripts: `./scripts/build.sh` (dev `.app`), `./scripts/install.sh`, `./scripts/i
 
 - **Single source of truth:** `AppState` (`ObservableObject` + `@Published`). Views observe and dispatch; they do not own business logic.
 - **Service layer:** `Sources/VocaMac/Services/`. `TranscriptionRouter` is the `SpeechTranscribing` facade — views and `AppState` must not call Whisper / Parakeet / Apple Speech / Sherpa services directly.
+- **Command Mode:** `AppState` routes a spoken instruction in this order: undo, voice action, rule edit (`CommandExactEdit`), then the model through `CommandModelRunner` (prompt, `CommandOutputCheck`, one retry). The pure parts live in `Services/CommandInstruction.swift` and `Services/VoiceAction.swift`. A voice action is chosen only from the user's spoken words by fixed patterns: never by the model, and never from selected text, which is untrusted material. Shortcuts run only from the user's allow-list (`VoiceActionPolicy`).
+- **Cleanup latency:** llama.cpp re-reads only what differs from its last request, and the cleanup prompt (about 1,000 tokens) comes first. Keep it byte-stable per level, and call `warmCleanupModel` after anything that replaces it in the model (a load, a Command Mode edit on a shared model). `CleanupNeed` decides when the model is skipped; it must stay one-sided (when unsure, ask the model).
 - **CLI:** same executable, headless. Flags: `--transcribe-file`, `--list-models`, `--help` (`-h`). Production CLI must not construct `AppState` or start SwiftUI, mic capture, hotkeys, onboarding, or text injection.
 - **ObjC helper:** `VocaMacObjC` converts `NSException` (e.g. AVAudioEngine tap install) into `NSError`. Swift cannot catch those exceptions.
 - **DI:** `@EnvironmentObject` or init parameters.

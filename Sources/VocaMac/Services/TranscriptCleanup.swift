@@ -199,13 +199,90 @@ enum TranscriptCleanup {
     /// Command Mode is explicitly allowed to change length and language. Keep
     /// the chatbot/refusal and runaway-output gates, but not semantic overlap.
     static func acceptedTransformOutput(_ raw: String, original: String) -> String? {
-        let cleaned = stripTransformWrapping(sanitize(raw), original: original)
+        let cleaned = unwrappingInventedLinks(
+            in: stripTransformWrapping(sanitize(raw), original: original), original: original
+        )
         guard !cleaned.isEmpty, cleaned != "..." else { return nil }
-        let lowered = cleaned.lowercased()
-        let refusals = ["i cannot", "i can't", "i am an ai", "i'm an ai", "as an ai"]
-        guard !refusals.contains(where: { lowered.hasPrefix($0) }) else { return nil }
-        guard cleaned.count <= max(original.count * 8, original.count + 2_000) else { return nil }
+        let opening = normalizedForRefusal(cleaned)
+        guard !transformRefusalPrefixes.contains(where: { opening.hasPrefix($0) }) else { return nil }
+        guard cleaned.count <= maximumTransformLength(original: original) else { return nil }
         return cleaned
+    }
+
+    private static let selfLinkExpression = try? NSRegularExpression(
+        pattern: #"\[([^\]\n]+)\]\((https?://[^)\s]+)\)"#
+    )
+
+    /// Undo "[https://a.example](https://a.example)": a plain address the
+    /// model dressed up as a Markdown link. Most apps would show the brackets
+    /// as typed. Only a link whose text is its own address, and that the
+    /// original did not already write that way, is unwrapped.
+    static func unwrappingInventedLinks(in text: String, original: String) -> String {
+        guard let selfLinkExpression, text.contains("](") else { return text }
+        let source = text as NSString
+        var result = text
+        for match in selfLinkExpression.matches(in: text, range: NSRange(location: 0, length: source.length)).reversed() {
+            let whole = source.substring(with: match.range)
+            let label = source.substring(with: match.range(at: 1))
+            let address = source.substring(with: match.range(at: 2))
+            let bare = address.replacingOccurrences(of: "https://", with: "").replacingOccurrences(of: "http://", with: "")
+            guard label == address || label == bare, !original.contains(whole),
+                  let range = Range(match.range, in: result) else { continue }
+            result.replaceSubrange(range, with: address)
+        }
+        return result
+    }
+
+    /// Openings that mean the model declined an edit. Narrower than "I
+    /// can't": a requested reply may well begin "I can't make it on Friday".
+    static let transformRefusalPrefixes = [
+        "as an ai", "i am an ai", "i'm an ai",
+        "i cannot assist", "i can't assist", "i cannot help", "i can't help",
+        "i cannot fulfill", "i can't fulfill", "i cannot comply", "i can't comply",
+        "i'm sorry, but i can", "i am sorry, but i can", "i'm unable to", "i am unable to",
+    ]
+
+    /// Openings that mean a cleanup model answered the dictation instead of
+    /// tidying it.
+    static let cleanupRefusalPrefixes = [
+        "i cannot",
+        "i can't",
+        "i am an ai",
+        "i'm an ai",
+        "as an ai",
+        "how can i help",
+        "sure, here's",
+        "sure, here is",
+        "i'm sorry, i"
+    ]
+
+    static func refusalPrefixes(allowsTransform: Bool) -> [String] {
+        allowsTransform ? transformRefusalPrefixes : cleanupRefusalPrefixes
+    }
+
+    /// The start of `text` as the refusal lists are written: lowercased,
+    /// without leading whitespace, with a plain apostrophe.
+    static func normalizedForRefusal(_ text: String) -> String {
+        text.drop(while: \.isWhitespace).prefix(64).lowercased().replacingOccurrences(of: "’", with: "'")
+    }
+
+    /// Longest Command Mode answer that is still an edit of `original`
+    /// rather than a model that won't stop.
+    static func maximumTransformLength(original: String) -> Int {
+        max(original.count * 8, original.count + 2_000)
+    }
+
+    /// Longest answer accepted as a cleanup of `original`.
+    static func maximumAcceptedCleanupLength(original: String) -> Int {
+        max(original.count * 3, original.count + 200)
+    }
+
+    /// Where a cleanup pass is stopped while still writing. Tighter than what
+    /// is accepted: a tidied dictation is about as long as the dictation, and
+    /// every further word past double is time the user spends waiting for an
+    /// answer that will be thrown away.
+    static func maximumCleanupLength(original: String) -> Int {
+        max(original.count * 2, original.count + 120)
     }
 
     /// Small instruction models wrap an edit the way a chat answer looks:
@@ -266,17 +343,7 @@ enum TranscriptCleanup {
         guard !trimmed.isEmpty, trimmed != "..." else { return false }
 
         let lowered = trimmed.lowercased()
-        let refusalPrefixes = [
-            "i cannot",
-            "i can't",
-            "i am an ai",
-            "i'm an ai",
-            "as an ai",
-            "how can i help",
-            "sure, here's",
-            "sure, here is",
-            "i'm sorry, i"
-        ]
+        let refusalPrefixes = cleanupRefusalPrefixes
         let originalLowered = original.trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased().replacingOccurrences(of: "’", with: "'")
         let refusalText = lowered.replacingOccurrences(of: "’", with: "'")
@@ -294,7 +361,7 @@ enum TranscriptCleanup {
                   words(trimmed) == words(original) else { return false }
         }
 
-        let maxAllowed = max(original.count * 3, original.count + 200)
+        let maxAllowed = maximumAcceptedCleanupLength(original: original)
         if trimmed.count > maxAllowed {
             return false
         }

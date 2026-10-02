@@ -366,6 +366,11 @@ vocamac.dictionary.suggestions = <JSON [CorrectionSuggestion]>
 vocamac.dictionary.dismissedSuggestions = ["heard→Corrected", ...]
 vocamac.dictionary.learnMode = "suggest"
 vocamac.dictionary.screenContext = true
+vocamac.transcriptCleanup.skipCleanText = true
+vocamac.commandMode.review = "never"            // never | longSelections | always
+vocamac.commandMode.savedCommands = <JSON [SavedCommand]>
+vocamac.commandMode.voiceActions = false        // never exported or imported
+vocamac.commandMode.voiceActionShortcuts = ""   // one Shortcut name per line; never exported or imported
 ...
 ```
 

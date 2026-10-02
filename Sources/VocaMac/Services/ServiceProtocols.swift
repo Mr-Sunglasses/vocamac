@@ -373,12 +373,30 @@ extension SnippetExpanding {
 @MainActor
 protocol TextTransforming: AnyObject {
     func transform(_ text: String, prompt: String) async -> CleanupAttempt
+    /// The same edit with per-call options. Engines that can't honour an
+    /// option ignore it, so the default runs the plain transform.
+    func transform(_ text: String, prompt: String, options: TransformOptions) async -> CleanupAttempt
     /// Ask an in-flight transform to stop early. The caller discards its result.
     func cancelTransform()
 }
 
 extension TextTransforming {
     func cancelTransform() {}
+
+    func transform(_ text: String, prompt: String, options: TransformOptions) async -> CleanupAttempt {
+        await transform(text, prompt: prompt)
+    }
+}
+
+/// How one Command Mode transform may run.
+struct TransformOptions {
+    /// Run a selection too long for the model one part at a time. Only right
+    /// for an instruction that applies to every part alike (translate, fix
+    /// grammar, change tone): a summary of each paragraph is not a summary.
+    var allowsSplitting = false
+    /// The text written so far, for a live preview. Engines that answer in
+    /// one piece never call it.
+    var onPartial: (@MainActor @Sendable (String) -> Void)?
 }
 
 // MARK: - TranscriptCleaning
@@ -415,9 +433,18 @@ protocol TranscriptCleaning: TextTransforming {
     func load(_ kind: CleanupModelKind) async
     func unload()
     func delete(_ kind: CleanupModelKind)
+    /// Read `prompt` into the loaded model ahead of the text it will be used
+    /// on, so the next pass with it only has to read the text. Does nothing
+    /// when no model is loaded or the prompt is already the one in place.
+    func prime(prompt: String) async
+    /// A smaller downloaded model to use when `kind` was just refused for
+    /// memory, or nil when `kind` wasn't refused or nothing smaller fits.
+    func memoryFallback(for kind: CleanupModelKind) -> CleanupModelKind?
 }
 
 extension TranscriptCleaning {
+    func prime(prompt: String) async {}
+    func memoryFallback(for kind: CleanupModelKind) -> CleanupModelKind? { nil }
     nonisolated func inputBudget(forPrompt prompt: String, model: CleanupModelKind) -> Int {
         inputBudget(forPrompt: prompt)
     }

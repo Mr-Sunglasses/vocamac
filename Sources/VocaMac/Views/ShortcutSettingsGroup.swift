@@ -187,7 +187,7 @@ enum HotKeyComboRules {
             let key = KeyCodeReference.displayName(for: HotKeyCombo(keyCode: combo.keyCode, modifiers: []))
             return "\(key) on its own would start dictation while you type. Add ⌘, ⌃, or ⌥, or use a modifier or function key."
         }
-        for action in HotKeyShortcutAction.allCases where existingShortcuts[action] == combo {
+        for action in HotKeyShortcutAction.ordered(existingShortcuts.keys) where existingShortcuts[action] == combo {
             return "That's already the \(action.displayName.lowercased()) shortcut."
         }
         return nil
@@ -232,8 +232,8 @@ enum ShortcutValidation {
         if combo == HotKeyCombo(keyCode: appState.hotKeyCode, modifiers: appState.hotKeyModifiers) {
             return "That's your dictation hotkey. Pick different keys."
         }
-        for other in HotKeyShortcutAction.allCases where other != action && appState.shortcut(for: other) == combo {
-            return "That's already the \(other.displayName.lowercased()) shortcut."
+        for other in appState.shortcutActions where other != action && appState.shortcut(for: other) == combo {
+            return "That's already the \(appState.shortcutName(for: other)) shortcut."
         }
         return nil
     }
@@ -241,7 +241,7 @@ enum ShortcutValidation {
     /// Why `combo` can't be the dictation hotkey, or nil.
     static func dictationHotKeyProblem(with combo: HotKeyCombo, appState: AppState) -> String? {
         var shortcuts: [HotKeyShortcutAction: HotKeyCombo] = [:]
-        for action in HotKeyShortcutAction.allCases {
+        for action in appState.shortcutActions {
             shortcuts[action] = appState.shortcut(for: action)
         }
         return HotKeyComboRules.dictationHotKeyProblem(combo, existingShortcuts: shortcuts)
