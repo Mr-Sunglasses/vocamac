@@ -32,6 +32,10 @@ struct SelectedTextSnapshot: @unchecked Sendable {
     /// False for text that can be read but not replaced: a web page, a PDF.
     /// Command Mode shows its answer instead of pasting it.
     let isEditable: Bool
+    /// What marks the field the selection was in, so text an edit leaves
+    /// there can be found again in that field and no other. Nil when the
+    /// selection didn't come through Accessibility.
+    let anchor: FieldAnchor?
 
     init(
         element: AXElementBox?,
@@ -40,7 +44,8 @@ struct SelectedTextSnapshot: @unchecked Sendable {
         text: String,
         range: CFRange?,
         source: Source = .accessibility,
-        isEditable: Bool = true
+        isEditable: Bool = true,
+        anchor: FieldAnchor? = nil
     ) {
         self.element = element
         self.processID = processID
@@ -49,6 +54,7 @@ struct SelectedTextSnapshot: @unchecked Sendable {
         self.range = range
         self.source = source
         self.isEditable = isEditable
+        self.anchor = anchor
     }
 }
 
@@ -146,7 +152,8 @@ final class AccessibilitySelectedTextService: SelectedTextAccessing {
         case .selected(let element, let owner, let text, let range):
             return .success(SelectedTextSnapshot(
                 element: element, processID: owner, deliveryProcessID: pid,
-                text: text, range: range, source: .accessibility
+                text: text, range: range, source: .accessibility,
+                anchor: await Self.anchor(of: element, range: range)
             ))
         case .empty:
             return .failure(.nothingSelected)
@@ -304,7 +311,10 @@ final class AccessibilitySelectedTextService: SelectedTextAccessing {
     // MARK: - Editing again, and undo
 
     func reselect(_ snapshot: SelectedTextSnapshot, replacement: String) async -> SelectedTextSnapshot? {
+        // Without the field's anchor there is no telling this field from
+        // another that holds the same words, so nothing is selected.
         guard snapshot.source == .accessibility, let location = snapshot.range?.location,
+              let anchor = snapshot.anchor,
               NSWorkspace.shared.frontmostApplication?.processIdentifier == snapshot.deliveryProcessID else {
             return nil
         }
@@ -312,7 +322,7 @@ final class AccessibilitySelectedTextService: SelectedTextAccessing {
         let selected = await withCheckedContinuation { continuation in
             AccessibilityTextReader.queue.async {
                 continuation.resume(returning: AccessibilityTextReader.selectText(
-                    replacement, at: location, frontmostPID: pid
+                    replacement, at: location, in: anchor, frontmostPID: pid
                 ))
             }
         }
@@ -322,8 +332,17 @@ final class AccessibilitySelectedTextService: SelectedTextAccessing {
               text == replacement else { return nil }
         return SelectedTextSnapshot(
             element: element, processID: owner, deliveryProcessID: pid,
-            text: text, range: range, source: .accessibility
+            text: text, range: range, source: .accessibility,
+            anchor: await Self.anchor(of: element, range: range)
         )
+    }
+
+    private static func anchor(of element: AXElementBox, range: CFRange?) async -> FieldAnchor {
+        await withCheckedContinuation { continuation in
+            AccessibilityTextReader.queue.async {
+                continuation.resume(returning: AccessibilityTextReader.fieldAnchor(of: element.element, range: range))
+            }
+        }
     }
 
     func captureInsertionPoint() async -> InsertionPoint? {

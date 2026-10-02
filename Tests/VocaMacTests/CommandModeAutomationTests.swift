@@ -299,6 +299,105 @@ final class CommandModeAutomationTests: XCTestCase {
         XCTAssertEqual(point.snapshot.text, "")
     }
 
+    // MARK: The field an edit was made in
+
+    private let fieldFrame = CGRect(x: 40, y: 300, width: 500, height: 60)
+
+    func testAnAnchorKeepsTheTextAroundTheSelection() {
+        let value = "Hi Sam,\nplease send the report today.\nThanks"
+        let selection = (value as NSString).range(of: "please send the report today.")
+        let anchor = FieldAnchor(
+            frame: fieldFrame, value: value, range: CFRange(location: selection.location, length: selection.length)
+        )
+        XCTAssertEqual(anchor.before, "Hi Sam,\n")
+        XCTAssertEqual(anchor.after, "\nThanks")
+
+        let long = String(repeating: "a", count: 200)
+        let middle = FieldAnchor(frame: fieldFrame, value: long, range: CFRange(location: 100, length: 10))
+        XCTAssertEqual(middle.before?.count, FieldAnchor.contextLength)
+        XCTAssertEqual(middle.after?.count, FieldAnchor.contextLength)
+        // A range past the end of the text is clamped, not a crash.
+        XCTAssertEqual(FieldAnchor(frame: nil, value: "abc", range: CFRange(location: 10, length: 5)).before, "abc")
+    }
+
+    func testTheSameWordsInAnotherFieldAreNotTheEdit() {
+        // The edit replaced a sentence in this field…
+        let before = "Hi Sam,\nplease send the report today.\nThanks"
+        let range = (before as NSString).range(of: "please send the report today.")
+        let anchor = FieldAnchor(
+            frame: fieldFrame, value: before, range: CFRange(location: range.location, length: range.length)
+        )
+        let result = "Send the report."
+        let after = "Hi Sam,\n\(result)\nThanks"
+        XCTAssertTrue(anchor.matches(
+            frame: fieldFrame, value: after, location: range.location, length: result.utf16.count
+        ))
+
+        // …and another field of the app holds the same result at the same
+        // offset, among other words or somewhere else on screen.
+        let elsewhere = "Hi Ana,\n\(result)\nBest"
+        XCTAssertFalse(anchor.matches(
+            frame: fieldFrame, value: elsewhere, location: range.location, length: result.utf16.count
+        ))
+        XCTAssertFalse(anchor.matches(
+            frame: fieldFrame.offsetBy(dx: 0, dy: 200), value: after, location: range.location, length: result.utf16.count
+        ))
+        XCTAssertFalse(anchor.matches(
+            frame: fieldFrame.insetBy(dx: 20, dy: 0), value: after, location: range.location, length: result.utf16.count
+        ))
+    }
+
+    func testAFieldThatGrewOrShrankWithItsTextIsStillTheField() {
+        let value = "please send the report today."
+        let anchor = FieldAnchor(frame: fieldFrame, value: value, range: CFRange(location: 0, length: value.utf16.count))
+        let result = "Send it."
+        // A message box that lost a line: shorter, with the same top edge or
+        // the same bottom edge.
+        let shrunkDown = CGRect(x: 40, y: 300, width: 500, height: 40)
+        let shrunkUp = CGRect(x: 40, y: 320, width: 500, height: 40)
+        XCTAssertTrue(anchor.matches(frame: shrunkDown, value: result, location: 0, length: result.utf16.count))
+        XCTAssertTrue(anchor.matches(frame: shrunkUp, value: result, location: 0, length: result.utf16.count))
+    }
+
+    func testAFieldThatCannotBeToldApartNeverMatches() {
+        let value = "some text"
+        let unplaced = FieldAnchor(frame: nil, value: value, range: CFRange(location: 0, length: 4))
+        XCTAssertFalse(unplaced.matches(frame: nil, value: value, location: 0, length: 4))
+        XCTAssertFalse(unplaced.matches(frame: fieldFrame, value: value, location: 0, length: 4))
+
+        let anchored = FieldAnchor(frame: fieldFrame, value: value, range: CFRange(location: 0, length: 4))
+        XCTAssertFalse(anchored.matches(frame: nil, value: value, location: 0, length: 4))
+        // Its text could be read when the edit was made, and can't now.
+        XCTAssertFalse(anchored.matches(frame: fieldFrame, value: nil, location: 0, length: 4))
+        XCTAssertFalse(anchored.matches(frame: fieldFrame, value: "so", location: 0, length: 4))
+
+        // Text that was never readable leaves only the frame to go by.
+        let unread = FieldAnchor(frame: fieldFrame, value: nil, range: CFRange(location: 0, length: 4))
+        XCTAssertNil(unread.before)
+        XCTAssertTrue(unread.matches(frame: fieldFrame, value: nil, location: 0, length: 4))
+    }
+
+    func testTextWrittenAtTheCursorIsAnchoredToItsField() {
+        let point = InsertionPoint(processID: 42, caret: 5, fieldValue: "Dear Sam", fieldFrame: fieldFrame)
+        let anchor = point.snapshot.anchor
+        XCTAssertEqual(anchor, FieldAnchor(frame: fieldFrame, before: "Dear ", after: "Sam"))
+        let written = "kind "
+        XCTAssertEqual(
+            anchor?.matches(frame: fieldFrame, value: "Dear kind Sam", location: 5, length: written.utf16.count), true
+        )
+    }
+
+    func testASelectionWithoutAnAnchorIsNotSelectedAgain() async {
+        // A selection read through the clipboard says nothing about its
+        // field, so the real service has no way to find its result again.
+        let service = AccessibilitySelectedTextService(textInjector: MockTextInjector())
+        let snapshot = SelectedTextSnapshot(
+            element: nil, processID: 42, text: "old", range: CFRange(location: 0, length: 3)
+        )
+        let reselected = await service.reselect(snapshot, replacement: "new")
+        XCTAssertNil(reselected)
+    }
+
     func testAClipboardSelectionMustCopyTheSameTextBeforeItIsReplaced() {
         let snapshot = SelectedTextSnapshot(
             element: nil, processID: 42, text: "the text that was read", range: nil, source: .clipboard

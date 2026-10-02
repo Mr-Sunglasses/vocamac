@@ -26,6 +26,73 @@ struct FocusedTextSnapshot: @unchecked Sendable {
     let caretLocation: Int?
 }
 
+/// What marks the field some text was in, apart from the text itself: where
+/// the field is on screen, and what was written just before and after.
+///
+/// The same words at the same offset can sit in two fields of one app (two
+/// drafts of a reply, the same line in two documents). Before text an edit
+/// left behind is selected again, to edit it further or to take the edit
+/// back, the field has to be shown to be the one the edit was made in.
+struct FieldAnchor: Equatable, Sendable {
+    /// Characters of surrounding text kept on each side (UTF-16 units).
+    static let contextLength = 64
+
+    /// The field's frame on screen; nil when the app doesn't report one.
+    let frame: CGRect?
+    /// The text just before and just after the selection; nil when the
+    /// field's text couldn't be read.
+    let before: String?
+    let after: String?
+
+    init(frame: CGRect?, before: String?, after: String?) {
+        self.frame = frame
+        self.before = before
+        self.after = after
+    }
+
+    /// - Parameters:
+    ///   - value: The field's whole text, when it can be read.
+    ///   - range: The selection, or the caret as an empty range.
+    init(frame: CGRect?, value: String?, range: CFRange?) {
+        self.frame = frame
+        guard let value, let range else {
+            before = nil
+            after = nil
+            return
+        }
+        let text = value as NSString
+        let start = min(max(range.location, 0), text.length)
+        let end = min(max(range.location + range.length, start), text.length)
+        let lead = min(Self.contextLength, start)
+        before = text.substring(with: NSRange(location: start - lead, length: lead))
+        after = text.substring(with: NSRange(location: end, length: min(Self.contextLength, text.length - end)))
+    }
+
+    /// Whether a field with this `frame` and `value` is the anchored one,
+    /// holding at `location` a run of `length` with the same text on either
+    /// side. A field with no known frame can't be told from another, so it
+    /// never matches.
+    ///
+    /// The field may have changed height since: a message box grows and
+    /// shrinks with its text, and the edit changed the text. It keeps its
+    /// left edge and width, and either its top edge or its bottom one,
+    /// depending on which way it grows.
+    func matches(frame current: CGRect?, value: String?, location: Int, length: Int) -> Bool {
+        guard let frame, let current,
+              abs(frame.minX - current.minX) <= 1, abs(frame.width - current.width) <= 1,
+              abs(frame.minY - current.minY) <= 1 || abs(frame.maxY - current.maxY) <= 1 else {
+            return false
+        }
+        // Nothing was known about the surroundings; the frame is all there is.
+        guard let before, let after else { return true }
+        guard let value, location >= 0, length >= 0 else { return false }
+        let text = value as NSString
+        guard location + length <= text.length else { return false }
+        return text.substring(to: location).hasSuffix(before)
+            && text.substring(from: location + length).hasPrefix(after)
+    }
+}
+
 /// Where the cursor sat in a text field, with enough about the field to tell
 /// later whether that is still where text would go.
 ///
@@ -61,8 +128,10 @@ struct InsertionPoint: Equatable, Sendable {
 
     /// The empty selection at this point, for selecting text typed here again.
     var snapshot: SelectedTextSnapshot {
-        SelectedTextSnapshot(
-            element: nil, processID: processID, text: "", range: CFRange(location: caret, length: 0)
+        let range = CFRange(location: caret, length: 0)
+        return SelectedTextSnapshot(
+            element: nil, processID: processID, text: "", range: range,
+            anchor: FieldAnchor(frame: fieldFrame, value: fieldValue, range: range)
         )
     }
 }
@@ -130,6 +199,11 @@ enum AccessibilityTextReader {
         return InsertionPoint(
             processID: processID, caret: caret, fieldValue: value(of: element), fieldFrame: frame(of: element)
         )
+    }
+
+    /// What marks the field `element` is, around a selection at `range`.
+    static func fieldAnchor(of element: AXUIElement, range: CFRange?) -> FieldAnchor {
+        FieldAnchor(frame: frame(of: element), value: value(of: element), range: range)
     }
 
     private static func frame(of element: AXUIElement) -> CGRect? {
@@ -220,9 +294,10 @@ enum AccessibilityTextReader {
 
     /// Select `expected` where it sits at `location` in the focused text
     /// element, so an edit just made can be edited again. Does nothing unless
-    /// the field holds exactly that text there: a range alone could select
-    /// whatever has been typed since.
-    static func selectText(_ expected: String, at location: Int, frontmostPID: pid_t) -> Bool {
+    /// the field holds exactly that text there, and is the field `anchor`
+    /// marks: a range alone could select whatever has been typed since, and
+    /// the text alone could be the same words in another field.
+    static func selectText(_ expected: String, at location: Int, in anchor: FieldAnchor, frontmostPID: pid_t) -> Bool {
         guard AXIsProcessTrusted(), location >= 0, !expected.isEmpty else { return false }
         let ownPID = ProcessInfo.processInfo.processIdentifier
         var candidates: [AXUIElement] = []
@@ -245,7 +320,10 @@ enum AccessibilityTextReader {
                   let value = value(of: element) else { continue }
             let text = value as NSString
             guard location + length <= text.length,
-                  text.substring(with: NSRange(location: location, length: length)) == expected else { continue }
+                  text.substring(with: NSRange(location: location, length: length)) == expected,
+                  anchor.matches(frame: frame(of: element), value: value, location: location, length: length) else {
+                continue
+            }
             var range = CFRange(location: location, length: length)
             guard let axRange = AXValueCreate(.cfRange, &range),
                   AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, axRange) == .success else {
