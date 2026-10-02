@@ -17,22 +17,12 @@ struct SettingsView: View {
 
     @State private var selectedPage: SettingsPage? = .dictation
     @State private var searchText = ""
+    @State private var selectedSearchEntryID: String?
     @State private var pageBeforeSearch: SettingsPage = .dictation
     @AppStorage("settings.lastPage") private var lastPage = SettingsPage.dictation.rawValue
     @AppStorage("settings.sidebarVisible") private var sidebarVisible = true
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var didRestore = false
-
-    private var matchCounts: [SettingsPage: Int] {
-        SettingsSearchIndex.matchCounts(query: searchText)
-    }
-
-    private var visiblePages: [SettingsPage] {
-        let trimmed = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return SettingsPage.allCases }
-        let counts = matchCounts
-        return SettingsPage.allCases.filter { counts[$0, default: 0] > 0 }
-    }
 
     private var hasSearchQuery: Bool {
         !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -48,8 +38,27 @@ struct SettingsView: View {
                 // Title only: the sidebar already says where you are, and a
                 // tagline under every page was one more line to read past.
                 VocaPageHeader(title: (selectedPage ?? .dictation).title, subtitle: nil)
-                settingsDetail
-                    .frame(maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .topLeading)
+                if let entry = SettingsSearchIndex.entries.first(where: { $0.id == selectedSearchEntryID }),
+                   let hint = entry.navigationHint {
+                    Label(hint, systemImage: "arrow.turn.down.right")
+                        .font(.callout).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 24).padding(.bottom, 8)
+                }
+                ScrollViewReader { proxy in
+                    settingsDetail
+                        .environment(\.settingsSearchTarget, selectedSearchEntryID)
+                        .frame(maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .topLeading)
+                        .task(id: selectedSearchEntryID) {
+                            guard let id = selectedSearchEntryID else { return }
+                            // Give a newly selected page and any revealed disclosure
+                            // one layout pass before scrolling to its control.
+                            do { try await Task.sleep(for: .milliseconds(120)) } catch { return }
+                            guard !Task.isCancelled else { return }
+                            proxy.scrollTo(id, anchor: .center)
+                        }
+                }
             }
             .frame(minHeight: 0, maxHeight: .infinity)
             .background(VocaDesign.canvas)
@@ -60,16 +69,18 @@ struct SettingsView: View {
             sidebarVisible = value != .detailOnly
         }
         .onChange(of: searchText) { _, newValue in
-            let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
-            if trimmed.isEmpty {
+            selectedSearchEntryID = nil
+            if newValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 selectedPage = pageBeforeSearch
-                return
             }
-            if let current = selectedPage, matchCounts[current, default: 0] == 0 {
-                selectedPage = SettingsSearchIndex.firstMatchingPage(query: trimmed)
-            } else if selectedPage == nil {
-                selectedPage = SettingsSearchIndex.firstMatchingPage(query: trimmed)
-            }
+        }
+        .onChange(of: selectedSearchEntryID) { _, id in
+            guard let id, let entry = SettingsSearchIndex.entries.first(where: { $0.id == id }) else { return }
+            selectedPage = entry.page
+            // Following a result is a move, not a peek: clearing the search
+            // afterwards must not send the reader back where they started.
+            pageBeforeSearch = entry.page
+            lastPage = entry.page.rawValue
         }
         .onChange(of: selectedPage) { _, newValue in
             if !hasSearchQuery, let newValue {
@@ -127,34 +138,27 @@ struct SettingsView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
             SettingsSidebarSearchField(text: $searchText)
+                .onSubmit {
+                    selectedSearchEntryID = SettingsSearchResults.groups(for: searchText).first?.entries.first?.id
+                }
 
-            // A real List keeps arrow-key navigation, type-select, the focus
-            // ring, and the system's active/inactive selection colours. Rolling
-            // the rows by hand as buttons loses all four.
-            List(selection: $selectedPage) {
-                ForEach(SettingsSection.allCases) { section in
-                    let pages = section.pages.filter(visiblePages.contains)
-                    if !pages.isEmpty {
+            if hasSearchQuery {
+                SettingsSearchResults(query: searchText, selection: $selectedSearchEntryID)
+            } else {
+                // Keep native arrow-key navigation and system selection colors.
+                List(selection: $selectedPage) {
+                    ForEach(SettingsSection.allCases) { section in
                         Section(section.title) {
-                            ForEach(pages) { page in
+                            ForEach(section.pages) { page in
                                 Label(page.title, systemImage: page.systemImage)
-                                    // Some glyphs here ship a multicolour variant — the
-                                    // ladybug renders red and black by default, which made
-                                    // Advanced the only coloured row in a monochrome list.
                                     .symbolRenderingMode(.monochrome)
-                                    .badge(hasSearchQuery ? (matchCounts[page] ?? 0) : 0)
                                     .tag(page)
                             }
                         }
                     }
                 }
-            }
-            .listStyle(.sidebar)
-            .scrollContentBackground(.hidden)
-            .overlay {
-                if hasSearchQuery && visiblePages.isEmpty {
-                    ContentUnavailableView.search(text: searchText)
-                }
+                .listStyle(.sidebar)
+                .scrollContentBackground(.hidden)
             }
             Divider()
             SettingsSidebarFooter()
@@ -187,7 +191,7 @@ struct SettingsView: View {
             case .application:
                 ApplicationSettingsPage()
             case .stats:
-                StatsSettingsTab()
+                StatsSettingsTab().settingsTarget("stats")
             case .advanced:
                 PermissionsLogsTab()
             case .gateway:
@@ -200,6 +204,54 @@ struct SettingsView: View {
 }
 
 // MARK: - Sidebar Search (System Settings style)
+
+/// The settings that match a search, under the page each lives on. Picking
+/// one opens its page and scrolls to the control.
+struct SettingsSearchResults: View {
+    let query: String
+    @Binding var selection: String?
+
+    /// Matches grouped by page, pages in sidebar order.
+    static func groups(for query: String) -> [(page: SettingsPage, entries: [SettingsSearchEntry])] {
+        let matches = SettingsSearchIndex.matches(query: query)
+        return SettingsSection.allCases.flatMap(\.pages).compactMap { page in
+            let entries = matches.filter { $0.page == page }
+            return entries.isEmpty ? nil : (page, entries)
+        }
+    }
+
+    var body: some View {
+        let groups = Self.groups(for: query)
+        List(selection: $selection) {
+            ForEach(groups, id: \.page) { group in
+                Section {
+                    ForEach(group.entries) { entry in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(entry.title)
+                            if let subtitle = entry.subtitle {
+                                Text(subtitle)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(2)
+                            }
+                        }
+                        .padding(.vertical, 2)
+                        .tag(entry.id)
+                        .accessibilityLabel("\(entry.title), \(group.page.title)")
+                    }
+                } header: {
+                    Label(group.page.title, systemImage: group.page.systemImage)
+                        .symbolRenderingMode(.monochrome)
+                }
+            }
+        }
+        .listStyle(.sidebar)
+        .scrollContentBackground(.hidden)
+        .overlay {
+            if groups.isEmpty { ContentUnavailableView.search(text: query) }
+        }
+    }
+}
 
 /// Pill search field pinned to the top of the settings sidebar.
 struct SettingsSidebarSearchField: View {
@@ -362,9 +414,7 @@ struct SettingsSidebarFooter: View {
         if appState.isAutoPaused { return "Auto-paused" }
         switch appState.appStatus {
         case .idle:
-            guard appState.whisperService.isModelLoaded else {
-                return isLoadingModel ? "Loading speech model…" : "Speech model not loaded"
-            }
+            guard appState.isDictationReady else { return appState.dictationReadinessTitle }
             return appState.cleanupReadinessLabel.map { "Dictation ready · \($0)" } ?? "Dictation ready"
         case .recording: return "Recording…"
         case .processing: return "Transcribing…"
@@ -376,7 +426,7 @@ struct SettingsSidebarFooter: View {
         if appState.isAutoPaused { return VocaDesign.warning }
         switch appState.appStatus {
         case .idle:
-            return appState.whisperService.isModelLoaded && appState.cleanupReadinessLabel == nil
+            return appState.isDictationReady && appState.cleanupReadinessLabel == nil
                 ? VocaDesign.success : VocaDesign.warning
         case .recording: return Color(nsColor: BrandAssets.brandGreen)
         // Matches MenuBarView.statusColor; the same state must not change hue
@@ -397,11 +447,12 @@ struct TruncationAwareText: View {
     let lineLimit: Int?
     @Binding var isTruncated: Bool
 
-    private static let font = NSFont.preferredFont(forTextStyle: .caption1)
+    var textStyle: NSFont.TextStyle = .caption1
+    private var font: NSFont { NSFont.preferredFont(forTextStyle: textStyle) }
 
     var body: some View {
         Text(text)
-            .font(.caption)
+            .font(Font(font))
             .lineLimit(lineLimit)
             // Without this a tight parent squeezes the text below its line
             // limit, leaving one ellipsized line under a "Show More" button.
@@ -419,17 +470,17 @@ struct TruncationAwareText: View {
     private func measure(width: CGFloat) {
         // Expanded text is never cut; keep the last verdict so "Show Less" stays.
         guard let lineLimit, width > 0 else { return }
-        let needed = Self.height(of: text, width: width)
-        let allowed = Self.lineHeight * CGFloat(lineLimit)
+        let needed = height(of: text, width: width)
+        let allowed = lineHeight * CGFloat(lineLimit)
         let truncated = needed > allowed + 1
         if truncated != isTruncated { isTruncated = truncated }
     }
 
-    private static var lineHeight: CGFloat {
+    private var lineHeight: CGFloat {
         NSLayoutManager().defaultLineHeight(for: font)
     }
 
-    private static func height(of text: String, width: CGFloat) -> CGFloat {
+    private func height(of text: String, width: CGFloat) -> CGFloat {
         let rect = (text as NSString).boundingRect(
             with: CGSize(width: width, height: .greatestFiniteMagnitude),
             options: [.usesLineFragmentOrigin, .usesFontLeading],
@@ -450,11 +501,13 @@ struct DictationSettingsPage: View {
                 ActivationModeSelector(selection: $appState.activationMode) {
                     appState.syncHotKeyConfiguration()
                 }
+                .settingsTarget("activation-mode")
                 Divider()
                 HotKeySelectionControl(
                     pickerLabel: "Shortcut",
                     footerText: "Reserved while VocaMac is running."
                 )
+                .settingsTarget("hotkey")
                 if appState.activationMode == .doubleTapToggle {
                     HStack {
                         Text("Double-tap speed")
@@ -477,18 +530,21 @@ struct DictationSettingsPage: View {
                     detail: "Keeps dictations from running together.",
                     isOn: $appState.appendTrailingSpace
                 )
+                .settingsTarget("trailing-space")
                 Divider()
                 SettingsToggleRow(
                     title: "Capitalize sentences",
                     detail: "Starts each sentence with a capital letter.",
                     isOn: $appState.autoCapitalize
                 )
+                .settingsTarget("auto-capitalize")
                 Divider()
                 SettingsToggleRow(
                     title: "Write numbers as digits",
                     detail: "“six pm” becomes “6 pm”. English only.",
                     isOn: $appState.numbersAsDigits
                 )
+                .settingsTarget("numbers-as-digits")
                 Divider()
                 SettingsToggleRow(
                     title: "Use symbols and ordinals",
@@ -497,6 +553,7 @@ struct DictationSettingsPage: View {
                         : "Turn on “Write numbers as digits” to use this.",
                     isOn: $appState.numberSymbols
                 )
+                .settingsTarget("number-symbols")
                 .disabled(!appState.numbersAsDigits)
                 Divider()
                 SettingsToggleRow(
@@ -504,6 +561,7 @@ struct DictationSettingsPage: View {
                     detail: "Say “party emoji” to type 🎉.",
                     isOn: $appState.spokenEmoji
                 )
+                .settingsTarget("spoken-emoji")
             }
 
             // Here rather than under Cleanup: it speeds up transcription with
@@ -514,6 +572,7 @@ struct DictationSettingsPage: View {
                     detail: "Transcribes each sentence as you finish it, so long dictations paste sooner.",
                     isOn: $appState.processWhileSpeaking
                 )
+                .settingsTarget("process-while-speaking")
                 .help("Cleans each sentence up too when Smart Cleanup is on. Your Mac works while you talk, "
                     + "which uses more battery, and that work is wasted if you cancel. Not used for dictations "
                     + "started in Low Power Mode or while your Mac runs hot. Command Mode and previews are unaffected.")
@@ -568,12 +627,14 @@ struct ApplicationSettingsPage: View {
                         set: { appState.setLaunchAtLogin($0) }
                     )
                 )
+                .settingsTarget("launch-at-login")
                 Divider()
                 SettingsToggleRow(
                     title: "Restore clipboard after typing",
                     detail: "Puts your clipboard back after VocaMac types text.",
                     isOn: $appState.preserveClipboard
                 )
+                .settingsTarget("clipboard")
             }
 
             VocaSettingsGroup(
@@ -619,6 +680,7 @@ struct ApplicationSettingsPage: View {
                 .disabled(appState.overlayStyle == .off || appState.appStatus != .idle)
                 .help("Shows the overlay for a few seconds with sample words.")
             }
+            .settingsTarget("cursor-overlay")
 
             VocaSettingsGroup("Settings Backup") {
                 HStack {
@@ -634,6 +696,7 @@ struct ApplicationSettingsPage: View {
                     Text(backupNotice).font(.caption).foregroundStyle(.secondary)
                 }
             }
+            .settingsTarget("settings-backup")
         }
         .onDisappear { appState.overlayPreview.stop() }
     }
@@ -723,6 +786,7 @@ struct SnippetsSettingsTab: View {
                     Button("Add Snippet…") { showingAddSnippet = true }
                 }
             }
+            .settingsTarget("snippets")
         }
         .sheet(isPresented: $showingAddSnippet) {
             AddSnippetView(isPresented: $showingAddSnippet)
@@ -974,6 +1038,7 @@ struct PerformanceSettingsTab: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            .settingsTarget("model-status")
 
             Section("Auto-Pause for Apps") {
                 Toggle("Pause dictation while these apps run", isOn: $appState.autoPauseEnabled)
@@ -1025,6 +1090,7 @@ struct PerformanceSettingsTab: View {
                     .font(.caption)
                 }
             }
+            .settingsTarget("auto-pause")
 
             Section("Unload When Idle") {
                 Toggle("Unload model when idle", isOn: $appState.modelKeepAliveEnabled)
@@ -1038,6 +1104,7 @@ struct PerformanceSettingsTab: View {
                 .disabled(!appState.modelKeepAliveEnabled)
                 .opacity(appState.modelKeepAliveEnabled ? 1 : 0.45)
             }
+            .settingsTarget("idle-unload")
         }
         .formStyle(.grouped)
         .scrollContentBackground(.hidden)
@@ -1130,6 +1197,7 @@ struct ModelSettingsTab: View {
     @State private var scope: ModelPickerScope = .forYou
     @State private var modelSearch = ""
     @State private var showsAllSuggestions = false
+    @Environment(\.settingsSearchTarget) private var settingsSearchTarget
 
     /// For You rows listed before the rest wait behind "Show more".
     private static let forYouShown = 5
@@ -1149,7 +1217,7 @@ struct ModelSettingsTab: View {
     }
 
     private var recommendedModel: ModelSize? {
-        appState.deviceRecommendedModel.flatMap { appState.modelManager.modelSize(from: $0) }
+        appState.speechModelRecommendation?.model
     }
 
     private func models(in scope: ModelPickerScope, search: String = "") -> [ModelSize] {
@@ -1182,6 +1250,8 @@ struct ModelSettingsTab: View {
     var body: some View {
         let spoken = appState.spokenLanguages
         let listed = models(in: scope, search: modelSearch)
+        // Worked out once per render and handed to the rows, not once per row.
+        let recommendation = appState.speechModelRecommendation
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 // Download and delete failures set only the message, not the
@@ -1225,6 +1295,7 @@ struct ModelSettingsTab: View {
                         modelSearch = ""
                     }
                 )
+                .settingsTarget("spoken-languages")
 
                 VStack(alignment: .leading, spacing: 10) {
                     // Search moves under the tabs when the window is narrow.
@@ -1241,7 +1312,7 @@ struct ModelSettingsTab: View {
                         }
                     }
 
-                    Text(scopeCaption(spoken: spoken))
+                    Text(scopeCaption(spoken: spoken, recommendation: recommendation))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -1260,7 +1331,7 @@ struct ModelSettingsTab: View {
                             let collapses = scope == .forYou && !isSearching && !showsAllSuggestions
                                 && listed.count > Self.forYouShown + 1
                             let shown = collapses ? Array(listed.prefix(Self.forYouShown)) : listed
-                            modelRows(shown, spoken: spoken)
+                            modelRows(shown, spoken: spoken, bestFit: recommendation?.model)
                             if collapses {
                                 Divider()
                                 Button {
@@ -1285,7 +1356,7 @@ struct ModelSettingsTab: View {
                       systemImage: "internaldrive")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .help("Larger models are more accurate but slower and use more memory. Apple Speech assets are managed by macOS.")
+                    .help("Larger models are more accurate but slower and use more memory. Accuracy and speed ratings are catalog estimates and vary by language and Mac. Apple Speech assets are managed by macOS.")
 
                 customEndpointSection
 
@@ -1370,6 +1441,8 @@ struct ModelSettingsTab: View {
                 Text(endpointNotice).font(.caption).foregroundStyle(.secondary)
             }
         }
+        .settingsTarget("custom-endpoint")
+        .revealSettingsTargets(["custom-endpoint"], expanded: $isEndpointSectionExpanded)
     }
 
     private var endpointKind: Binding<SpeechEndpointKind> {
@@ -1414,17 +1487,19 @@ struct ModelSettingsTab: View {
         .pickerStyle(.segmented)
         .labelsHidden()
         .fixedSize()
+        .settingsTarget("models")
     }
 
     @ViewBuilder
-    private func modelRows(_ sizes: [ModelSize], spoken: [String]) -> some View {
+    private func modelRows(_ sizes: [ModelSize], spoken: [String], bestFit: ModelSize?) -> some View {
         let models = sizes.compactMap { size in appState.availableModels.first { $0.size == size } }
         ForEach(models) { model in
             ModelRow(
                 model: model,
                 appState: appState,
                 spokenLanguages: spoken,
-                systemLanguages: appState.appleSpeechLanguages
+                systemLanguages: appState.appleSpeechLanguages,
+                isBestFit: model.isSupported && model.size == bestFit
             )
             if model.id != models.last?.id {
                 Divider()
@@ -1432,9 +1507,15 @@ struct ModelSettingsTab: View {
         }
     }
 
-    private func scopeCaption(spoken: [String]) -> String {
+    private func scopeCaption(spoken: [String], recommendation: OnboardingModelRecommendation?) -> String {
         switch scope {
         case .forYou:
+            // Say why the first row is the best fit, where the reader is
+            // already looking.
+            if let recommendation, !spoken.isEmpty {
+                return "Best fit for \(SpokenLanguages.list(spoken)): \(recommendation.model.displayName). "
+                    + recommendation.explanation
+            }
             return spoken.isEmpty
                 ? "Every model, best first. Add your languages above to narrow the list."
                 : "Models that understand \(SpokenLanguages.list(spoken)), best first."
@@ -1475,6 +1556,7 @@ struct ModelSettingsTab: View {
                         .tag(language.code)
                 }
             }
+            .settingsTarget("language")
 
             if !filteredLanguages.contains(where: { $0.code == appState.selectedLanguage }),
                let current = TranscriptionLanguage.catalog.first(where: { $0.code == appState.selectedLanguage }) {
@@ -1495,10 +1577,12 @@ struct ModelSettingsTab: View {
 
             // Kept visible while on, so a model that can't translate never
             // hides a switch the user needs to turn off.
-            if activeModel?.translatesToEnglish == true || appState.translationEnabled {
+            if activeModel?.translatesToEnglish == true || appState.translationEnabled || settingsSearchTarget == "translation" {
                 Divider()
 
                 Toggle("Enable translation", isOn: $appState.translationEnabled)
+                    .disabled(activeModel?.translatesToEnglish != true && !appState.translationEnabled)
+                    .settingsTarget("translation")
 
                 Text(translationCaption)
                     .font(.caption)
@@ -1534,6 +1618,7 @@ struct ModelSettingsTab: View {
                 await appState.languageDidChange()
             }
         }
+        .revealSettingsTargets(["language", "translation"], expanded: $isLanguageSectionExpanded)
     }
 
     private var translationCaption: String {
@@ -1577,6 +1662,8 @@ struct ModelRow: View {
     var spokenLanguages: [String] = []
     /// Apple Speech's languages on this Mac, when known.
     var systemLanguages: Set<String>?
+    /// The model suggested for the user's languages and preference.
+    var isBestFit = false
     @State private var showForceDownloadAlert = false
     @State private var showRemoteEndpointAlert = false
     @State private var showDeleteAlert = false
@@ -1587,11 +1674,6 @@ struct ModelRow: View {
     private var canDelete: Bool {
         model.isDownloaded && !model.isActive && !model.size.isSystemManaged
             && !model.isLoading && model.downloadProgress == nil
-    }
-
-    private var isRecommended: Bool {
-        guard model.isSupported, let recommended = appState.deviceRecommendedModel else { return false }
-        return appState.modelManager.modelSize(from: recommended) == model.size
     }
 
     /// "Doesn't understand Hindi" when the model misses a language the user speaks.
@@ -1676,8 +1758,8 @@ struct ModelRow: View {
                             systemImage: "checkmark"
                         )
                     }
-                    if isRecommended {
-                        ModelTag(text: "Recommended", tint: VocaDesign.accent)
+                    if isBestFit {
+                        ModelTag(text: "Best fit", tint: VocaDesign.accent)
                     }
                     if !model.isSupported {
                         ModelTag(text: "Experimental", tint: VocaDesign.warning)
@@ -1713,8 +1795,11 @@ struct ModelRow: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
+            // "Download & Use" is wider than the old fixed column; let the
+            // action take the room it needs rather than truncate.
             action
-                .frame(width: 116, alignment: .trailing)
+                .fixedSize(horizontal: true, vertical: false)
+                .frame(minWidth: 116, alignment: .trailing)
         }
         .padding(.vertical, 10)
         .padding(.horizontal, 10)
@@ -1850,7 +1935,7 @@ struct ModelRow: View {
                     showForceDownloadAlert = true
                 }
             } label: {
-                Label(model.isSupported ? "Download" : "Try Anyway", systemImage: "arrow.down.circle")
+                Label(model.isSupported ? "Download & Use" : "Try Anyway", systemImage: "arrow.down.circle")
             }
             .help("Download \(model.size.fileSizeDescription), then switch to it")
         }
@@ -1912,9 +1997,11 @@ struct AudioSettingsTab: View {
                 }
                 .help("Hands-free and double-tap recordings stop after this much silence (0.5–300 seconds). Push-to-talk stops when you release the key.")
             }
+            .settingsTarget("silence")
 
             Section("Sounds") {
                 Toggle("Play start and stop sounds", isOn: $appState.soundEffectsEnabled)
+                .settingsTarget("sound-effects")
 
                 HStack {
                     Picker("Dictation tone", selection: $appState.dictationTone) {
@@ -1936,9 +2023,11 @@ struct AudioSettingsTab: View {
                 }
 
                 Toggle("Mute other audio while dictating", isOn: $appState.duckOtherAudioEnabled)
+                .settingsTarget("other-audio")
                     .help("Mutes speakers or headphones while the microphone is open, only when something is playing.")
 
                 Toggle("Pause Spotify while dictating", isOn: $appState.pauseSpotifyEnabled)
+                .settingsTarget("spotify-pause")
                     .help("Pauses Spotify while the microphone is open and resumes when dictation ends — covers Spotify Connect playback on other devices, which muting cannot reach. The first use asks for permission to control Spotify.")
             }
         }
@@ -2004,11 +2093,14 @@ struct AudioSettingsTab: View {
             }
 
             Toggle("Use an external microphone when the lid is closed", isOn: $appState.externalMicWhenLidClosed)
+            .settingsTarget("closed-lid-microphone")
                 .help("While your MacBook is closed, records from an available external input. Your saved choice is not changed.")
 
             Toggle("Skip silence before transcribing", isOn: $appState.skipSilence)
+            .settingsTarget("skip-silence")
                 .help("A small voice detector removes silence and long pauses before the speech model runs, so it decodes faster and doesn't invent words in quiet stretches. Recordings with no speech are not transcribed.")
         }
+        .settingsTarget("microphone")
     }
 
     private var selectedAudioDevice: AudioDevice? {
@@ -2136,6 +2228,7 @@ struct PermissionsLogsTab: View {
                 }
                 .controlSize(.small)
             }
+            .settingsTarget("permissions")
 
             Section("Debug Logs") {
                 LabeledContent("Log entries") {
@@ -2158,6 +2251,7 @@ struct PermissionsLogsTab: View {
                 }
                 .controlSize(.small)
             }
+            .settingsTarget("logs")
 
             Section("Resource Usage") {
                 HStack(spacing: 12) {
@@ -2190,6 +2284,7 @@ struct PermissionsLogsTab: View {
                 .padding(.vertical, 4)
                 .help("VocaMac's whole process, refreshed every few seconds. Not a model-only VRAM or ANE reading.")
             }
+            .settingsTarget("resources")
         }
         .formStyle(.grouped)
         .scrollContentBackground(.hidden)

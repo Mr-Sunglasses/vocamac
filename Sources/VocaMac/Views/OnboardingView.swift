@@ -45,9 +45,9 @@ enum OnboardingStep: Int, CaseIterable, Identifiable {
         switch self {
         case .welcome: return "Private voice typing that feels at home on macOS."
         case .permissions: return "Three permissions, each with a clear purpose."
-        case .modelSetup: return "Tell us what you speak most; VocaMac will recommend a local model."
+        case .modelSetup: return "Tell us what you speak; VocaMac will recommend a local model."
         case .hotkeyConfig: return "Choose the gesture that feels natural to you."
-        case .quickTest: return "Record a sentence and see your words appear here."
+        case .quickTest: return "Record a sentence, then optionally check your shortcut and text insertion."
         case .complete: return "VocaMac lives in your menu bar, ready when you need it."
         }
     }
@@ -77,6 +77,7 @@ struct OnboardingView: View {
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var practiceBusy = false
+    @State private var didBeginVerification = false
 
     var body: some View {
         HStack(spacing: 0) {
@@ -137,8 +138,13 @@ struct OnboardingView: View {
         .background(VocaDesign.canvas)
         .tint(VocaDesign.accent)
         .onAppear {
+            if !didBeginVerification {
+                appState.onboardingVerification = OnboardingVerification()
+                didBeginVerification = true
+            }
             appState.triggerStartupIfNeeded()
         }
+        .onDisappear { appState.armOnboardingVerification(nil) }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             appState.checkPermissions()
         }
@@ -188,7 +194,7 @@ struct OnboardingView: View {
                 }
             }
             Spacer()
-            Label("Speech stays on this Mac", systemImage: "lock.shield")
+            Label(appState.speechProcessingDescription, systemImage: appState.speechProcessingIsRemote ? "network" : "lock.shield")
                 .font(.caption).foregroundStyle(.secondary)
         }
         .padding(24)
@@ -251,7 +257,7 @@ struct WelcomeStep: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .vocaCard()
             welcomeFeature("Write where you work", detail: "Dictate into messages, documents, and text fields.", icon: "text.cursor")
-            welcomeFeature("Your speech stays yours", detail: "Speech-to-text runs locally on your Mac.", icon: "lock.shield")
+            welcomeFeature("Your speech stays yours", detail: "Speech-to-text runs on this Mac unless you choose a Custom Endpoint.", icon: "lock.shield")
             welcomeFeature("Start small. Make it yours.", detail: "Tiny is included. Download other speech models later for more languages or accuracy.", icon: "slider.horizontal.3")
         }
         .padding(16)
@@ -433,10 +439,7 @@ struct ModelSetupStep: View {
     @State private var didRequestRecommendation = false
 
     private var recommendation: OnboardingModelRecommendation? {
-        OnboardingModelGuidance.recommendation(
-            for: appState.selectedLanguage,
-            availableModels: appState.availableModels
-        )
+        appState.speechModelRecommendation
     }
 
     private var recommendedModel: WhisperModelInfo? {
@@ -451,22 +454,18 @@ struct ModelSetupStep: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
+            // One question. The recognition language follows from the
+            // answer, and the finer choices wait in Settings → Speech Model.
             VStack(alignment: .leading, spacing: 10) {
-                Text("Which language do you speak most?")
+                Text("Which languages do you speak?")
                     .font(.headline)
-                Picker("Most-used language", selection: $appState.selectedLanguage) {
-                    Text("I switch between languages").tag(TranscriptionLanguage.auto.code)
-                    Divider()
-                    ForEach(TranscriptionLanguage.selectable) { language in
-                        Text(language.displayName).tag(language.code)
-                    }
-                }
-                .labelsHidden()
-                .frame(maxWidth: 300, alignment: .leading)
-
+                SpokenLanguagesField(languages: Binding(
+                    get: { appState.spokenLanguages },
+                    set: { appState.setOnboardingSpokenLanguages($0) }
+                ))
                 Text(appState.selectedLanguage == TranscriptionLanguage.auto.code
-                     ? "VocaMac will detect the language for each dictation."
-                     : "Pinning \(selectedLanguageName) helps recognition avoid guessing the wrong language.")
+                     ? "VocaMac works out which language you're speaking each time you dictate."
+                     : "VocaMac listens for \(selectedLanguageName). Add another language if you switch between them.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -509,7 +508,7 @@ struct ModelSetupStep: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .vocaCard()
             } else {
-                Label("The bundled starter model will be used on this Mac.", systemImage: "checkmark.circle")
+                Label("No single model on this Mac understands all of these languages. Remove one, or pick a model later in Settings → Speech Model.", systemImage: "info.circle")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -565,7 +564,7 @@ struct ModelSetupStep: View {
             .help(model.loadingStatus == ModelSize.firstLoadStatus ? ModelSize.firstLoadExplanation : "")
         } else {
             HStack(spacing: 10) {
-                Button(model.isDownloaded ? "Use this model" : "Download & use") {
+                Button(model.isDownloaded ? "Use this model" : "Download & Use") {
                     didRequestRecommendation = true
                     Task { @MainActor in
                         await appState.prepareOnboardingRecommendedModel()
@@ -744,7 +743,7 @@ struct QuickTestStep: View {
                         // Only offered when the transcript actually shows the
                         // problem. A clean first dictation is no argument for
                         // downloading a model.
-                        if TranscriptCleanup.containsFillers(result) {
+                        if TranscriptCleanup.containsFillers(result), appState.cleanupEndpoint.isLocal {
                             cleanupOffer
                         }
                     }
@@ -761,6 +760,8 @@ struct QuickTestStep: View {
             .frame(maxWidth: .infinity)
             .vocaCard()
 
+            OnboardingVerificationView()
+
             HStack(alignment: .top, spacing: 8) {
                 Image(systemName: "info.circle.fill")
                     .font(.caption)
@@ -774,6 +775,7 @@ struct QuickTestStep: View {
             .padding(.horizontal, 4)
         }
         .padding(16)
+        .onDisappear { appState.armOnboardingVerification(nil) }
         .onChange(of: appState.settingsTestResultText) { _, result in
             testResult = result
         }
@@ -932,6 +934,11 @@ struct CompleteStep: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .vocaCard()
+
+            // Three empty circles on the last screen would read as failure.
+            if appState.onboardingVerification.microphoneWorks {
+                OnboardingVerificationView(interactive: false)
+            }
 
             // Launch at Login option
             Toggle(isOn: Binding(

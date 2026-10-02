@@ -71,7 +71,7 @@ struct FileTranscriptionView: View {
         VStack(alignment: .leading, spacing: 14) {
             TranscriptionWorkflowHeader(
                 title: "Transcribe a File",
-                subtitle: "Audio and video stay on this Mac and use your selected speech model.",
+                subtitle: appState.speechProcessingDescription + ". Uses your selected speech model.",
                 systemImage: "waveform.badge.plus"
             )
             dropZone
@@ -101,7 +101,7 @@ struct FileTranscriptionView: View {
                 .foregroundStyle(fileURL == nil ? .secondary : VocaDesign.accent)
                 .frame(width: 30)
             VStack(alignment: .leading, spacing: 2) {
-                Text(fileURL?.lastPathComponent ?? "Drop audio or video here")
+                Text(fileURL?.lastPathComponent ?? "Drop audio or video to transcribe it")
                     .font(.subheadline.weight(.medium))
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -110,12 +110,13 @@ struct FileTranscriptionView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer(minLength: 8)
-            Button("Choose…", action: chooseFile)
+            Button("Choose File…", action: chooseFile)
                 .controlSize(.small)
+                .disabled(isRunning)
             Button(isRunning ? "Transcribing…" : (result == nil ? "Transcribe" : "Transcribe Again")) { run() }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
-                .disabled(fileURL == nil || isRunning)
+                .disabled(fileURL == nil || isRunning || isDictating)
             if isRunning { ProgressView().controlSize(.small) }
         }
         .frame(maxWidth: .infinity)
@@ -123,6 +124,7 @@ struct FileTranscriptionView: View {
         .background((isTargeted ? VocaDesign.accent.opacity(0.14) : Color.primary.opacity(0.04)), in: RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(isTargeted ? VocaDesign.accent : VocaDesign.line))
         .onDrop(of: [UTType.fileURL.identifier, UTType.audio.identifier, UTType.movie.identifier], isTargeted: $isTargeted) { providers in
+            guard !isRunning else { return false }
             guard let provider = providers.first(where: { $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) }) else { return false }
             provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
                 let url: URL?
@@ -143,12 +145,19 @@ struct FileTranscriptionView: View {
         select(url)
     }
 
-    /// Choosing or dropping a file is the request to transcribe it.
+    /// Choosing or dropping a file is the request to transcribe it, and the
+    /// drop zone says so. The button is for a file that could not start
+    /// (a dictation was running) and for running the same file again.
     private func select(_ url: URL) {
+        guard !isRunning else { return }
         fileURL = url
         result = nil
         error = nil
-        if !isRunning { run() }
+        if !isDictating { run() }
+    }
+
+    private var isDictating: Bool {
+        appState.isRecording || appState.appStatus == .processing
     }
 
     private func save(_ text: String) {
@@ -163,7 +172,7 @@ struct FileTranscriptionView: View {
     }
 
     private func run() {
-        guard let fileURL else { return }
+        guard !isRunning, let fileURL else { return }
         isRunning = true
         result = nil
         error = nil

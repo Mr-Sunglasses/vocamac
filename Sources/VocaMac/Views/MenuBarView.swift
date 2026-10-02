@@ -107,6 +107,7 @@ final class ProcessMonitor: ObservableObject {
 struct MenuBarView: View {
     /// Confirmation text after binding or clearing a style, if any.
     @State private var bindNotice: String?
+    @State private var panelWindow = MenuPanelWindowReference()
 
     @EnvironmentObject var appState: AppState
     @ObservedObject var settingsManager: SettingsWindowManager
@@ -166,7 +167,7 @@ struct MenuBarView: View {
             .measureHeight(MenuChromeHeightKey.self)
         }
         .frame(width: MenuPanelMetrics.width)
-        .background(MenuPanelWindowSizer(height: chromeHeight + scrollHeight))
+        .background(MenuPanelWindowSizer(height: chromeHeight + scrollHeight, onWindow: { panelWindow.window = $0 }))
         .onPreferenceChange(MenuContentHeightKey.self) { contentHeight = $0 }
         .onPreferenceChange(MenuChromeHeightKey.self) { chromeHeight = $0 }
         .tint(VocaDesign.accent)
@@ -174,7 +175,7 @@ struct MenuBarView: View {
             let screen = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main
             availableHeight = min(720, (screen?.visibleFrame.height ?? 760) - 40)
             bindNotice = nil
-            appState.refreshActiveWritingStyle()
+            appState.refreshActiveWritingStyle(readingWebsite: true)
             Task { await gateway.refreshStatus() }
         }
         // A "saved for Ghostty" notice is wrong once the user is in Discord.
@@ -267,6 +268,11 @@ struct MenuBarView: View {
                     nextDictationRow
                 }
             }
+
+            MenuPanelRowDivider()
+            NextDictationSummary()
+                .padding(.horizontal, 12)
+                .padding(.vertical, 9)
 
             if let notice = recordingOptionsNotice {
                 MenuPanelRowDivider()
@@ -909,11 +915,19 @@ struct MenuBarView: View {
             .padding(.horizontal, 6)
             .padding(.bottom, 8)
 
-            menuRow("History", systemImage: "clock.arrow.circlepath",
-                    shortcut: appState.shortcut(for: .pasteLastDictation)
-                        .map { "Paste Last  \(KeyCodeReference.displayName(for: $0))" }) {
-                openHistory()
+            // Its own row: the shortcut used to sit on History, which it
+            // doesn't open.
+            menuRow("Paste Last Dictation", systemImage: "doc.on.clipboard",
+                    shortcut: appState.shortcut(for: .pasteLastDictation).map { KeyCodeReference.displayName(for: $0) }) {
+                // The panel has to give focus back before the text is typed.
+                panelWindow.window?.orderOut(nil)
+                Task { @MainActor in
+                    await Task.yield()
+                    appState.pasteLastDictation()
+                }
             }
+            .disabled(appState.lastDictationText == nil || appState.isRecording || appState.appStatus == .processing)
+            menuRow("History", systemImage: "clock.arrow.circlepath", shortcut: nil) { openHistory() }
             menuRow("Settings…", systemImage: "gearshape", shortcut: "⌘,", keyEquivalent: ",") {
                 settingsManager.open(appState: appState)
             }
@@ -1135,7 +1149,7 @@ struct MenuBarView: View {
             return appState.autoPauseTriggerDisplayName.map { "Paused (\($0))" } ?? "Auto-paused"
         }
         switch appState.appStatus {
-        case .idle:       return "Ready"
+        case .idle:       return appState.dictationReadinessTitle
         case .recording:  return "Recording..."
         case .processing: return "Transcribing..."
         case .error:      return appState.errorMessage ?? "Error"
@@ -1146,7 +1160,7 @@ struct MenuBarView: View {
         if appState.commandModeSession != nil { return VocaDesign.command }
         if appState.isAutoPaused { return .secondary }
         switch appState.appStatus {
-        case .idle:       return VocaDesign.success
+        case .idle:       return appState.isDictationReady ? VocaDesign.success : VocaDesign.warning
         case .recording:  return Color(nsColor: BrandAssets.brandGreen)
         case .processing: return VocaDesign.busy
         case .error:      return VocaDesign.warning
@@ -1189,29 +1203,39 @@ enum MenuPanelMetrics {
     static let tileRadius: CGFloat = 11
 }
 
+/// Weak reference used to dismiss the panel before pasting into its destination.
+private final class MenuPanelWindowReference {
+    weak var window: NSWindow?
+}
+
 /// Keeps the MenuBarExtra window exactly as tall as the panel.
 ///
-/// `.menuBarExtraStyle(.window)` sizes its window when it opens but does not
-/// follow later changes — shrinking in particular. The panel then sat at the
-/// bottom of a taller window, leaving a strip of the window's glass and
-/// shadow showing above it. Resize the window ourselves, pinned to its top
-/// edge under the menu bar, and rebuild the shadow for the new shape.
+/// `.menuBarExtraStyle(.window)` does not follow later height changes. Resize
+/// the window pinned to its top edge and rebuild the shadow for the new shape.
 private struct MenuPanelWindowSizer: NSViewRepresentable {
     let height: CGFloat
+    var onWindow: ((NSWindow?) -> Void)?
 
-    func makeNSView(context: Context) -> SizerView { SizerView() }
+    func makeNSView(context: Context) -> SizerView {
+        let view = SizerView()
+        view.onWindow = onWindow
+        return view
+    }
 
     func updateNSView(_ view: SizerView, context: Context) {
         view.targetHeight = height
+        view.onWindow = onWindow
     }
 
     final class SizerView: NSView {
+        var onWindow: ((NSWindow?) -> Void)?
         var targetHeight: CGFloat = 0 {
             didSet { if abs(targetHeight - oldValue) > 0.5 { scheduleResize() } }
         }
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
+            onWindow?(window)
             scheduleResize()
         }
 

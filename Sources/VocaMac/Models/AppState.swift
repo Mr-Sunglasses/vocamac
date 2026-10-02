@@ -319,6 +319,8 @@ final class AppState: ObservableObject {
     /// A file or system-audio capture is being transcribed.
     @Published private(set) var isTranscribingMedia = false
 
+    /// Optional, session-only checks for onboarding.
+    @Published var onboardingVerification = OnboardingVerification()
     /// Last Settings → Test Dictation result (shown in the sidebar footer; not injected).
     @Published var settingsTestResultText: String?
     @AppStorage("vocamac.scratchpad.text") var scratchpadText: String = ""
@@ -344,7 +346,9 @@ final class AppState: ObservableObject {
     /// Detected system capabilities
     @Published var systemCapabilities: SystemCapabilities?
 
-    /// WhisperKit's recommended model for this device
+    /// Persisted priority shared by onboarding and the model catalog.
+    @AppStorage(PreferenceKey.modelRecommendationPriority) var modelRecommendationPriorityStorage = SpeechModelPriority.balanced.rawValue
+    /// WhisperKit's recommended model for this device.
     @Published var deviceRecommendedModel: String?
 
     /// Apple Speech's languages on this Mac, once the system has been asked.
@@ -565,6 +569,7 @@ final class AppState: ObservableObject {
         let injectResult: Bool
         let outputDestination: ScratchpadOutputDestination
         let isHandsFree: Bool
+        let verifiesShortcut: Bool
     }
     private var queuedRecordingStart: QueuedRecordingStart?
 
@@ -781,6 +786,8 @@ final class AppState: ObservableObject {
     /// Names and identifiers read from the screen when recording started.
     private var screenContextTask: Task<[String], Never>?
     private var screenDocumentURLTask: Task<URL?, Never>?
+    /// The menu's read of the target app's page address, for website rules.
+    private var websiteRuleRefresh: Task<Void, Never>?
 
     /// What Command Mode captured before it started recording its instruction.
     private var activeCommandTarget: CommandTarget?
@@ -812,6 +819,7 @@ final class AppState: ObservableObject {
     /// A quick press toggles Command Mode; holding past this point stops on
     /// release. Internal so flow tests can exercise both gestures instantly.
     var commandModeHoldThreshold: TimeInterval = 0.35
+    private var recordingVerifiesShortcut = false
     private var nonInjectedOutputDestination: ScratchpadOutputDestination = .settingsTest
 
     /// Suggestions the user dismissed, so the same fix isn't offered again.
@@ -1276,7 +1284,7 @@ final class AppState: ObservableObject {
         hotKeyManager.onRecordingStart = { [weak self] in
             PerformanceTrace.event("HotKeyStart")
             Task { @MainActor in
-                await self?.startRecording()
+                await self?.startRecordingFromActivationShortcut()
             }
         }
 
@@ -1738,10 +1746,24 @@ final class AppState: ObservableObject {
     /// deliberately not on a timer. Uses `styleTargetApp()` rather than the
     /// bare frontmost app: opening the popover activates VocaMac, so by the
     /// time this runs the frontmost app usually *is* VocaMac.
-    func refreshActiveWritingStyle() {
+    ///
+    /// - Parameter readingWebsite: Also read the target app's page address,
+    ///   so a website rule shows as the style it will apply. Only the menu
+    ///   asks for this: it costs an Accessibility read of another app.
+    func refreshActiveWritingStyle(readingWebsite: Bool = false) {
         let target = frontmostAppResolver.styleTargetApp()
         activeWritingStyle = resolveWritingStyle(for: target)
         activeWritingTargetName = target?.displayName
+        websiteRuleRefresh?.cancel()
+        websiteRuleRefresh = nil
+        guard readingWebsite, !websiteStyleBindings.isEmpty,
+              let target, let reader = screenContextReader else { return }
+        websiteRuleRefresh = Task { @MainActor [weak self] in
+            let read = Task { @MainActor in await reader.captureDocumentURL(of: target) }
+            let url = await Self.value(of: read, within: Self.screenContextTimeout, otherwise: nil)
+            guard let self, !Task.isCancelled, let url else { return }
+            activeWritingStyle = resolveWritingStyle(for: target, documentURL: url)
+        }
     }
 
     /// The app a menu bar action should apply to: whatever is in front, or the
@@ -1951,7 +1973,8 @@ final class AppState: ObservableObject {
 
     func startRecording(
         injectResult: Bool = true,
-        outputDestination: ScratchpadOutputDestination = .settingsTest
+        outputDestination: ScratchpadOutputDestination = .settingsTest,
+        verifiesShortcut: Bool = false
     ) async {
         let interval = PerformanceTrace.begin("RecordingStart")
         defer { PerformanceTrace.end(interval) }
@@ -2004,7 +2027,8 @@ final class AppState: ObservableObject {
                 queuedRecordingStart = QueuedRecordingStart(
                     injectResult: injectResult,
                     outputDestination: outputDestination,
-                    isHandsFree: isHandsFreeSession
+                    isHandsFree: isHandsFreeSession,
+                    verifiesShortcut: verifiesShortcut
                 )
                 VocaLogger.info(.appState, "Dictation requested while the previous one is still finishing — starting when it's delivered")
             }
@@ -2090,6 +2114,7 @@ final class AppState: ObservableObject {
         recordingGeneration = UUID()
         let generation = recordingGeneration
         recordingInjectsResult = injectResult
+        recordingVerifiesShortcut = verifiesShortcut
         nonInjectedOutputDestination = outputDestination
         // Typing into the field would move the selection an edit under
         // review is waiting on.
@@ -2610,6 +2635,13 @@ final class AppState: ObservableObject {
                     if let historyID { historyStore.markCancelled(historyID) }
                     return
                 }
+                if !output.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                   injectResult || nonInjectedOutputDestination == .settingsTest {
+                    onboardingVerification.microphoneWorks = true
+                    if recordingVerifiesShortcut, onboardingVerification.mode != nil {
+                        onboardingVerification.shortcutDictationWorks = true
+                    }
+                }
                 lastOutput = output
                 if let historyID {
                     historyStore.complete(
@@ -2631,6 +2663,10 @@ final class AppState: ObservableObject {
                         return
                     }
                     textInjector.inject(text: output.text, preserveClipboard: preserveClipboard)
+                    if onboardingVerification.mode == .insertion,
+                       !output.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        onboardingVerification.insertionAttempted = true
+                    }
                     statsManager.recordStopWait(StopWait(
                         seconds: ProcessInfo.processInfo.systemUptime - stopRequested,
                         audioSeconds: result.audioLengthSeconds,
@@ -2643,6 +2679,7 @@ final class AppState: ObservableObject {
                         scratchpadText += output.text.trimmingCharacters(in: .whitespacesAndNewlines)
                     } else {
                         settingsTestResultText = output.text
+
                     }
                 }
             } else {
@@ -3089,12 +3126,9 @@ final class AppState: ObservableObject {
     /// The recommendation is resolved and revalidated here so a language
     /// change during a download cannot activate the previous language's model.
     func prepareOnboardingRecommendedModel() async {
-        guard let recommendation = OnboardingModelGuidance.recommendation(
-            for: selectedLanguage,
-            availableModels: availableModels
-        ) else {
-            return
-        }
+        // The same recommendation onboarding shows, so the button prepares
+        // the model named on screen.
+        guard let recommendation = speechModelRecommendation else { return }
 
         onboardingModelRequestGeneration &+= 1
         let generation = onboardingModelRequestGeneration
@@ -3133,12 +3167,12 @@ final class AppState: ObservableObject {
             await performDownloadModel(model)
         }
 
+        // Still the model onboarding shows: the same recommendation the
+        // download started from, so a preference or memory limit that chose
+        // it cannot leave it downloaded but never loaded.
         guard generation == onboardingModelRequestGeneration,
               onboardingRequestedModel == model,
-              OnboardingModelGuidance.recommendation(
-                for: selectedLanguage,
-                availableModels: availableModels
-              )?.model == model,
+              speechModelRecommendation?.model == model,
               modelManager.isModelDownloaded(model) else {
             return
         }
@@ -3275,7 +3309,10 @@ final class AppState: ObservableObject {
         queuedRecordingStart = nil
         VocaLogger.info(.appState, "Previous dictation delivered — starting the queued one")
         if queued.isHandsFree { isHandsFreeSession = true }
-        await startRecording(injectResult: queued.injectResult, outputDestination: queued.outputDestination)
+        await startRecording(
+            injectResult: queued.injectResult, outputDestination: queued.outputDestination,
+            verifiesShortcut: queued.verifiesShortcut
+        )
         if queued.isHandsFree && !isRecording { isHandsFreeSession = false }
     }
 
@@ -5093,9 +5130,7 @@ extension AppState {
     /// Type the most recent dictation again at the cursor.
     func pasteLastDictation() {
         guard !isRecording, appStatus != .recording else { return }
-        let fromHistory = historyEnabled ? historyStore.latestDeliveredText : nil
-        guard let text = fromHistory ?? lastOutput?.text ?? heldOutput,
-              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        guard let text = lastDictationText else {
             showTemporaryError("There's no dictation to paste yet.")
             return
         }

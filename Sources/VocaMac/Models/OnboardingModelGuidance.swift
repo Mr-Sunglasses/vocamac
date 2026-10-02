@@ -5,7 +5,20 @@
 
 import Foundation
 
-/// A single, decision-light model recommendation for onboarding.
+/// What matters most when suggesting a model. Changing this never selects it.
+enum SpeechModelPriority: String, CaseIterable, Identifiable {
+    case balanced, smallestDownload, accuracy
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .balanced: return "A balance of speed and accuracy"
+        case .smallestDownload: return "The smallest download"
+        case .accuracy: return "The highest accuracy"
+        }
+    }
+}
+
+/// A single, decision-light model recommendation shared by onboarding and Settings.
 struct OnboardingModelRecommendation: Equatable {
     let model: ModelSize
     let title: String
@@ -19,11 +32,74 @@ enum OnboardingModelGuidance {
         for languageCode: String,
         availableModels: [WhisperModelInfo]
     ) -> OnboardingModelRecommendation? {
-        let candidates = candidateRecommendations(for: languageCode)
-        let supported = Set(availableModels.lazy.filter(\.isSupported).map(\.size))
-        // The bundled Tiny is always the last candidate, so this already ends
-        // on it whenever nothing more capable is supported.
-        return candidates.first { supported.contains($0.model) }
+        recommendation(for: languageCode == "auto" ? [] : [languageCode], availableModels: availableModels)
+    }
+
+    /// A recommended model's first load may take at most this share of the
+    /// Mac's memory. The load itself is gated on free memory, which changes
+    /// by the minute; a suggestion has to hold still, so it goes by installed
+    /// memory and leaves the rest for macOS and the apps being dictated into.
+    static let memoryShare = 0.5
+
+    /// Only supported local models covering every chosen language are
+    /// eligible, and among those only the ones that fit this Mac's memory.
+    ///
+    /// - Parameter memoryGB: Installed memory. Nil skips the memory check.
+    static func recommendation(
+        for languages: [String],
+        availableModels: [WhisperModelInfo],
+        priority: SpeechModelPriority = .balanced,
+        systemLanguages: Set<String>? = nil,
+        memoryGB: Int? = nil
+    ) -> OnboardingModelRecommendation? {
+        let codes = languages.filter { $0 != "auto" }
+        let covering = availableModels.filter {
+            $0.isSupported && !$0.size.isRemotelyHosted
+                && ModelPickerCatalog.fit(of: $0.size, for: codes, systemLanguages: systemLanguages).coversAll
+        }
+        let fitting = covering.filter { model in
+            guard let memoryGB else { return true }
+            return model.size.firstLoadRAMRequiredGB <= Double(memoryGB) * memoryShare
+        }
+        // When nothing fits comfortably, the lightest model is still the
+        // most likely to load.
+        let lightest = covering.min { $0.size.firstLoadRAMRequiredGB < $1.size.firstLoadRAMRequiredGB }
+        let eligible = fitting.isEmpty ? [lightest].compactMap { $0 } : fitting
+        guard !eligible.isEmpty else { return nil }
+        if priority == .balanced {
+            let candidates = candidateRecommendations(for: codes.count == 1 ? codes[0] : "auto")
+            if let match = candidates.first(where: { candidate in eligible.contains { $0.size == candidate.model } }) {
+                return match
+            }
+        }
+        let ranked = eligible.sorted { lhs, rhs in
+            if priority == .smallestDownload {
+                // System-managed assets have no known download size in our catalog.
+                if lhs.size.isSystemManaged != rhs.size.isSystemManaged { return !lhs.size.isSystemManaged }
+                if lhs.size.fileSizeBytes != rhs.size.fileSizeBytes { return lhs.size.fileSizeBytes < rhs.size.fileSizeBytes }
+            } else if lhs.size.accuracyScore != rhs.size.accuracyScore {
+                return lhs.size.accuracyScore > rhs.size.accuracyScore
+            }
+            if lhs.size.speedScore != rhs.size.speedScore { return lhs.size.speedScore > rhs.size.speedScore }
+            return lhs.size.rawValue < rhs.size.rawValue
+        }
+        guard let selected = ranked.first else { return nil }
+        let title: String
+        let explanation: String
+        switch priority {
+        case .balanced:
+            title = "Understands all your languages"
+            explanation = "Understands every language you chose and fits this Mac's memory."
+        case .smallestDownload:
+            title = selected.size.isSystemManaged ? "Managed by macOS" : "Smallest download for your languages"
+            explanation = selected.size.isSystemManaged
+                ? "macOS downloads and updates this model itself."
+                : "The smallest download that understands every language you chose."
+        case .accuracy:
+            title = "Most accurate for your languages"
+            explanation = "The most accurate model, by the catalog's estimate, that fits this Mac's memory. Larger models are slower."
+        }
+        return OnboardingModelRecommendation(model: selected.size, title: title, explanation: explanation)
     }
 
     /// Candidate order follows explicit model language coverage. Whisper
