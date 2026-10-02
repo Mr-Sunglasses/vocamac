@@ -78,6 +78,25 @@ final class CommandExactEditTests: XCTestCase {
         XCTAssertEqual(edit("sentence case", "HELLO THERE. i AM HERE."), "Hello there. I am here.")
     }
 
+    func testSentenceCaseKeepsSpellingsThatHaveTheirOwnCapitals() {
+        XCTAssertEqual(
+            edit("sentence case", "VocaMac Sends The Report To NASA. iPhone Users See It First."),
+            "VocaMac sends the report to NASA. iPhone users see it first."
+        )
+        XCTAssertEqual(edit("sentence case", "the macOS build. and i agree"), "The macOS build. And I agree")
+        // Mostly capitals is shouting, not spelling: there an acronym can't
+        // be told from any other word.
+        XCTAssertEqual(edit("sentence case", "THE NASA REPORT IS LATE."), "The nasa report is late.")
+        // The user's own terms keep their form even then.
+        XCTAssertEqual(
+            CommandExactEdit.apply(
+                instruction: "sentence case", to: "THE VOCAMAC AND NASA REPORT.", keeping: ["VocaMac", "NASA"]
+            )?.text,
+            "The VocaMac and NASA report."
+        )
+        XCTAssertEqual(edit("sentence case", "first line\nsecond line"), "First line\nSecond line")
+    }
+
     func testIdentifierCasesApplyToOneShortLineOnly() {
         XCTAssertEqual(edit("camel case", "user account id"), "userAccountId")
         XCTAssertEqual(edit("snake case", "userAccountID"), "user_account_id")

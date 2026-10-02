@@ -1114,9 +1114,12 @@ final class MockSelectedTextService: SelectedTextAccessing {
     /// Where the cursor is when nothing is selected; nil for an app that
     /// doesn't say.
     var insertionLocation: Int?
-    func captureInsertionPoint() async -> SelectedTextSnapshot? {
+    /// The field the cursor is in: its text and its place on screen.
+    var insertionFieldValue: String? = ""
+    var insertionFieldFrame: CGRect? = CGRect(x: 10, y: 10, width: 300, height: 24)
+    func captureInsertionPoint() async -> InsertionPoint? {
         insertionLocation.map {
-            SelectedTextSnapshot(element: nil, processID: 42, text: "", range: CFRange(location: $0, length: 0))
+            InsertionPoint(processID: 42, caret: $0, fieldValue: insertionFieldValue, fieldFrame: insertionFieldFrame)
         }
     }
 
@@ -1132,11 +1135,12 @@ final class MockSelectedTextService: SelectedTextAccessing {
         )
     }
 
-    var undoCallCount = 0
-    var undoSucceeds = true
-    func undoEdit(in processID: pid_t) -> Bool {
-        undoCallCount += 1
-        return undoSucceeds
+    var deletedSelections: [String] = []
+    var deleteSucceeds = true
+    func deleteSelection(_ snapshot: SelectedTextSnapshot) async -> Bool {
+        guard deleteSucceeds else { return false }
+        deletedSelections.append(snapshot.text)
+        return true
     }
 
     func replaceSelection(_ snapshot: SelectedTextSnapshot, with text: String) async -> Bool {

@@ -263,6 +263,63 @@ final class CleanupPipelineSpeedTests: XCTestCase {
         XCTAssertEqual(cleaner.cleanCallCount, 1)
     }
 
+    func testAPromptTheUserWroteIsAlwaysGivenTheText() async {
+        // Only the user knows what their prompt asks for; text that looks
+        // clean to VocaMac may be exactly what it is meant to change.
+        let global = MockTranscriptCleanup()
+        let pipeline = DictationOutputPipeline(cleaner: global, snippets: SnippetExpander())
+        var custom = options(global)
+        custom.customPrompt = "Rewrite every sentence in British spelling."
+        _ = await pipeline.process("The build passed, and I will merge it.", options: custom)
+        XCTAssertEqual(global.cleanCallCount, 1)
+
+        let perApp = MockTranscriptCleanup()
+        let perAppPipeline = DictationOutputPipeline(cleaner: perApp, snippets: SnippetExpander())
+        let profile = WritingProfile(format: .plain, rules: .passthrough, cleanupPrompt: "Expand every acronym.")
+        _ = await perAppPipeline.process("The build passed, and I will merge it.", options: options(perApp, profile: profile))
+        XCTAssertEqual(perApp.cleanCallCount, 1)
+    }
+
+    func testTheBuiltInPromptCountsHoweverItIsStored() {
+        let cleaner = MockTranscriptCleanup()
+        var stored = options(cleaner)
+        XCTAssertTrue(DictationOutputPipeline.usesBuiltInCleanupPrompt(stored))
+        stored.customPrompt = TranscriptCleanup.defaultPrompt + "\n"
+        XCTAssertTrue(DictationOutputPipeline.usesBuiltInCleanupPrompt(stored))
+        stored.profile.cleanupPrompt = "   "
+        XCTAssertTrue(DictationOutputPipeline.usesBuiltInCleanupPrompt(stored))
+        stored.profile.cleanupPrompt = "Mine."
+        XCTAssertFalse(DictationOutputPipeline.usesBuiltInCleanupPrompt(stored))
+    }
+
+    func testCodeAndTerminalSkipWhateverTheUsersPromptSays() async {
+        // They always use their own fixed prompt, so a custom one changes
+        // nothing about what the model would be asked there.
+        let cleaner = MockTranscriptCleanup()
+        let pipeline = DictationOutputPipeline(cleaner: cleaner, snippets: SnippetExpander())
+        var terminal = options(cleaner, profile: WritingProfile(format: .terminal, rules: .passthrough))
+        terminal.customPrompt = "Rewrite every sentence in British spelling."
+
+        _ = await pipeline.process("git status and then run the tests", options: terminal)
+
+        XCTAssertEqual(cleaner.cleanCallCount, 0)
+    }
+
+    func testOneCleanPieceStillGoesToAPromptTheUserWrote() async {
+        let cleaner = MockTranscriptCleanup()
+        let pipeline = DictationOutputPipeline(cleaner: cleaner, snippets: SnippetExpander())
+        var custom = options(cleaner)
+        custom.customPrompt = "Rewrite every sentence in British spelling."
+        let pieces = [
+            TranscribedPiece(range: 0..<16_000, text: "The build passed.", language: "en"),
+            TranscribedPiece(range: 16_000..<32_000, text: "It was, like, really late.", language: "en"),
+        ]
+
+        _ = await pipeline.process(TranscribedPiece.join(pieces.map(\.text)), options: custom, pieces: pieces)
+
+        XCTAssertEqual(cleaner.cleanCallCount, 2)
+    }
+
     func testRewordingStylesAlwaysAskTheModel() async {
         let cleaner = MockTranscriptCleanup()
         let pipeline = DictationOutputPipeline(cleaner: cleaner, snippets: SnippetExpander())

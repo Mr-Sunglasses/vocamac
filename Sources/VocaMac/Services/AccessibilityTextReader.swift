@@ -26,6 +26,47 @@ struct FocusedTextSnapshot: @unchecked Sendable {
     let caretLocation: Int?
 }
 
+/// Where the cursor sat in a text field, with enough about the field to tell
+/// later whether that is still where text would go.
+///
+/// Elements can't be compared for this: SwiftUI and web views hand out a
+/// fresh one for the same field on every query. The field's place on screen,
+/// its text, and the caret position can.
+struct InsertionPoint: Equatable, Sendable {
+    let processID: pid_t
+    /// Caret position as a UTF-16 offset into the field.
+    let caret: Int
+    /// The field's text; nil when it has none or is too long to read.
+    let fieldValue: String?
+    /// The field's frame on screen; nil when the app doesn't report one.
+    let fieldFrame: CGRect?
+
+    /// Whether `current` is the same place: the same app and field, with the
+    /// cursor where it was and nothing typed since. A focus change to another
+    /// field, a click elsewhere in this one, or any edit makes it a
+    /// different place.
+    func matches(_ current: InsertionPoint?) -> Bool {
+        guard let current, current.processID == processID, current.caret == caret,
+              current.fieldValue == fieldValue else { return false }
+        switch (fieldFrame, current.fieldFrame) {
+        case let (old?, new?):
+            return abs(old.minX - new.minX) <= 1 && abs(old.minY - new.minY) <= 1
+                && abs(old.width - new.width) <= 1 && abs(old.height - new.height) <= 1
+        case (nil, nil):
+            return true
+        default:
+            return false
+        }
+    }
+
+    /// The empty selection at this point, for selecting text typed here again.
+    var snapshot: SelectedTextSnapshot {
+        SelectedTextSnapshot(
+            element: nil, processID: processID, text: "", range: CFRange(location: caret, length: 0)
+        )
+    }
+}
+
 enum AccessibilityTextReader {
 
     /// Longest field value read in full. Beyond this only the text around
@@ -79,6 +120,34 @@ enum AccessibilityTextReader {
 
     static func selectedText(of element: AXUIElement) -> String? {
         copyString(element, kAXSelectedTextAttribute)
+    }
+
+    /// The cursor in the focused text field of `processID`, or nil when the
+    /// app doesn't expose one.
+    static func insertionPoint(processID: pid_t) -> InsertionPoint? {
+        guard let element = focusedTextElement(processID: processID),
+              let caret = caretLocation(of: element) else { return nil }
+        return InsertionPoint(
+            processID: processID, caret: caret, fieldValue: value(of: element), fieldFrame: frame(of: element)
+        )
+    }
+
+    private static func frame(of element: AXUIElement) -> CGRect? {
+        var positionRef: CFTypeRef?
+        var sizeRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &positionRef) == .success,
+              AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &sizeRef) == .success,
+              let positionRef, let sizeRef,
+              CFGetTypeID(positionRef) == AXValueGetTypeID(), CFGetTypeID(sizeRef) == AXValueGetTypeID() else {
+            return nil
+        }
+        var position = CGPoint.zero
+        var size = CGSize.zero
+        // swiftlint:disable force_cast
+        guard AXValueGetValue(positionRef as! AXValue, .cgPoint, &position),
+              AXValueGetValue(sizeRef as! AXValue, .cgSize, &size) else { return nil }
+        // swiftlint:enable force_cast
+        return CGRect(origin: position, size: size)
     }
 
     // MARK: - Selection (Command Mode)

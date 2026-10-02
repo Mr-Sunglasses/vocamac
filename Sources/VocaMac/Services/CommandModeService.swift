@@ -88,18 +88,17 @@ protocol SelectedTextAccessing: AnyObject {
     /// just made can be edited further. Nil when the app won't allow it or
     /// the text there has changed.
     func reselect(_ snapshot: SelectedTextSnapshot, replacement: String) async -> SelectedTextSnapshot?
-    /// Send the app that received an edit its own Undo. False when it is no
-    /// longer in front.
-    func undoEdit(in processID: pid_t) -> Bool
-    /// Where the cursor is in the focused field, as an empty selection, so
-    /// text written there can be found again. Nil when the app doesn't say.
-    func captureInsertionPoint() async -> SelectedTextSnapshot?
+    /// Delete the selected text, after confirming it is still the selection
+    /// that was read. Taking back text that was written, not replaced.
+    func deleteSelection(_ snapshot: SelectedTextSnapshot) async -> Bool
+    /// Where the cursor is in the focused field. Nil when the app doesn't say.
+    func captureInsertionPoint() async -> InsertionPoint?
 }
 
 extension SelectedTextAccessing {
     func reselect(_ snapshot: SelectedTextSnapshot, replacement: String) async -> SelectedTextSnapshot? { nil }
-    func undoEdit(in processID: pid_t) -> Bool { false }
-    func captureInsertionPoint() async -> SelectedTextSnapshot? { nil }
+    func deleteSelection(_ snapshot: SelectedTextSnapshot) async -> Bool { false }
+    func captureInsertionPoint() async -> InsertionPoint? { nil }
 }
 
 @MainActor
@@ -175,19 +174,7 @@ final class AccessibilitySelectedTextService: SelectedTextAccessing {
     }
 
     func replaceSelection(_ snapshot: SelectedTextSnapshot, with text: String) async -> Bool {
-        guard NSWorkspace.shared.frontmostApplication?.processIdentifier == snapshot.deliveryProcessID else {
-            return false
-        }
-        if snapshot.source == .accessibility {
-            var probe = await Self.probe(frontmostPID: snapshot.deliveryProcessID)
-            if case .unavailable = probe {
-                // One slow answer is common right after a model run; a second
-                // miss means the selection can't be verified, so leave it.
-                try? await Task.sleep(nanoseconds: 150_000_000)
-                probe = await Self.probe(frontmostPID: snapshot.deliveryProcessID)
-            }
-            guard Self.selectionStillMatches(snapshot, probe: probe) else { return false }
-        }
+        guard await selectionIsStillThere(snapshot) else { return false }
 
         // TextInjector deliberately uses direct AX writes only for controls
         // that apply them reliably, then falls back to clipboard + Cmd+V for
@@ -200,6 +187,39 @@ final class AccessibilitySelectedTextService: SelectedTextAccessing {
             expectedProcessID: snapshot.deliveryProcessID
         )
         return true
+    }
+
+    /// The selection that was read is still what is selected, in the app
+    /// still in front. Checked before anything is typed over it: the model
+    /// ran for seconds, and a reviewed edit may have waited for minutes.
+    private func selectionIsStillThere(_ snapshot: SelectedTextSnapshot) async -> Bool {
+        guard NSWorkspace.shared.frontmostApplication?.processIdentifier == snapshot.deliveryProcessID else {
+            return false
+        }
+        switch snapshot.source {
+        case .accessibility:
+            var probe = await Self.probe(frontmostPID: snapshot.deliveryProcessID)
+            if case .unavailable = probe {
+                // One slow answer is common right after a model run; a second
+                // miss means the selection can't be verified, so leave it.
+                try? await Task.sleep(nanoseconds: 150_000_000)
+                probe = await Self.probe(frontmostPID: snapshot.deliveryProcessID)
+            }
+            return Self.selectionStillMatches(snapshot, probe: probe)
+        case .clipboard:
+            // The app never said what was selected, so ask it the way it was
+            // asked the first time. Without this a different selection made
+            // in the meantime would be pasted over.
+            guard allowsClipboardFallback() else { return false }
+            let copy = await copySelectionViaClipboard(expectedProcessID: snapshot.deliveryProcessID)
+            guard case .copied(let copied) = copy else { return false }
+            return Self.copiedSelectionStillMatches(snapshot, copied: copied)
+        }
+    }
+
+    /// Whether a fresh copy of the selection is the text that was read.
+    nonisolated static func copiedSelectionStillMatches(_ snapshot: SelectedTextSnapshot, copied: String) -> Bool {
+        snapshot.source == .clipboard && copied == snapshot.text
     }
 
     // MARK: - Validation
@@ -306,27 +326,27 @@ final class AccessibilitySelectedTextService: SelectedTextAccessing {
         )
     }
 
-    func captureInsertionPoint() async -> SelectedTextSnapshot? {
+    func captureInsertionPoint() async -> InsertionPoint? {
         guard AXIsProcessTrusted(), let app = NSWorkspace.shared.frontmostApplication,
               app.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return nil }
         let pid = app.processIdentifier
-        let caret: Int? = await withCheckedContinuation { continuation in
+        return await withCheckedContinuation { continuation in
             AccessibilityTextReader.queue.async {
-                let element = AccessibilityTextReader.focusedTextElement(processID: pid)
-                continuation.resume(returning: element.flatMap(AccessibilityTextReader.caretLocation(of:)))
+                continuation.resume(returning: AccessibilityTextReader.insertionPoint(processID: pid))
             }
         }
-        guard let caret else { return nil }
-        return SelectedTextSnapshot(
-            element: nil, processID: pid, deliveryProcessID: pid,
-            text: "", range: CFRange(location: caret, length: 0), source: .accessibility
-        )
     }
 
-    func undoEdit(in processID: pid_t) -> Bool {
-        guard AXIsProcessTrusted(),
-              NSWorkspace.shared.frontmostApplication?.processIdentifier == processID else { return false }
-        postShortcut("z", fallback: CGKeyCode(kVK_ANSI_Z))
+    func deleteSelection(_ snapshot: SelectedTextSnapshot) async -> Bool {
+        guard AXIsProcessTrusted(), await selectionIsStillThere(snapshot) else { return false }
+        let source = CGEventSource(stateID: .combinedSessionState)
+        for isDown in [true, false] {
+            guard let event = CGEvent(
+                keyboardEventSource: source, virtualKey: CGKeyCode(kVK_Delete), keyDown: isDown
+            ) else { return false }
+            event.flags = []
+            event.post(tap: .cgAnnotatedSessionEventTap)
+        }
         return true
     }
 

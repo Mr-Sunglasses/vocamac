@@ -177,6 +177,7 @@ struct DictationOutputPipeline {
             // One clean part of a longer dictation needs the model no more
             // than a clean dictation does.
             if options.skipWhenClean, plan.intent == .preserve, protectedSlices.count > 1,
+               plan.technical || Self.usesBuiltInCleanupPrompt(options),
                CleanupNeed.reason(
                    for: sources[index], level: prepared.effectiveLevel,
                    technical: plan.technical, isEnglish: prepared.isEnglishText
@@ -535,8 +536,12 @@ struct DictationOutputPipeline {
             return .finished(text: fallback, summary: noting("\(styleName) style — non-English wording kept exact"))
         }
         // Nothing left for the model: paste now rather than after a pass that
-        // would hand the same words back. Formal and Casual always reword.
+        // would hand the same words back. Formal and Casual always reword,
+        // and so may a prompt the user wrote: only they know what it asks
+        // for, so it is always given the text. (Code and Terminal use their
+        // own fixed prompt whatever the user's says.)
         if options.skipWhenClean, intent == .preserve,
+           technical || Self.usesBuiltInCleanupPrompt(options),
            CleanupNeed.reason(
                for: masked.text, level: effectiveLevel, technical: technical, isEnglish: prepared.isEnglishText
            ) == nil {
@@ -559,6 +564,16 @@ struct DictationOutputPipeline {
     }
 
     static let alreadyCleanSummary = "Already clean — cleanup model not needed"
+
+    /// Whether the model would get VocaMac's own cleanup instructions, as
+    /// opposed to a prompt the user wrote for every app or for this one.
+    /// `CleanupNeed` knows what the built-in prompt asks for and nothing
+    /// about anyone else's.
+    static func usesBuiltInCleanupPrompt(_ options: DictationOutputOptions) -> Bool {
+        let perApp = options.profile.cleanupPrompt?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let global = options.customPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        return perApp.isEmpty && (global.isEmpty || global == TranscriptCleanup.defaultPrompt)
+    }
 
     /// The system prompt the model gets for these options.
     static func modelPrompt(

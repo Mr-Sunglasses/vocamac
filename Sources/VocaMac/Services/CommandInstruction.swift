@@ -261,9 +261,12 @@ enum CommandExactEdit {
 
     /// The edited text when `instruction` is exactly one of the rule edits
     /// and it applies to `selection`; nil sends the instruction to the model.
-    static func apply(instruction: String, to selection: String) -> Result? {
+    ///
+    /// - Parameter terms: The user's own spellings, which a change of case
+    ///   to sentence case leaves as they are.
+    static func apply(instruction: String, to selection: String, keeping terms: [String] = []) -> Result? {
         guard let match = operation(for: instruction),
-              let text = perform(match.operation, on: selection) else { return nil }
+              let text = perform(match.operation, on: selection, keeping: terms) else { return nil }
         return Result(text: text, name: match.name)
     }
 
@@ -280,7 +283,7 @@ enum CommandExactEdit {
         return (match.operation, match.name)
     }
 
-    private static func perform(_ operation: Operation, on selection: String) -> String? {
+    private static func perform(_ operation: Operation, on selection: String, keeping terms: [String]) -> String? {
         // The outer whitespace is the document's, not the text's: "line\n"
         // sorted must still end the line.
         let leading = String(selection.prefix { $0.isWhitespace })
@@ -294,7 +297,7 @@ enum CommandExactEdit {
         case .upper: return whole(core.uppercased())
         case .lower: return whole(core.lowercased())
         case .title: return whole(titleCased(core))
-        case .sentence: return whole(sentenceCased(core))
+        case .sentence: return whole(sentenceCased(core, keeping: terms))
         case .camel, .snake, .kebab, .pascal, .constant:
             // An identifier, not a paragraph.
             guard lines.count == 1, core.count <= 120 else { return nil }
@@ -424,22 +427,57 @@ enum CommandExactEdit {
         }.joined(separator: "\n")
     }
 
-    static func sentenceCased(_ text: String) -> String {
+    /// Lower case with each sentence capitalised, leaving alone the words
+    /// whose capitals are part of their spelling.
+    ///
+    /// Lowercasing everything first turned "VocaMac" into "Vocamac" and
+    /// "NASA" into "nasa". A capital after a word's first letter is a
+    /// spelling, not sentence position, so such words are kept, as are the
+    /// user's own dictionary terms. Text that is mostly capitals is the
+    /// exception: there every word looks like an acronym, and the request is
+    /// to stop shouting, so only dictionary terms keep their form.
+    ///
+    /// - Parameter terms: Spellings to restore whatever case they arrive in.
+    static func sentenceCased(_ text: String, keeping terms: [String] = []) -> String {
+        let letters = text.filter(\.isLetter)
+        let isShouting = letters.count >= 2
+            && Double(letters.filter(\.isUppercase).count) / Double(letters.count) > 0.7
+        let spellings = Dictionary(terms.map { ($0.lowercased(), $0) }, uniquingKeysWith: { first, _ in first })
+
         var result = ""
-        for sentence in CleanupContext.sentences(text.lowercased()) {
-            if let position = sentence.firstIndex(where: { $0.isLetter }) {
-                result += sentence.replacingCharacters(in: position...position, with: sentence[position].uppercased())
-            } else {
-                result += sentence
+        // A sentence's first word is capitalised unless its spelling was
+        // kept: "iPhone sales rose" stays as it is.
+        var startsSentence = true
+        var index = text.startIndex
+        while index < text.endIndex {
+            let character = text[index]
+            guard character.isLetter || character.isNumber else {
+                if ".!?\n".contains(character) { startsSentence = true }
+                result.append(character)
+                index = text.index(after: index)
+                continue
             }
+            var end = index
+            while end < text.endIndex, text[end].isLetter || text[end].isNumber || text[end] == "'" || text[end] == "’" {
+                end = text.index(after: end)
+            }
+            let word = String(text[index..<end])
+            if let spelling = spellings[word.lowercased()] {
+                result += spelling
+            } else if !isShouting, word.dropFirst().contains(where: \.isUppercase) {
+                result += word
+            } else if word.lowercased() == "i" {
+                // The one word English always capitalises.
+                result += "I"
+            } else if startsSentence {
+                result += word.prefix(1).uppercased() + word.dropFirst().lowercased()
+            } else {
+                result += word.lowercased()
+            }
+            startsSentence = false
+            index = end
         }
-        // "i" on its own is the one word English always capitalises.
-        guard let expression = try? NSRegularExpression(pattern: #"(?<![\p{L}\p{N}'’])i(?![\p{L}\p{N}])"#) else {
-            return result
-        }
-        return expression.stringByReplacingMatches(
-            in: result, range: NSRange(result.startIndex..., in: result), withTemplate: "I"
-        )
+        return result
     }
 
     private static func withoutListMarker(_ line: Substring) -> String {

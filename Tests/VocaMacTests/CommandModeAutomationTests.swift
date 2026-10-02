@@ -174,7 +174,7 @@ final class CommandModeAutomationTests: XCTestCase {
         XCTAssertEqual(fixture.app.errorMessage, SelectionCaptureFailure.nothingSelected.message)
     }
 
-    func testUndoHandsTheAppItsOwnUndo() async {
+    func testUndoPutsTheOriginalBackOverTheResult() async {
         let fixture = makeFixture(selected: "This sentence is unnecessarily long.")
         fixture.cleanup.cleanHandler = { _ in "A short sentence." }
         await say("make this shorter", fixture)
@@ -183,10 +183,44 @@ final class CommandModeAutomationTests: XCTestCase {
         fixture.selection.selectedText = ""
         await say("Undo that.", fixture)
 
-        XCTAssertEqual(fixture.selection.undoCallCount, 1)
+        // The result is found again where it was put, and only then replaced.
+        XCTAssertEqual(fixture.selection.reselectedTexts, ["A short sentence."])
+        XCTAssertEqual(fixture.selection.replacement, "This sentence is unnecessarily long.")
         XCTAssertEqual(fixture.cleanup.transformPrompts.count, promptsBefore)
         XCTAssertNil(fixture.app.lastCommandEdit)
         XCTAssertEqual(fixture.app.appStatus, .idle)
+    }
+
+    func testUndoTouchesNothingWhenTheResultIsNoLongerThere() async {
+        let fixture = makeFixture(selected: "This sentence is unnecessarily long.")
+        fixture.cleanup.cleanHandler = { _ in "A short sentence." }
+        await say("make this shorter", fixture)
+
+        // The user has typed since: the result can't be found as it was.
+        fixture.selection.selectedText = ""
+        fixture.selection.reselectSucceeds = false
+        await say("undo that", fixture)
+
+        XCTAssertEqual(fixture.selection.replacement, "A short sentence.")
+        XCTAssertEqual(fixture.selection.replaceCallCount, 1)
+        XCTAssertTrue(fixture.selection.deletedSelections.isEmpty)
+        XCTAssertTrue(fixture.app.errorMessage?.contains("Press ⌘Z in the app instead") == true)
+        // The edit is still the last one, so a later undo can try again.
+        XCTAssertNotNil(fixture.app.lastCommandEdit)
+    }
+
+    func testUndoingWrittenTextDeletesIt() async {
+        let fixture = makeFixture()
+        fixture.selection.insertionLocation = 12
+        fixture.cleanup.cleanHandler = { _ in "Thanks for the help." }
+        await say("write a thank-you line", fixture)
+
+        await say("undo that", fixture)
+
+        XCTAssertEqual(fixture.selection.reselectedTexts, ["Thanks for the help."])
+        XCTAssertEqual(fixture.selection.deletedSelections, ["Thanks for the help."])
+        XCTAssertEqual(fixture.selection.replaceCallCount, 0)
+        XCTAssertNil(fixture.app.lastCommandEdit)
     }
 
     func testUndoWithNothingToUndoSaysSo() async {
@@ -194,8 +228,86 @@ final class CommandModeAutomationTests: XCTestCase {
 
         await say("undo that", fixture)
 
-        XCTAssertEqual(fixture.selection.undoCallCount, 0)
+        XCTAssertTrue(fixture.selection.reselectedTexts.isEmpty)
         XCTAssertTrue(fixture.app.errorMessage?.contains("no Command Mode edit to undo") == true)
+    }
+
+    // MARK: New text goes where the cursor was
+
+    func testNewTextIsNotTypedIntoAFieldTheCursorMovedTo() async {
+        let fixture = makeFixture()
+        fixture.selection.insertionLocation = 0
+        fixture.cleanup.cleanHandler = { _ in "Thanks so much!" }
+        // While the model writes, focus moves to another field of the same
+        // app: same caret, same (empty) text, a different place on screen.
+        fixture.cleanup.onTransform = { [selection = fixture.selection] in
+            selection.insertionFieldFrame = CGRect(x: 10, y: 200, width: 300, height: 24)
+        }
+
+        await say("write a thank-you note", fixture)
+
+        XCTAssertNil(fixture.mocks.textInjector.lastInjectedText)
+        XCTAssertEqual(fixture.app.heldOutput, "Thanks so much!")
+        XCTAssertTrue(fixture.app.errorMessage?.contains("The cursor moved") == true)
+        XCTAssertNil(fixture.app.lastCommandEdit)
+    }
+
+    func testNewTextIsNotTypedAfterSomethingElseWasTyped() async {
+        let fixture = makeFixture()
+        fixture.selection.insertionLocation = 4
+        fixture.selection.insertionFieldValue = "Dear"
+        fixture.cleanup.cleanHandler = { _ in "Thanks so much!" }
+        fixture.cleanup.onTransform = { [selection = fixture.selection] in
+            selection.insertionFieldValue = "Dear Sam"
+            selection.insertionLocation = 8
+        }
+
+        await say("write a thank-you note", fixture)
+
+        XCTAssertNil(fixture.mocks.textInjector.lastInjectedText)
+        XCTAssertEqual(fixture.app.heldOutput, "Thanks so much!")
+    }
+
+    func testNewTextIsTypedWhenTheCursorStayedPut() async {
+        let fixture = makeFixture()
+        fixture.selection.insertionLocation = 4
+        fixture.selection.insertionFieldValue = "Dear"
+        fixture.cleanup.cleanHandler = { _ in "Thanks so much!" }
+
+        await say("write a thank-you note", fixture)
+
+        XCTAssertEqual(fixture.mocks.textInjector.lastInjectedText, "Thanks so much!")
+        XCTAssertNil(fixture.app.heldOutput)
+    }
+
+    func testAnInsertionPointIsTheSamePlaceOnlyWhenNothingMoved() {
+        let frame = CGRect(x: 10, y: 10, width: 300, height: 24)
+        let point = InsertionPoint(processID: 42, caret: 4, fieldValue: "Dear", fieldFrame: frame)
+        XCTAssertTrue(point.matches(point))
+        XCTAssertTrue(point.matches(InsertionPoint(
+            processID: 42, caret: 4, fieldValue: "Dear", fieldFrame: frame.offsetBy(dx: 0.5, dy: 0)
+        )))
+        XCTAssertFalse(point.matches(nil), "the app stopped reporting a cursor")
+        XCTAssertFalse(point.matches(InsertionPoint(processID: 43, caret: 4, fieldValue: "Dear", fieldFrame: frame)))
+        XCTAssertFalse(point.matches(InsertionPoint(processID: 42, caret: 5, fieldValue: "Dear", fieldFrame: frame)))
+        XCTAssertFalse(point.matches(InsertionPoint(processID: 42, caret: 4, fieldValue: "Deer", fieldFrame: frame)))
+        XCTAssertFalse(point.matches(InsertionPoint(
+            processID: 42, caret: 4, fieldValue: "Dear", fieldFrame: frame.offsetBy(dx: 0, dy: 40)
+        )))
+        XCTAssertFalse(point.matches(InsertionPoint(processID: 42, caret: 4, fieldValue: "Dear", fieldFrame: nil)))
+        XCTAssertEqual(point.snapshot.range?.location, 4)
+        XCTAssertEqual(point.snapshot.text, "")
+    }
+
+    func testAClipboardSelectionMustCopyTheSameTextBeforeItIsReplaced() {
+        let snapshot = SelectedTextSnapshot(
+            element: nil, processID: 42, text: "the text that was read", range: nil, source: .clipboard
+        )
+        XCTAssertTrue(AccessibilitySelectedTextService.copiedSelectionStillMatches(snapshot, copied: "the text that was read"))
+        // A different selection made while the edit waited for review.
+        XCTAssertFalse(AccessibilitySelectedTextService.copiedSelectionStillMatches(snapshot, copied: "something else"))
+        let viaAccessibility = SelectedTextSnapshot(element: nil, processID: 42, text: "x", range: nil)
+        XCTAssertFalse(AccessibilitySelectedTextService.copiedSelectionStillMatches(viaAccessibility, copied: "x"))
     }
 
     // MARK: Read-only text

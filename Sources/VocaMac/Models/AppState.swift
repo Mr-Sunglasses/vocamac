@@ -135,7 +135,7 @@ enum CommandTarget {
     case readOnly(SelectedTextSnapshot)
     /// Nothing is selected. `insertionPoint` is where the cursor was, when
     /// the app says, so text written there can be edited again.
-    case cursor(insertionPoint: SelectedTextSnapshot?)
+    case cursor(insertionPoint: InsertionPoint?)
 
     var selectedText: String? {
         switch self {
@@ -788,7 +788,7 @@ final class AppState: ObservableObject {
     private var activeCommandService: TranscriptCleaning?
     /// Where the last edit landed, so "shorter still" and "undo that" have
     /// something to act on.
-    private var lastCommandTarget: (snapshot: SelectedTextSnapshot, replacement: String, at: Date)?
+    private var lastCommandTarget: (snapshot: SelectedTextSnapshot, original: String, replacement: String, at: Date)?
     /// How long after an edit a follow-up still means that edit.
     static let commandFollowUpWindow: TimeInterval = 300
     /// The edit a review panel is holding until it is approved.
@@ -4532,7 +4532,7 @@ extension AppState {
         let instruction = run.instruction
 
         if CommandInstruction.isUndo(instruction) {
-            undoLastCommandEdit(run)
+            await undoLastCommandEdit(run)
             return
         }
         // Only the user's own words choose an action. The selection is, at
@@ -4558,7 +4558,7 @@ extension AppState {
 
         switch run.target {
         case .selection(let snapshot):
-            if let exact = CommandExactEdit.apply(instruction: instruction, to: snapshot.text) {
+            if let exact = CommandExactEdit.apply(instruction: instruction, to: snapshot.text, keeping: establishedSpellings) {
                 guard exact.text != snapshot.text else {
                     failCommand("Command Mode did not change the text: it is already that way.", detail: "\(exact.name) changed nothing", started: run.started)
                     return
@@ -4582,7 +4582,7 @@ extension AppState {
         case .readOnly(let snapshot):
             // A rule edit of text that can't be replaced is still exact, and
             // still needs no model: show it to copy.
-            if let exact = CommandExactEdit.apply(instruction: instruction, to: snapshot.text) {
+            if let exact = CommandExactEdit.apply(instruction: instruction, to: snapshot.text, keeping: establishedSpellings) {
                 deliverAnswer(exact.text, about: snapshot.text, note: nil, run: run, engineName: "VocaMac")
                 return
             }
@@ -4590,11 +4590,16 @@ extension AppState {
             deliverAnswer(result.output, about: snapshot.text, note: result.problem?.message, run: run)
         case .cursor(let insertionPoint):
             guard let result = await runCommandModel(text: instruction, intent: intent, mode: .compose, run: run) else { return }
-            deliverComposedText(result.output, at: insertionPoint, note: result.problem?.message, run: run)
+            await deliverComposedText(result.output, at: insertionPoint, note: result.problem?.message, run: run)
         }
     }
 
     // MARK: Command Mode: the model
+
+    /// Spellings the user has settled on, which a rule edit must not undo.
+    private var establishedSpellings: [String] {
+        vocabularyTerms + wordReplacements.map(\.replacement)
+    }
 
     /// What the session can tell the model about where the text lives.
     private func commandContext(instruction: String, text: String) -> CommandContext {
@@ -4719,7 +4724,7 @@ extension AppState {
             instruction: edit.instruction, original: edit.snapshot.text, replacement: edit.replacement,
             engineName: edit.engineName, kind: .edit, note: edit.note
         )
-        lastCommandTarget = (edit.snapshot, edit.replacement, Date())
+        lastCommandTarget = (edit.snapshot, edit.snapshot.text, edit.replacement, Date())
         recordCommandHistory(
             instruction: edit.instruction, original: edit.snapshot.text, replacement: edit.replacement,
             summary: edit.summary, app: edit.app, language: edit.language, audioSeconds: edit.audioSeconds
@@ -4755,12 +4760,29 @@ extension AppState {
     }
 
     /// Type new text where the cursor was when the session began.
-    private func deliverComposedText(_ text: String, at insertionPoint: SelectedTextSnapshot?, note: String?, run: CommandRun) {
+    ///
+    /// The model ran for seconds, and typing goes to whatever has focus now.
+    /// The same app in front is not enough: the cursor may have moved to
+    /// another field of it, one that sends what is typed. So where the app
+    /// reported its cursor at the start, it has to report the same field,
+    /// position, and text now, or the result is kept in the menu bar instead.
+    /// An app that reports no cursor gets the check a dictation gets: the
+    /// same app must still be in front.
+    private func deliverComposedText(_ text: String, at insertionPoint: InsertionPoint?, note: String?, run: CommandRun) async {
         let current = frontmostAppResolver.currentFrontmostApp() ?? frontmostAppResolver.lastActiveApp()
         guard Self.sameOutputTarget(commandTargetApp, current) else {
             heldOutput = text
             failCommand("The destination app changed. The text is saved in the menu bar; copy it to paste where you want.", detail: "the app changed before the text could be typed", started: run.started)
             return
+        }
+        if let insertionPoint {
+            let now = await selectedTextService?.captureInsertionPoint()
+            guard run.generation == recordingGeneration else { return }
+            guard insertionPoint.matches(now) else {
+                heldOutput = text
+                failCommand("The cursor moved while the text was being written. It is saved in the menu bar; copy it to paste where you want.", detail: "the cursor moved before the text could be typed", started: run.started)
+                return
+            }
         }
         textInjector.inject(text: text, preserveClipboard: preserveClipboard)
         let engineName = run.engine.displayName
@@ -4769,7 +4791,7 @@ extension AppState {
             engineName: engineName, kind: .composed, note: note
         )
         // Where it landed, so "make it shorter" can pick it up.
-        lastCommandTarget = insertionPoint.map { ($0, text, Date()) }
+        lastCommandTarget = insertionPoint.map { ($0.snapshot, "", text, Date()) }
         recordCommandHistory(
             instruction: run.instruction, original: "", replacement: text,
             summary: "Command Mode · \(engineName) · new text", app: commandTargetApp,
@@ -4808,12 +4830,29 @@ extension AppState {
         return await selectedTextService.reselect(last.snapshot, replacement: last.replacement)
     }
 
-    /// "Undo that": hand the app that took the last edit its own Undo, which
-    /// puts back exactly what it replaced.
-    private func undoLastCommandEdit(_ run: CommandRun) {
-        guard let last = lastCommandTarget, let selectedTextService,
-              selectedTextService.undoEdit(in: last.snapshot.deliveryProcessID) else {
-            failCommand("There's no Command Mode edit to undo in this app.", detail: "undo was asked for with no edit to undo", started: run.started)
+    /// "Undo that": put back what the last edit replaced.
+    ///
+    /// Not the app's own Undo. That takes back whatever the app did last, and
+    /// once the user has typed anything since, that is their typing and not
+    /// the edit. Instead the result is selected again where it was put, which
+    /// only succeeds if it is still there unchanged, and the original is
+    /// written over it. Where the app won't let text be selected that way,
+    /// nothing is touched and the user is pointed at ⌘Z.
+    private func undoLastCommandEdit(_ run: CommandRun) async {
+        guard let last = lastCommandTarget, let selectedTextService else {
+            failCommand("There's no Command Mode edit to undo here.", detail: "undo was asked for with no edit to undo", started: run.started)
+            return
+        }
+        guard let reselected = await selectedTextService.reselect(last.snapshot, replacement: last.replacement) else {
+            failCommand("VocaMac can't take that edit back here: the text has changed since, or this app doesn't let it be selected. Press ⌘Z in the app instead.", detail: "the last edit could not be selected again to undo it", started: run.started)
+            return
+        }
+        // Text that was written, not replaced, has nothing to put back.
+        let undone = last.original.isEmpty
+            ? await selectedTextService.deleteSelection(reselected)
+            : await selectedTextService.replaceSelection(reselected, with: last.original)
+        guard undone else {
+            failCommand("VocaMac couldn't take that edit back: the selection changed. Press ⌘Z in the app instead.", detail: "the reselected edit changed before it could be undone", started: run.started)
             return
         }
         lastCommandTarget = nil
