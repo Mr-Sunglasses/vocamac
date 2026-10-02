@@ -611,7 +611,13 @@ struct HandyOverlayView: View {
         switch viewModel.phase {
         case .connecting: return "Connecting"
         case .recording: return viewModel.isCommandMode ? "Command Mode" : "Listening"
-        case .idle, .processing: return viewModel.isCommandMode ? "Editing Selection" : "Transcribing"
+        case .idle, .processing:
+            switch viewModel.commandSession?.kind {
+            case .edit?: return "Editing Selection"
+            case .compose?: return "Writing"
+            case .answer?: return "Answering"
+            case nil: return "Transcribing"
+            }
         case .failure: return "Didn’t work"
         }
     }
@@ -623,17 +629,30 @@ struct HandyOverlayView: View {
             if let seconds = viewModel.countdownSeconds {
                 return "Stopping in \(seconds)s"
             }
-            return viewModel.isCommandMode ? "Say how to change it" : "Speak now"
+            switch viewModel.commandSession?.kind {
+            case .edit?: return "Say how to change it"
+            case .compose?: return "Say what to write"
+            case .answer?: return "Ask about the selection"
+            case nil: return "Speak now"
+            }
         case .failure: return viewModel.failureMessage
         case .idle, .processing:
             guard let session = viewModel.commandSession else { return "Transcribing…" }
-            return session.phase == .rewriting ? "Rewriting with \(session.engineName)…" : "Transcribing instruction…"
+            guard session.phase == .rewriting else { return "Transcribing instruction…" }
+            switch session.kind {
+            case .edit: return "Rewriting with \(session.engineName)…"
+            case .compose: return "Writing with \(session.engineName)…"
+            case .answer: return "Answering with \(session.engineName)…"
+            }
         }
     }
 
     private var transcriptPlaceholder: String {
-        if viewModel.isCommandMode {
-            return "e.g. “make this shorter” or “translate to Spanish”"
+        switch viewModel.commandSession?.kind {
+        case .edit?: return "e.g. “make this shorter” or “translate to Spanish”"
+        case .compose?: return "e.g. “write a reply saying I’ll be ten minutes late”"
+        case .answer?: return "e.g. “summarise this” or “explain it simply”"
+        case nil: break
         }
         return viewModel.liveWordsAvailable
             ? "Words will appear here as you speak"
@@ -645,14 +664,19 @@ struct HandyOverlayView: View {
     @ViewBuilder
     private var liveDetailLine: some View {
         if let session = viewModel.commandSession {
-            if session.phase == .rewriting, let instruction = session.instruction, !instruction.isEmpty {
+            if session.phase == .rewriting, let written = session.previewTail {
+                // The result as the model writes it: the wait reads as
+                // progress, and a wrong turn shows before it lands.
+                Text(written)
+                    .foregroundStyle(primaryText)
+            } else if session.phase == .rewriting, let instruction = session.instruction, !instruction.isEmpty {
                 Text("“\(instruction)”")
                     .foregroundStyle(primaryText)
             } else if !viewModel.transcript.isEmpty {
                 Text(viewModel.transcript)
                     .foregroundStyle(primaryText)
             } else {
-                Text("Editing “\(session.selectionPreview)”")
+                Text(commandSubject(session))
                     .foregroundStyle(secondaryText)
             }
         } else {
@@ -693,7 +717,19 @@ struct HandyOverlayView: View {
         }
     }
 
+    /// What the session is working on, before anything has been said.
+    private func commandSubject(_ session: CommandModeSession) -> String {
+        switch session.kind {
+        case .edit: return "Editing “\(session.selectionPreview)”"
+        case .compose: return "Nothing selected — new text goes at the cursor"
+        case .answer: return "Can’t be edited, so you’ll get an answer: “\(session.selectionPreview)”"
+        }
+    }
+
     private func commandBadgeText(_ session: CommandModeSession) -> String {
+        guard session.kind != .compose else {
+            return session.appName.flatMap { $0.isEmpty ? nil : "New text · \($0)" } ?? "New text"
+        }
         let count = session.characterCount == 1 ? "1 char" : "\(session.characterCount) chars"
         guard let app = session.appName, !app.isEmpty else { return count }
         return "\(count) · \(app)"

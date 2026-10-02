@@ -773,9 +773,43 @@ final class MockTranscriptCleanup: TranscriptCleaning, ObservableObject {
     /// Runs inside `transform` before it answers, e.g. to press Escape mid-edit.
     var onTransform: (() async -> Void)?
 
+    /// Answers a transform in place of `cleanHandler`, given the text and the
+    /// prompt, so a test can answer a retry differently from the first try.
+    var transformHandler: ((String, String) -> CleanupAttempt)?
+    var transformPrompts: [String] = []
+    var transformTexts: [String] = []
+    var lastTransformOptions: TransformOptions?
+    /// Sent to the transform's `onPartial` before it answers.
+    var transformPartials: [String] = []
+
     func transform(_ text: String, prompt: String) async -> CleanupAttempt {
+        await transform(text, prompt: prompt, options: TransformOptions())
+    }
+
+    func transform(_ text: String, prompt: String, options: TransformOptions) async -> CleanupAttempt {
+        transformPrompts.append(prompt)
+        transformTexts.append(text)
+        lastTransformOptions = options
         await onTransform?()
+        for partial in transformPartials { options.onPartial?(partial) }
+        if let transformHandler {
+            lastPrompt = prompt
+            return transformHandler(text, prompt)
+        }
         return await preview(text, prompt: prompt)
+    }
+
+    var primedPrompts: [String] = []
+    func prime(prompt: String) async {
+        primedPrompts.append(prompt)
+    }
+
+    /// Models whose load is refused for memory, leaving whatever is loaded.
+    var memoryRefusedKinds: Set<CleanupModelKind> = []
+    /// What `memoryFallback` offers for a refused model.
+    var memoryFallbackKind: CleanupModelKind?
+    func memoryFallback(for kind: CleanupModelKind) -> CleanupModelKind? {
+        memoryRefusedKinds.contains(kind) ? memoryFallbackKind : nil
     }
 
     func cancelTransform() {
@@ -847,11 +881,14 @@ final class MockTranscriptCleanup: TranscriptCleaning, ObservableObject {
     /// Suspends a load until the test lets it finish.
     var onLoad: (() async -> Void)?
 
+    var loadRequests: [CleanupModelKind] = []
+
     func load(_ kind: CleanupModelKind) async {
         loadCallCount += 1
+        loadRequests.append(kind)
         await onLoad?()
-        guard loadSucceeds else {
-            modelState = .error("load failed")
+        guard loadSucceeds, !memoryRefusedKinds.contains(kind) else {
+            modelState = .error(loadSucceeds ? "Not enough free memory to load \(kind.descriptor.displayName)." : "load failed")
             return
         }
         lastLoadedKind = kind
@@ -884,7 +921,10 @@ extension AppState {
         historyStore: DictationHistoryStore? = nil,
         screenContextReader: (any ScreenContextReading)? = nil,
         correctionObserver: (any CorrectionObserving)? = nil,
-        selectedTextService: (any SelectedTextAccessing)? = nil
+        selectedTextService: (any SelectedTextAccessing)? = nil,
+        commandModelSlot: MockTranscriptCleanup? = nil,
+        voiceActionPerformer: (any VoiceActionPerforming)? = nil,
+        commandReviewPresenter: (any CommandReviewPresenting)? = nil
     ) -> (appState: AppState, mocks: TestMocks) {
         UserDefaults.standard.removeObject(forKey: "vocamac.selectedAudioDeviceID")
         UserDefaults.standard.removeObject(forKey: "vocamac.selectedAudioDeviceName")
@@ -920,6 +960,9 @@ extension AppState {
             PreferenceKey.processWhileSpeaking,
             PreferenceKey.commandModeShortcut, PreferenceKey.commandModeEngine,
             PreferenceKey.commandModeClipboardFallback, PreferenceKey.websiteStyleBindings,
+            PreferenceKey.cleanupSkipsCleanText, PreferenceKey.commandModeReview,
+            PreferenceKey.savedCommands, PreferenceKey.voiceActionsEnabled,
+            PreferenceKey.voiceActionShortcuts, PreferenceKey.aiModelsKeptSeparate,
             PreferenceKey.externalMicWhenLidClosed, "vocamac.scratchpad.text",
         ] {
             UserDefaults.standard.removeObject(forKey: key)
@@ -971,6 +1014,9 @@ extension AppState {
             screenContextReader: screenContextReader,
             correctionObserver: correctionObserver,
             selectedTextService: selectedTextService,
+            commandModelSlot: commandModelSlot,
+            voiceActionPerformer: voiceActionPerformer,
+            commandReviewPresenter: commandReviewPresenter,
             skipSystemIntegration: true
         )
         // Spell checking depends on the machine's dictionaries; tests use a
@@ -1049,6 +1095,9 @@ final class MockSelectedTextService: SelectedTextAccessing {
     /// Runs while the selection is being read, e.g. to release a held key.
     var onCapture: (() async -> Void)?
 
+    /// False makes the selection read-only, like text on a web page.
+    var isEditable = true
+
     func captureSelection() async -> Result<SelectedTextSnapshot, SelectionCaptureFailure> {
         captureCallCount += 1
         await onCapture?()
@@ -1057,8 +1106,37 @@ final class MockSelectedTextService: SelectedTextAccessing {
             element: AXElementBox(element: AXUIElementCreateSystemWide()),
             processID: 42,
             text: selectedText,
-            range: CFRange(location: 0, length: selectedText.utf16.count)
+            range: CFRange(location: 0, length: selectedText.utf16.count),
+            isEditable: isEditable
         ))
+    }
+
+    /// Where the cursor is when nothing is selected; nil for an app that
+    /// doesn't say.
+    var insertionLocation: Int?
+    func captureInsertionPoint() async -> SelectedTextSnapshot? {
+        insertionLocation.map {
+            SelectedTextSnapshot(element: nil, processID: 42, text: "", range: CFRange(location: $0, length: 0))
+        }
+    }
+
+    /// Whether the last edit can be selected again.
+    var reselectSucceeds = true
+    var reselectedTexts: [String] = []
+    func reselect(_ snapshot: SelectedTextSnapshot, replacement: String) async -> SelectedTextSnapshot? {
+        reselectedTexts.append(replacement)
+        guard reselectSucceeds else { return nil }
+        return SelectedTextSnapshot(
+            element: nil, processID: 42, text: replacement,
+            range: CFRange(location: snapshot.range?.location ?? 0, length: replacement.utf16.count)
+        )
+    }
+
+    var undoCallCount = 0
+    var undoSucceeds = true
+    func undoEdit(in processID: pid_t) -> Bool {
+        undoCallCount += 1
+        return undoSucceeds
     }
 
     func replaceSelection(_ snapshot: SelectedTextSnapshot, with text: String) async -> Bool {
@@ -1085,4 +1163,42 @@ final class MockCorrectionObserver: CorrectionObserving {
     }
 
     func cancel() {}
+}
+
+@MainActor
+final class MockVoiceActionPerformer: VoiceActionPerforming {
+    var performed: [VoiceAction] = []
+    var inputs: [String?] = []
+    var result: Result<Void, VoiceActionError> = .success(())
+
+    func perform(_ action: VoiceAction, input: String?) async -> Result<Void, VoiceActionError> {
+        performed.append(action)
+        inputs.append(input)
+        return result
+    }
+}
+
+@MainActor
+final class MockCommandReviewPresenter: CommandReviewPresenting {
+    var shown: [CommandReview] = []
+    var hideCallCount = 0
+    var onAccept: (() -> Void)?
+    var onCopy: (() -> Void)?
+    var onDismiss: (() -> Void)?
+
+    func show(
+        _ review: CommandReview,
+        onAccept: @escaping () -> Void,
+        onCopy: @escaping () -> Void,
+        onDismiss: @escaping () -> Void
+    ) {
+        shown.append(review)
+        self.onAccept = onAccept
+        self.onCopy = onCopy
+        self.onDismiss = onDismiss
+    }
+
+    func hide() {
+        hideCallCount += 1
+    }
 }

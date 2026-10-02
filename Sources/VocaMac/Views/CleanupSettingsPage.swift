@@ -86,6 +86,12 @@ struct CleanupSettingsPage: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                Divider()
+                SettingsToggleRow(
+                    title: "Skip the model when there's nothing to clean",
+                    detail: "A dictation that is already punctuated, with no filler or repeated words, is typed straight away instead of waiting for the model to hand it back unchanged.",
+                    isOn: $appState.skipCleanDictations
+                )
             }
 
             modelLibrary
@@ -155,7 +161,7 @@ struct CleanupSettingsPage: View {
 
             VocaDisclosureCard(
                 title: "Command Mode Options",
-                subtitle: "Shortcut, examples, and apps that hide selections.",
+                subtitle: "Shortcut, saved commands, review, and voice actions.",
                 systemImage: "wand.and.stars",
                 isExpanded: $isCommandModeExpanded
             ) {
@@ -447,6 +453,9 @@ struct CleanupSettingsPage: View {
         case .local(let kind) where kind == appState.selectedCleanupModelKind:
             return "Both use \(cleanup) for now, but choosing a model for one won't change the other."
         case .local(let kind):
+            if appState.usesSeparateCommandSlot(for: kind) {
+                return "\(cleanup) cleans up and \(kind.descriptor.displayName) edits. This Mac has the memory to keep both loaded, so neither waits for the other."
+            }
             return "\(cleanup) cleans up and \(kind.descriptor.displayName) edits. They take turns in memory, so an edit starts slower."
         case .appleIntelligence, .endpoint:
             return "Command Mode runs with \(appState.commandModeEngine.displayName), so it needs no model here."
@@ -578,7 +587,7 @@ struct CommandModeSettingsGroup: View {
 
     @ViewBuilder
     private var rows: some View {
-        Text("Select text in any app, press the shortcut, and say what to change. The original stays in the menu bar so you can copy it back.")
+        Text("Select text in any app, press the shortcut, and say what to change. With nothing selected, say what to write and it is typed at the cursor. The original stays in the menu bar so you can copy it back.")
             .font(.caption)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
@@ -599,6 +608,134 @@ struct CommandModeSettingsGroup: View {
             isOn: $appState.commandModeClipboardFallback
         )
         .help("VocaMac copies the selection with ⌘C and puts your clipboard back right away. Clipboard managers may briefly see the selected text.")
+
+        Divider()
+
+        HStack(alignment: .firstTextBaseline) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Review edits before replacing")
+                Text("Shows what changed and waits. Press the Command Mode shortcut to replace, or Esc to discard.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 16)
+            Picker("Review edits before replacing", selection: $appState.commandModeReview) {
+                ForEach(CommandReviewMode.allCases) { mode in
+                    Text(mode.displayName).tag(mode)
+                }
+            }
+            .labelsHidden()
+            .fixedSize()
+        }
+
+        Divider()
+
+        SavedCommandsEditor()
+
+        Divider()
+
+        SettingsToggleRow(
+            title: "Voice actions",
+            detail: "Say “open Safari”, “search the web for…”, “remind me to…”, or “run the shortcut…”. Only what you say starts an action, never the selected text.",
+            isOn: $appState.voiceActionsEnabled
+        )
+        if appState.voiceActionsEnabled {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Shortcuts VocaMac may run")
+                    .font(.caption)
+                TextEditor(text: $appState.voiceActionShortcuts)
+                    .font(.system(.caption, design: .monospaced))
+                    .frame(height: 54)
+                    .padding(6)
+                    .background(VocaDesign.canvas, in: RoundedRectangle(cornerRadius: 8))
+                    .accessibilityLabel("Shortcuts VocaMac may run, one per line")
+                Text("One name per line, as it appears in the Shortcuts app. A shortcut that isn't listed never runs. Selected text is passed to the shortcut as its input.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+}
+
+/// The user's saved Command Mode instructions: a name, the instruction, and
+/// an optional shortcut each.
+private struct SavedCommandsEditor: View {
+    @EnvironmentObject var appState: AppState
+
+    var body: some View {
+        let commands = appState.savedCommands
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Saved commands")
+                    Text("Instructions you use often. Say a command's name in Command Mode, or give it a shortcut to run it on the selection without speaking.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 16)
+                Button("Add") {
+                    appState.savedCommands = commands + [SavedCommand(name: "", instruction: "")]
+                }
+                .controlSize(.small)
+            }
+            if commands.isEmpty {
+                Button("Add “Fix grammar”, “Shorter”, and “More formal”") {
+                    appState.savedCommands = SavedCommand.starters
+                }
+                .controlSize(.small)
+            }
+            ForEach(commands) { command in
+                SavedCommandRow(command: command)
+            }
+        }
+    }
+}
+
+private struct SavedCommandRow: View {
+    @EnvironmentObject var appState: AppState
+    let command: SavedCommand
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                TextField("Name", text: binding(\.name))
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 130)
+                    .accessibilityLabel("Command name")
+                TextField("Instruction, e.g. “fix grammar and spelling”", text: binding(\.instruction))
+                    .textFieldStyle(.roundedBorder)
+                    .accessibilityLabel("Instruction")
+                Button {
+                    appState.savedCommands = appState.savedCommands.filter { $0.id != command.id }
+                } label: {
+                    Image(systemName: "trash")
+                }
+                .buttonStyle(.borderless)
+                .help("Delete this command")
+                .accessibilityLabel("Delete \(command.name.isEmpty ? "command" : command.name)")
+            }
+            ShortcutRecorderRow(
+                action: .savedCommand(command.id),
+                detail: "Runs it on the selected text.",
+                title: "Shortcut"
+            )
+            .font(.caption)
+        }
+        .padding(8)
+        .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private func binding(_ keyPath: WritableKeyPath<SavedCommand, String>) -> Binding<String> {
+        Binding(
+            get: { appState.savedCommands.first { $0.id == command.id }?[keyPath: keyPath] ?? "" },
+            set: { value in
+                var commands = appState.savedCommands
+                guard let index = commands.firstIndex(where: { $0.id == command.id }) else { return }
+                commands[index][keyPath: keyPath] = value
+                appState.savedCommands = commands
+            }
+        )
     }
 }
 
@@ -607,6 +744,7 @@ private struct CommandModeExamples: View {
     private static let phrases = [
         "make this shorter", "fix grammar and spelling", "make it more formal",
         "turn this into bullet points", "translate to Spanish", "write a polite reply",
+        "uppercase", "sort these lines", "shorter still", "undo that",
     ]
 
     var body: some View {

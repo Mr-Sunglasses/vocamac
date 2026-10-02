@@ -343,7 +343,7 @@ cat > "${APP_DIR}/Contents/Info.plist" << EOF
     <key>NSAudioCaptureUsageDescription</key>
     <string>VocaMac captures system audio only when you start a System Audio transcription.</string>
     <key>NSAppleEventsUsageDescription</key>
-    <string>VocaMac pauses and resumes Spotify while you dictate, when you enable "Pause Spotify while dictating".</string>
+    <string>VocaMac pauses and resumes Spotify while you dictate when "Pause Spotify while dictating" is on, and adds a reminder when you ask Command Mode for one with voice actions on.</string>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
 </dict>

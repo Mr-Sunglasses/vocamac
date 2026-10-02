@@ -47,6 +47,15 @@ enum PreferenceKey {
     static let commandModeEngine = "vocamac.commandMode.engine"
     static let commandModeClipboardFallback = "vocamac.commandMode.clipboardFallback"
     static let aiModelsKeptSeparate = "vocamac.aiModels.keepSeparate"
+    /// Leave the cleanup model out when a dictation has nothing for it to do.
+    static let cleanupSkipsCleanText = "vocamac.transcriptCleanup.skipCleanText"
+    /// `CommandReviewMode` raw value.
+    static let commandModeReview = "vocamac.commandMode.review"
+    /// JSON `[SavedCommand]`.
+    static let savedCommands = "vocamac.commandMode.savedCommands"
+    static let voiceActionsEnabled = "vocamac.commandMode.voiceActions"
+    /// Names of the Shortcuts Command Mode may run, one per line.
+    static let voiceActionShortcuts = "vocamac.commandMode.voiceActionShortcuts"
     static let mouseTriggerButton = "vocamac.shortcuts.mouseButton"
     static let wordReplacements = "vocamac.dictionary.replacements"
     static let dictionarySuggestions = "vocamac.dictionary.suggestions"

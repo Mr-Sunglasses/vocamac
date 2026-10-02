@@ -65,6 +65,34 @@ struct TranscribeVocaFileIntent: AppIntent {
     }
 }
 
+/// Command Mode without speaking: Shortcuts supplies the instruction, and it
+/// is applied to whatever is selected in the app in front.
+@available(macOS 14.0, *)
+struct EditSelectedTextWithVocaIntent: AppIntent {
+    static let title: LocalizedStringResource = "Edit Selected Text with VocaMac"
+    static let description = IntentDescription(
+        "Apply a Command Mode instruction, such as “fix grammar and spelling”, to the text selected in the frontmost app. With nothing selected, the instruction says what to write at the cursor."
+    )
+    // Run in the background: bringing VocaMac forward would take the
+    // selection's app out of front, and the edit would have nowhere to go.
+    static let openAppWhenRun = false
+
+    @Parameter(title: "Instruction", description: "What to do with the selected text, or a saved command's name.")
+    var instruction: String
+
+    static var parameterSummary: some ParameterSummary {
+        Summary("Edit the selected text: \(\.$instruction)")
+    }
+
+    @MainActor
+    func perform() async throws -> some IntentResult {
+        let appState = AppState.production()
+        let saved = SavedCommandStore.command(named: instruction, in: appState.savedCommands)
+        await appState.runCommand(instruction: saved?.instruction ?? instruction)
+        return .result()
+    }
+}
+
 @available(macOS 14.0, *)
 struct VocaMacShortcuts: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {

@@ -408,7 +408,7 @@ final class HotKeyManager {
         if isCancelKeyArmed {
             combos[FallbackID.cancel] = HotKeyCombo(keyCode: KeyCodeReference.escapeKeyCode, modifiers: [])
         }
-        for (index, action) in HotKeyShortcutAction.allCases.enumerated() {
+        for (index, action) in HotKeyShortcutAction.ordered(shortcuts.keys).enumerated() {
             guard let combo = shortcuts[action], combo != activation else { continue }
             combos[FallbackID.shortcutBase + UInt32(index)] = combo
         }
@@ -452,8 +452,8 @@ final class HotKeyManager {
     private func fallbackAction(for id: UInt32) -> HotKeyShortcutAction? {
         guard id >= FallbackID.shortcutBase else { return nil }
         let index = Int(id - FallbackID.shortcutBase)
-        let actions = HotKeyShortcutAction.allCases
-        return actions.indices.contains(index) ? actions[actions.index(actions.startIndex, offsetBy: index)] : nil
+        let actions = withState { HotKeyShortcutAction.ordered(shortcuts.keys) }
+        return actions.indices.contains(index) ? actions[index] : nil
     }
 
     // MARK: - Event Tap Callback
@@ -568,14 +568,14 @@ final class HotKeyManager {
         }
         let modifiers = HotKeyModifiers(cgEventFlags: event.flags)
         let activation = HotKeyCombo(keyCode: targetKeyCode, modifiers: requiredModifiers)
-        guard let action = HotKeyShortcutAction.allCases.first(where: { action in
+        guard let action = HotKeyShortcutAction.ordered(shortcuts.keys).first(where: { action in
             guard let combo = shortcuts[action] else { return false }
             return combo.keyCode == keyCode && combo.modifiers == modifiers && combo != activation
         }) else { return false }
 
         heldShortcutKeyCodes.insert(keyCode)
         heldShortcutActions[keyCode] = action
-        VocaLogger.debug(.hotKeyManager, "Shortcut pressed: \(action.rawValue)")
+        VocaLogger.debug(.hotKeyManager, "Shortcut pressed: \(action.id)")
         DispatchQueue.main.async { [weak self] in
             self?.onShortcut?(action)
         }
@@ -877,21 +877,49 @@ extension HotKeyManager: HotKeyMonitoring {
 // MARK: - Extra Shortcuts
 
 /// Actions bound to their own global shortcut, besides the activation hotkey.
-enum HotKeyShortcutAction: String, CaseIterable, Identifiable {
+enum HotKeyShortcutAction: Hashable, Identifiable {
     /// Type the last dictation again at the cursor.
     case pasteLastDictation
     /// Start or stop a dictation without holding anything.
     case handsFreeToggle
     /// Hold while speaking an instruction that transforms selected text.
     case commandMode
+    /// Apply one of the user's saved Command Mode instructions to the
+    /// selection, without recording anything.
+    case savedCommand(UUID)
 
-    var id: String { rawValue }
+    /// The shortcuts every install has. Saved commands come and go.
+    static let builtIn: [HotKeyShortcutAction] = [.pasteLastDictation, .handsFreeToggle, .commandMode]
+
+    var id: String {
+        switch self {
+        case .pasteLastDictation: return "pasteLastDictation"
+        case .handsFreeToggle: return "handsFreeToggle"
+        case .commandMode: return "commandMode"
+        case .savedCommand(let id): return "savedCommand-\(id.uuidString)"
+        }
+    }
 
     var displayName: String {
         switch self {
         case .pasteLastDictation: return "Paste last dictation"
         case .handsFreeToggle: return "Hands-free dictation"
         case .commandMode: return "Command Mode"
+        case .savedCommand: return "Saved command"
+        }
+    }
+
+    /// A stable order for a set of actions: built-in ones first, then saved
+    /// commands by identifier. The Carbon fallback numbers its hot keys by it.
+    static func ordered<S: Sequence>(_ actions: S) -> [HotKeyShortcutAction] where S.Element == HotKeyShortcutAction {
+        actions.sorted { lhs, rhs in
+            let left = builtIn.firstIndex(of: lhs), right = builtIn.firstIndex(of: rhs)
+            switch (left, right) {
+            case let (left?, right?): return left < right
+            case (_?, nil): return true
+            case (nil, _?): return false
+            case (nil, nil): return lhs.id < rhs.id
+            }
         }
     }
 }

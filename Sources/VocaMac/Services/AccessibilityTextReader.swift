@@ -90,7 +90,7 @@ enum AccessibilityTextReader {
         case empty
         case secure
         /// Selected text in content that can't be edited, such as a web page.
-        case readOnly
+        case readOnly(element: AXElementBox, processID: pid_t, text: String, range: CFRange?)
         /// No focused text element, or one that doesn't expose its selection.
         case unavailable
     }
@@ -136,7 +136,9 @@ enum AccessibilityTextReader {
             let text = copyString(element, kAXSelectedTextAttribute)
             let range = selectedTextRange(of: element)
             if let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                guard isEditable(element, role: role) else { return .readOnly }
+                guard isEditable(element, role: role) else {
+                    return .readOnly(element: AXElementBox(element: element), processID: owner, text: text, range: range)
+                }
                 return .selected(element: AXElementBox(element: element), processID: owner, text: text, range: range)
             }
             // The element answered and has no selection. Keep looking — the
@@ -145,6 +147,44 @@ enum AccessibilityTextReader {
             if text != nil || range?.length == 0 { sawEmptySelection = true }
         }
         return sawEmptySelection ? .empty : .unavailable
+    }
+
+    /// Select `expected` where it sits at `location` in the focused text
+    /// element, so an edit just made can be edited again. Does nothing unless
+    /// the field holds exactly that text there: a range alone could select
+    /// whatever has been typed since.
+    static func selectText(_ expected: String, at location: Int, frontmostPID: pid_t) -> Bool {
+        guard AXIsProcessTrusted(), location >= 0, !expected.isEmpty else { return false }
+        let ownPID = ProcessInfo.processInfo.processIdentifier
+        var candidates: [AXUIElement] = []
+        let systemWide = AXUIElementCreateSystemWide()
+        AXUIElementSetMessagingTimeout(systemWide, selectionTimeout)
+        if let focused = copyElement(systemWide, kAXFocusedUIElementAttribute) {
+            var owner: pid_t = 0
+            if AXUIElementGetPid(focused, &owner) == .success, owner != ownPID { candidates.append(focused) }
+        }
+        if frontmostPID != ownPID, let focused = focusedTextElement(processID: frontmostPID),
+           !candidates.contains(where: { CFEqual($0, focused) }) {
+            candidates.append(focused)
+        }
+        let length = expected.utf16.count
+        for element in candidates {
+            AXUIElementSetMessagingTimeout(element, selectionTimeout)
+            let role = copyString(element, kAXRoleAttribute) ?? ""
+            let subrole = copyString(element, kAXSubroleAttribute) ?? ""
+            guard role != "AXSecureTextField", subrole != (kAXSecureTextFieldSubrole as String),
+                  let value = value(of: element) else { continue }
+            let text = value as NSString
+            guard location + length <= text.length,
+                  text.substring(with: NSRange(location: location, length: length)) == expected else { continue }
+            var range = CFRange(location: location, length: length)
+            guard let axRange = AXValueCreate(.cfRange, &range),
+                  AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, axRange) == .success else {
+                continue
+            }
+            return true
+        }
+        return false
     }
 
     /// Text roles are editable when focused; other roles (web areas, static

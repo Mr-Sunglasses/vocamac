@@ -95,6 +95,8 @@ final class TranscriptCleanupService: ObservableObject, TranscriptCleaning {
     /// explicitly waiting for them, so they get a longer ceiling. Escape still
     /// stops one early through `cancelTransform`.
     private static let transformTimeoutSeconds: TimeInterval = 60
+    /// Ceiling for an edit that runs in several parts.
+    private static let maximumTransformTimeoutSeconds: TimeInterval = 240
 
     /// Set while a Command Mode transform owns the model, so a cancel only
     /// stops that generation and never a dictation's cleanup.
@@ -106,6 +108,24 @@ final class TranscriptCleanupService: ObservableObject, TranscriptCleaning {
     /// How long a straggler from a previous deadline gets to finish before
     /// this utterance gives up on cleanup entirely.
     private static let drainSeconds: TimeInterval = 3
+
+    /// Routes the model's streamed text to whichever pass is running.
+    private let generationWatch = GenerationWatch()
+
+    /// The system prompt the model read last, so `prime` knows when its
+    /// tokens are already in place. llama.cpp keeps the tokens of the previous
+    /// request and only reads what differs, and the prompt comes first.
+    private var cachedPrompt: String?
+    /// A prompt being read ahead of the text. A pass that arrives meanwhile
+    /// waits for it: it would have had to read the same prompt itself.
+    private var primeTask: Task<Void, Never>?
+    private static let primeTimeoutSeconds: TimeInterval = 30
+    /// Stands in for the dictation while the prompt is read ahead.
+    private static let primingInput = "Okay."
+
+    /// The model whose last load was refused for memory, so a smaller one can
+    /// stand in until it fits.
+    private var refusedForMemory: CleanupModelKind?
 
     init(modelsDirectory: URL? = nil) {
         if let modelsDirectory {
@@ -152,9 +172,54 @@ final class TranscriptCleanupService: ObservableObject, TranscriptCleaning {
     }
 
     func transform(_ text: String, prompt: String) async -> CleanupAttempt {
+        await transform(text, prompt: prompt, options: TransformOptions())
+    }
+
+    func transform(_ text: String, prompt: String, options: TransformOptions) async -> CleanupAttempt {
         transformInProgress = true
         defer { transformInProgress = false }
-        return await attemptClean(text, prompt: prompt, recordingFailures: false, allowsTransform: true)
+        return await attemptClean(
+            text, prompt: prompt, recordingFailures: false, allowsTransform: true, transform: options
+        )
+    }
+
+    func prime(prompt: String) async {
+        let activePrompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? TranscriptCleanup.defaultPrompt
+            : prompt
+        guard let llm = activeLLM, !attemptInProgress, primeTask == nil,
+              pendingGeneration == nil, cachedPrompt != activePrompt else { return }
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.primeTask = nil }
+            let started = Date()
+            // Stops at the first word: by then the prompt has been read,
+            // which is all this is for.
+            let monitor = GenerationMonitor(characterLimit: 0, stop: { [core = llm.core] in core.interrupt() })
+            do {
+                _ = try await self.runInference(
+                    llm: llm, prompt: activePrompt,
+                    input: TranscriptCleanup.formatInput(Self.primingInput),
+                    timeout: Self.primeTimeoutSeconds, monitor: monitor
+                )
+                let seconds = String(format: "%.2f", Date().timeIntervalSince(started))
+                VocaLogger.info(.transcriptCleanup, "Read the cleanup prompt ahead in \(seconds)s")
+            } catch {
+                self.cachedPrompt = nil
+                VocaLogger.warning(.transcriptCleanup, "Reading the cleanup prompt ahead did not finish")
+            }
+        }
+        primeTask = task
+        await task.value
+    }
+
+    func memoryFallback(for kind: CleanupModelKind) -> CleanupModelKind? {
+        guard refusedForMemory == kind else { return nil }
+        let resident = activeLLM == nil || pendingGeneration != nil ? nil : activeKind
+        return CleanupModelKind.cleanupChoices
+            .filter { $0.descriptor.ramRequiredGB < kind.descriptor.ramRequiredGB && isDownloaded($0) }
+            .sorted { $0.descriptor.ramRequiredGB > $1.descriptor.ramRequiredGB }
+            .first { resident == $0 || modelFitsInMemory($0.descriptor, Self.freeingGB(resident: resident, incoming: $0)) }
     }
 
     func cancelTransform() {
@@ -176,7 +241,45 @@ final class TranscriptCleanupService: ObservableObject, TranscriptCleaning {
         prompt: String,
         recordingFailures: Bool,
         allowsTransform: Bool,
-        honoursGiveUp: Bool = false
+        honoursGiveUp: Bool = false,
+        transform: TransformOptions = TransformOptions()
+    ) async -> CleanupAttempt {
+        // The prompt being read ahead is the one this pass needs, or is
+        // replaced by it; either way the model is busy until it is done.
+        if let priming = primeTask { await priming.value }
+        let attempt = await performAttempt(
+            text, prompt: prompt, recordingFailures: recordingFailures,
+            allowsTransform: allowsTransform, honoursGiveUp: honoursGiveUp, transform: transform
+        )
+        Self.log(attempt, input: text, model: activeKind, isTransform: allowsTransform)
+        return attempt
+    }
+
+    /// One line per pass, with how long it took. Without it a slow dictation
+    /// can't be told apart from a slow model.
+    private static func log(_ attempt: CleanupAttempt, input: String, model: CleanupModelKind?, isTransform: Bool) {
+        let label = isTransform ? "Command Mode edit" : "Cleanup pass"
+        let name = model?.descriptor.displayName ?? "no model"
+        let seconds = String(format: "%.2f", attempt.duration)
+        switch attempt.outcome {
+        case .cleaned:
+            VocaLogger.info(.transcriptCleanup, "\(label): changed \(input.count) → \(attempt.output.count) characters in \(seconds)s (\(name))")
+        case .unchanged:
+            VocaLogger.info(.transcriptCleanup, "\(label): unchanged, \(input.count) characters in \(seconds)s (\(name))")
+        case .rejected(let reason):
+            VocaLogger.warning(.transcriptCleanup, "\(label): rejected after \(seconds)s — \(reason) (\(name))")
+        case .skipped(let reason):
+            VocaLogger.info(.transcriptCleanup, "\(label): skipped — \(reason)")
+        }
+    }
+
+    private func performAttempt(
+        _ text: String,
+        prompt: String,
+        recordingFailures: Bool,
+        allowsTransform: Bool,
+        honoursGiveUp: Bool,
+        transform: TransformOptions
     ) async -> CleanupAttempt {
         let started = Date()
         func result(_ output: String, _ outcome: CleanupAttempt.Outcome) -> CleanupAttempt {
@@ -195,7 +298,6 @@ final class TranscriptCleanupService: ObservableObject, TranscriptCleaning {
         }
 
         guard let llm = activeLLM else {
-            VocaLogger.info(.transcriptCleanup, "Cleanup skipped — model not ready")
             return result(text, .skipped("no cleanup model is loaded"))
         }
 
@@ -214,7 +316,7 @@ final class TranscriptCleanupService: ObservableObject, TranscriptCleaning {
         // the raw text rather than waiting for llama.cpp to wind down. It
         // scales with the model, so a Command Mode model doing cleanup is not
         // cut off on every long dictation.
-        let timeout = allowsTransform
+        var timeout = allowsTransform
             ? Self.transformTimeoutSeconds
             : TranscriptCleanup.cleanupDeadline(
                 promptCharacters: activePrompt.count, inputCharacters: formatted.count,
@@ -232,11 +334,17 @@ final class TranscriptCleanupService: ObservableObject, TranscriptCleaning {
             let promptTokens = await llm.encode(activePrompt).count
             let chunks = await CleanupContext.chunks(
                 trimmed, contextTokens: context, promptTokens: promptTokens,
-                allowsSplitting: !allowsTransform,
+                allowsSplitting: !allowsTransform || transform.allowsSplitting,
                 countTokens: { await llm.encode(TranscriptCleanup.formatInput($0)).count }
             )
             guard let chunks else {
-                return result(text, .skipped("a sentence or prompt exceeds the model context"))
+                return result(text, .skipped(allowsTransform
+                    ? "the selection is too long for \(activeKind?.descriptor.displayName ?? "the model") — select less text"
+                    : "a sentence or prompt exceeds the model context"))
+            }
+            // An edit run part by part is as many answers to wait for.
+            if allowsTransform {
+                timeout = min(Self.maximumTransformTimeoutSeconds, timeout * Double(chunks.count))
             }
             var outputs: [String] = []
             for chunk in chunks {
@@ -245,13 +353,44 @@ final class TranscriptCleanupService: ObservableObject, TranscriptCleaning {
                 }
                 let remaining = timeout - Date().timeIntervalSince(started)
                 guard remaining > 0 else { throw CleanupInferenceError.deadlineExceeded }
+                let chunkInput = chunk.trimmingCharacters(in: .whitespacesAndNewlines)
+                let written = outputs.joined()
+                let monitor = GenerationMonitor(
+                    characterLimit: allowsTransform
+                        ? TranscriptCleanup.maximumTransformLength(original: chunkInput)
+                        : TranscriptCleanup.maximumCleanupLength(original: chunkInput),
+                    // Words the speaker said themselves are not a refusal:
+                    // "So I can't make it" cleans up to "I can't make it."
+                    refusalPrefixes: TranscriptCleanup.refusalPrefixes(allowsTransform: allowsTransform)
+                        .filter { !TranscriptCleanup.normalizedForRefusal(chunkInput).contains($0) },
+                    onPartial: transform.onPartial.map { onPartial in
+                        { partial in onPartial(written + TranscriptCleanup.sanitize(partial)) }
+                    },
+                    stop: { [core = llm.core] in core.interrupt() }
+                )
                 let answer = try await runInference(
                     llm: llm, prompt: activePrompt,
-                    input: TranscriptCleanup.formatInput(chunk.trimmingCharacters(in: .whitespacesAndNewlines)),
-                    timeout: remaining
+                    input: TranscriptCleanup.formatInput(chunkInput),
+                    timeout: remaining, monitor: monitor
                 )
-                if chunks.count == 1 { outputs.append(answer) }
-                else {
+                switch monitor.stopReason {
+                case .runaway:
+                    throw CleanupInferenceError.runaway
+                case .refusal:
+                    throw CleanupInferenceError.refused
+                case .primed, .none:
+                    break
+                }
+                if chunks.count == 1 {
+                    outputs.append(answer)
+                } else if allowsTransform {
+                    // An edit that skipped a part would leave it silently
+                    // untouched in the middle of the result.
+                    guard let accepted = TranscriptCleanup.acceptedTransformOutput(answer, original: chunk) else {
+                        return result(text, .rejected("part of the selection could not be edited"))
+                    }
+                    outputs.append(TranscriptCleanup.preservingOuterWhitespace(of: chunk, in: accepted))
+                } else {
                     // A bad chunk must not consume its neighbours. Keep its
                     // original text and preserve exact paragraph separators.
                     let accepted = TranscriptCleanup.acceptedOutput(answer, original: chunk) ?? chunk
@@ -268,7 +407,6 @@ final class TranscriptCleanupService: ObservableObject, TranscriptCleaning {
                 : TranscriptCleanup.acceptedOutput(raw, original: trimmed)
             if let accepted {
                 if recordingFailures { consecutiveFailures = 0 }
-                VocaLogger.info(.transcriptCleanup, "Cleanup produced \(accepted.count) characters")
                 return result(accepted, accepted == trimmed ? .unchanged : .cleaned)
             }
             let why = raw.isEmpty || raw == "..." ? "the model returned nothing" : "the rewrite failed the safety check"
@@ -286,6 +424,21 @@ final class TranscriptCleanupService: ObservableObject, TranscriptCleaning {
                 recordFailure(reason: "did not answer within \(limit)s")
             }
             return result(text, .rejected("the model ran past its \(limit)s deadline"))
+        } catch CleanupInferenceError.runaway {
+            // Stopped as soon as it was clear, instead of at the deadline.
+            if recordingFailures {
+                recordFailure(reason: "wrote far more than it was given")
+            }
+            return result(text, .rejected(allowsTransform
+                ? "the model kept writing past any reasonable length"
+                : "the model wrote far more than was dictated"))
+        } catch CleanupInferenceError.refused {
+            if recordingFailures {
+                recordFailure(reason: "answered instead of editing")
+            }
+            return result(text, .rejected(allowsTransform
+                ? "the model declined the edit"
+                : "the model answered instead of cleaning up"))
         } catch CleanupInferenceError.modelBusy {
             VocaLogger.warning(.transcriptCleanup, "Previous cleanup still winding down — using raw transcript")
             return result(text, .skipped("the previous cleanup is still finishing"))
@@ -530,14 +683,17 @@ final class TranscriptCleanupService: ObservableObject, TranscriptCleaning {
             let message = "Not enough free memory to load \(descriptor.displayName) "
                 + "(~\(needed) GB needed). Free RAM or choose a smaller cleanup model."
             modelState = .error(message)
+            refusedForMemory = kind
             VocaLogger.error(.transcriptCleanup, message)
             return
         }
+        if refusedForMemory == kind { refusedForMemory = nil }
 
         modelState = .loading(kind: kind)
         consecutiveFailures = 0
         activeLLM = nil
         activeKind = nil
+        cachedPrompt = nil
 
         loadGeneration &+= 1
         let generation = loadGeneration
@@ -579,6 +735,7 @@ final class TranscriptCleanupService: ObservableObject, TranscriptCleaning {
         activeLLM?.stop()
         activeLLM = nil
         activeKind = nil
+        cachedPrompt = nil
         // The straggler belongs to the model just dropped; leaving the handle
         // around makes the next generation wait on — and stop() — a model it
         // has nothing to do with.
@@ -631,7 +788,9 @@ final class TranscriptCleanupService: ObservableObject, TranscriptCleaning {
         // The library's defaults print every token to stdout; the cleanup path
         // reads `output` once and streams nothing to the UI.
         loaded.postprocess = { (_: String) in }
-        loaded.update = { (_: String?) in }
+        // Each piece of the answer as it is written, for the pass that is
+        // running: to stop one that has gone wrong, or to show an edit live.
+        loaded.update = { [generationWatch] (delta: String?) in generationWatch.receive(delta) }
         loaded.updateThinking = { (_: String?) in }
         loaded.historyLimit = 0
         activeLLM = loaded
@@ -656,10 +815,13 @@ final class TranscriptCleanupService: ObservableObject, TranscriptCleaning {
     }
 
     private func runInference(
-        llm: LLM, prompt: String, input: String, timeout: TimeInterval
+        llm: LLM, prompt: String, input: String, timeout: TimeInterval, monitor: GenerationMonitor
     ) async throws -> String {
         try await drainPendingGeneration(llm: llm)
 
+        cachedPrompt = prompt
+        generationWatch.follow(monitor)
+        defer { generationWatch.follow(nil) }
         let box = LLMBox(llm)
         // Detached: `respond` runs the llama.cpp loop, and a Task inherited
         // from this main-actor method would run it on the main thread.
@@ -727,6 +889,128 @@ enum CleanupInferenceError: Error {
     case deadlineExceeded
     /// A generation from an earlier deadline has not finished yet.
     case modelBusy
+    /// The answer grew past any length a real one could have.
+    case runaway
+    /// The answer opened like a chatbot's refusal or reply.
+    case refused
+}
+
+/// Follows one generation as its text streams out of the model.
+///
+/// A cleanup model that starts answering the dictation, or never stops
+/// writing, used to run until its deadline — twelve seconds at least — before
+/// the raw transcript was pasted. Both show in the first words or the length,
+/// so the pass is stopped as soon as either is clear. Also carries the text
+/// so far to a live preview.
+final class GenerationMonitor: @unchecked Sendable {
+    enum StopReason: Equatable {
+        /// Asked to stop at the first word: the prompt was only being read ahead.
+        case primed
+        case runaway
+        case refusal
+    }
+
+    /// Least time between two previews, so a fast model doesn't queue one
+    /// main-actor hop per token.
+    static let previewInterval: TimeInterval = 0.08
+
+    private let lock = NSLock()
+    private var text = ""
+    private var count = 0
+    private var reason: StopReason?
+    private var refusalChecked = false
+    private var lastPreview: TimeInterval = 0
+    private let characterLimit: Int
+    private let refusalPrefixes: [String]
+    /// Characters of an answer that settle whether it opens with a refusal.
+    private let refusalWindow: Int
+    private let onPartial: (@MainActor @Sendable (String) -> Void)?
+    private let stop: @Sendable () -> Void
+
+    /// - Parameters:
+    ///   - characterLimit: Longest answer worth waiting for; 0 stops at the
+    ///     first text.
+    ///   - refusalPrefixes: Lowercased openings that mean the model answered
+    ///     instead of editing.
+    init(
+        characterLimit: Int,
+        refusalPrefixes: [String] = [],
+        onPartial: (@MainActor @Sendable (String) -> Void)? = nil,
+        stop: @escaping @Sendable () -> Void
+    ) {
+        self.characterLimit = characterLimit
+        self.refusalPrefixes = refusalPrefixes
+        self.refusalWindow = refusalPrefixes.map(\.count).max() ?? 0
+        self.onPartial = onPartial
+        self.stop = stop
+    }
+
+    var stopReason: StopReason? {
+        lock.lock()
+        defer { lock.unlock() }
+        return reason
+    }
+
+    func receive(_ delta: String?) {
+        guard let delta, !delta.isEmpty else { return }
+        lock.lock()
+        guard reason == nil else {
+            lock.unlock()
+            return
+        }
+        text += delta
+        count += delta.count
+        // Reasoning a model writes before its answer is stripped later and
+        // says nothing about the answer's length.
+        let isThinking = text.drop(while: \.isWhitespace).hasPrefix("<think")
+        if characterLimit == 0 {
+            reason = .primed
+        } else if !isThinking, count > characterLimit {
+            reason = .runaway
+        } else if !refusalChecked, !isThinking, !refusalPrefixes.isEmpty {
+            let opening = TranscriptCleanup.normalizedForRefusal(text)
+            if opening.count >= refusalWindow {
+                refusalChecked = true
+                if refusalPrefixes.contains(where: { opening.hasPrefix($0) }) { reason = .refusal }
+            }
+        }
+        let stopping = reason != nil
+        var preview: String?
+        if !stopping, onPartial != nil {
+            let now = ProcessInfo.processInfo.systemUptime
+            if now - lastPreview >= Self.previewInterval {
+                lastPreview = now
+                preview = text
+            }
+        }
+        lock.unlock()
+
+        if stopping {
+            stop()
+        } else if let preview, let onPartial {
+            Task { @MainActor in onPartial(preview) }
+        }
+    }
+}
+
+/// The monitor for whichever generation is running, set from the main actor
+/// and read from the thread the model streams on.
+final class GenerationWatch: @unchecked Sendable {
+    private let lock = NSLock()
+    private var monitor: GenerationMonitor?
+
+    func follow(_ monitor: GenerationMonitor?) {
+        lock.lock()
+        self.monitor = monitor
+        lock.unlock()
+    }
+
+    func receive(_ delta: String?) {
+        lock.lock()
+        let current = monitor
+        lock.unlock()
+        current?.receive(delta)
+    }
 }
 
 /// A continuation only the first caller can resume. Guards the continuation

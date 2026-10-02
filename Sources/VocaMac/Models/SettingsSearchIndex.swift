@@ -225,6 +225,34 @@ enum SettingsSearchIndex {
             keywords: ["command", "clipboard", "copy", "terminal", "editor", "selection", "vs code"]
         ),
         SettingsSearchEntry(
+            id: "command-mode-saved",
+            page: .cleanup,
+            title: "Saved Commands",
+            subtitle: "Command Mode instructions with a name and a shortcut",
+            keywords: ["command", "saved", "preset", "shortcut", "hotkey", "quick", "fix grammar", "instruction"]
+        ),
+        SettingsSearchEntry(
+            id: "command-mode-review",
+            page: .cleanup,
+            title: "Review Edits Before Replacing",
+            subtitle: "See what Command Mode changed and approve it",
+            keywords: ["command", "review", "diff", "preview", "approve", "confirm", "replace"]
+        ),
+        SettingsSearchEntry(
+            id: "command-mode-actions",
+            page: .cleanup,
+            title: "Voice Actions",
+            subtitle: "Open apps, search the web, add reminders, run Shortcuts",
+            keywords: ["command", "action", "open", "launch", "search", "reminder", "shortcuts", "automation", "run"]
+        ),
+        SettingsSearchEntry(
+            id: "cleanup-skip-clean",
+            page: .cleanup,
+            title: "Skip the Model When There's Nothing to Clean",
+            subtitle: "Type clean dictations without waiting for the cleanup model",
+            keywords: ["cleanup", "skip", "fast", "faster", "speed", "latency", "clean", "model"]
+        ),
+        SettingsSearchEntry(
             id: "command-mode-model",
             page: .cleanup,
             title: "Command Mode Model",

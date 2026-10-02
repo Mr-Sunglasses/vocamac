@@ -96,9 +96,18 @@ VocaMacApp (entry point)
     │     ├── CleanupSpeculator (cleans finished pieces before stop)
     │     ├── DictationOutputPipeline
     │     │     ├── SnippetExpander / RewriteProtectedText
-    │     │     ├── TranscriptCleanupService (one optional local inference)
+    │     │     ├── CleanupNeed (skips the model when the rules left it nothing to do)
+    │     │     ├── TranscriptCleanupService (one optional local inference;
+    │     │     │     reads its prompt ahead, stops a runaway answer early)
     │     │     ├── RewriteValidation (reject → deterministic fallback)
     │     │     └── WritingStyleEngine → SpokenSymbolTransformer
+    │     ├── Command Mode
+    │     │     ├── AccessibilitySelectedTextService (selection, cursor, re-select, undo)
+    │     │     ├── CommandInstruction / CommandExactEdit (intent; rule edits, no model)
+    │     │     ├── VoiceActionParser → VoiceActionPolicy → VoiceActionPerforming
+    │     │     ├── CommandModelRunner (prompt → answer → CommandOutputCheck → one retry)
+    │     │     │     └── TextTransforming (local slot, Apple Intelligence, or endpoint)
+    │     │     └── CommandReviewPanelController (diff to approve; answers)
     │     └── TextInjector
     │     └── SoundManager
     ├── MenuBarView
