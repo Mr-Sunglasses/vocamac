@@ -31,6 +31,14 @@ final class SettingsSearchIndexTests: XCTestCase {
         XCTAssertEqual(SettingsSearchIndex.firstMatchingPage(query: "qwen"), .cleanup)
     }
 
+    func testCommandModeHasItsOwnPage() {
+        for term in ["command", "saved commands", "voice actions", "same model"] {
+            XCTAssertEqual(SettingsSearchIndex.firstMatchingPage(query: term), .commandMode, term)
+        }
+        XCTAssertFalse(SettingsSearchIndex.entries.contains { $0.page == .cleanup && $0.id.hasPrefix("command-mode") })
+        XCTAssertEqual(SettingsSection.containing(.commandMode), .writing)
+    }
+
     func testEndpointQueryFindsCustomEndpointOnSpeechModel() {
         for term in ["endpoint", "remote", "server"] {
             let matches = SettingsSearchIndex.matches(query: term)
@@ -42,10 +50,17 @@ final class SettingsSearchIndexTests: XCTestCase {
         XCTAssertEqual(SettingsSearchIndex.firstMatchingPage(query: "whisper.cpp"), .speechModel)
     }
 
-    func testTrailingQueryHitsDictation() {
+    func testTrailingQueryHitsFormatting() {
         let matches = SettingsSearchIndex.matches(query: "trailing")
-        XCTAssertTrue(matches.contains { $0.page == .dictation })
-        XCTAssertEqual(SettingsSearchIndex.firstMatchingPage(query: "trailing"), .dictation)
+        XCTAssertTrue(matches.contains { $0.page == .formatting })
+        XCTAssertEqual(SettingsSearchIndex.firstMatchingPage(query: "trailing"), .formatting)
+    }
+
+    func testLanguageAndTranslationHaveTheirOwnPage() {
+        XCTAssertEqual(SettingsSearchIndex.entries.first { $0.id == "language" }?.page, .language)
+        XCTAssertEqual(SettingsSearchIndex.firstMatchingPage(query: "translation"), .language)
+        XCTAssertEqual(SettingsSection.containing(.language), .dictation)
+        XCTAssertEqual(SettingsSection.containing(.formatting), .writing)
     }
 
     func testUnknownQueryIsEmpty() {

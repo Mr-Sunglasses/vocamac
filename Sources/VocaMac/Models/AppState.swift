@@ -183,7 +183,7 @@ enum CommandReviewMode: String, CaseIterable, Identifiable {
     }
 }
 
-/// What Settings → Cleanup → Try It shows.
+/// What Settings → Smart Cleanup → Try It shows.
 struct CleanupTryResult: Equatable {
     let input: String
     let text: String
@@ -761,6 +761,10 @@ final class AppState: ObservableObject {
 
     /// Settings page to show the next time the Settings window appears.
     @Published var requestedSettingsPage: SettingsPage?
+
+    /// A search the Speech Model page applies to its whole catalog when it
+    /// next appears, then clears.
+    @Published var requestedSpeechModelSearch: String?
 
     /// Failed dictation whose retry banner the user closed.
     @Published private(set) var dismissedRecoveryEntryID: UUID?
@@ -3879,15 +3883,26 @@ final class AppState: ObservableObject {
             return
         }
         // useAIModel clears the separate flag only once the model is in place.
-        let kind: CleanupModelKind
-        if selectedCleanupModelKind.supportsCommandMode {
-            kind = selectedCleanupModelKind
-        } else if case .local(let commandKind) = commandModeEngine {
-            kind = commandKind
-        } else {
-            kind = cleanupModelSuggestion.commandMode
-        }
-        await useAIModel(kind, for: .both)
+        await useAIModel(sharedAIModelCandidate, for: .both)
+    }
+
+    /// The model sharing would put to work: the cleanup model when it can
+    /// edit text, then the local Command Mode model, then the one suggested
+    /// for this Mac.
+    var sharedAIModelCandidate: CleanupModelKind {
+        if selectedCleanupModelKind.supportsCommandMode { return selectedCleanupModelKind }
+        if case .local(let commandKind) = commandModeEngine { return commandKind }
+        return cleanupModelSuggestion.commandMode
+    }
+
+    /// Whether to point out that one model can do both: cleanup is on, both
+    /// features run separate models on this Mac, and the person hasn't
+    /// already chosen to keep them apart.
+    var suggestsSharingAIModel: Bool {
+        guard transcriptCleanupEnabled, cleanupEndpoint.isLocal,
+              !sharesAIModel, !aiModelsKeptSeparate,
+              case .local = commandModeEngine else { return false }
+        return true
     }
 
     /// Run Command Mode with Apple Intelligence or the cleanup endpoint.
@@ -4170,6 +4185,22 @@ extension AppState {
         historyStore.applyRetention(historyRetention)
     }
 
+    /// The loaded speech model's name as the model list shows it. Engines
+    /// report an identifier ("openai_whisper-tiny"), which is for logs, not
+    /// for people.
+    var loadedModelDisplayName: String? {
+        if let model = currentModel { return model.size.displayName }
+        guard let name = whisperService.loadedModelName else { return nil }
+        let size = ModelSize(rawValue: name) ?? modelManager.modelSize(from: name)
+        return size?.displayName ?? name
+    }
+
+    /// Open Speech Model showing only models that translate.
+    func showModelsThatTranslate() {
+        requestedSpeechModelSearch = "translate"
+        requestSettingsPage(.speechModel)
+    }
+
     /// Open Settings on a specific page (e.g. History from the menu bar).
     func requestSettingsPage(_ page: SettingsPage) {
         requestedSettingsPage = page
@@ -4319,15 +4350,15 @@ extension AppState {
         case .appleIntelligence:
             guard !appleIntelligenceAvailable() else { return nil }
             return AppleIntelligenceTextService.availabilityProblem()
-                ?? "Apple Intelligence is unavailable. Choose another Command Mode model in Settings → Cleanup."
+                ?? "Apple Intelligence is unavailable. Choose another model in Settings → Command Mode."
         case .endpoint:
             if cleanupEndpoint.isLocal {
-                return "Command Mode is set to use the cleanup endpoint, but none is configured. Choose a model in Settings → Cleanup."
+                return "Command Mode is set to use the cleanup endpoint, but none is configured. Choose a model in Settings → Command Mode."
             }
             return cleanupEndpoint.validationProblem()
         case .local(let kind):
             guard transcriptCleanup.isDownloaded(kind) else {
-                return "Download \(kind.descriptor.displayName) in Settings → Cleanup → Command Mode first."
+                return "Download \(kind.descriptor.displayName) in Settings → Command Mode first."
             }
             return nil
         }

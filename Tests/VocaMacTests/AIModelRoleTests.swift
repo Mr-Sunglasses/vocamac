@@ -37,6 +37,23 @@ final class AIModelRoleTests: XCTestCase {
         XCTAssertTrue(state.sharesAIModel)
     }
 
+    func testSharingIsSuggestedUntilChosenOrDeclined() async {
+        let (state, _) = makeState()
+        XCTAssertFalse(state.suggestsSharingAIModel, "nothing to share while cleanup is off")
+
+        state.transcriptCleanupEnabled = true
+        XCTAssertTrue(state.suggestsSharingAIModel)
+        // The cleanup-only default can't edit, so the Command Mode model is offered.
+        XCTAssertEqual(state.sharedAIModelCandidate, .qwen25_1_5b_q4_k_m)
+
+        await state.setSharesAIModel(false)
+        XCTAssertFalse(state.suggestsSharingAIModel, "declining hides the suggestion")
+
+        await state.setSharesAIModel(true)
+        XCTAssertTrue(state.sharesAIModel)
+        XCTAssertFalse(state.suggestsSharingAIModel)
+    }
+
     func testWhileSharingEitherChoiceMovesBoth() async {
         let (state, _) = makeState()
         await state.setSharesAIModel(true)
@@ -159,5 +176,34 @@ final class AIModelRoleTests: XCTestCase {
         await state.useAIModel(.qwen25_1_5b_q4_k_m, for: .cleanup)
         XCTAssertEqual(state.selectedCleanupModelKind, .qwen25_1_5b_q4_k_m)
         XCTAssertEqual(cleanup.loadCallCount, 0)
+    }
+
+    func testLoadedModelShowsItsDisplayNameNotItsIdentifier() {
+        let (state, mocks) = AppState.makeTestState()
+        state.currentModel = nil
+        mocks.whisperService.loadedModelName = "openai_whisper-tiny"
+        XCTAssertEqual(state.loadedModelDisplayName, ModelSize.tiny.displayName)
+
+        mocks.whisperService.loadedModelName = ModelSize.allCases.last?.rawValue
+        XCTAssertEqual(state.loadedModelDisplayName, ModelSize.allCases.last?.displayName)
+
+        mocks.whisperService.loadedModelName = nil
+        XCTAssertNil(state.loadedModelDisplayName)
+    }
+
+    func testChoosingATranslatingModelOpensSpeechModelFiltered() {
+        let (state, _) = AppState.makeTestState()
+        state.showModelsThatTranslate()
+        XCTAssertEqual(state.requestedSettingsPage, .speechModel)
+        XCTAssertEqual(state.requestedSpeechModelSearch, "translate")
+        XCTAssertTrue(ModelSize.allCases.contains { $0.translatesToEnglish })
+    }
+
+    func testCommandModeProblemsPointToTheCommandModePage() {
+        let (state, cleanup) = makeState()
+        cleanup.downloadedKinds = []
+        let problem = state.commandModeProblem(for: .local(.qwen3_4b_instruct_2507_q4_k_m))
+        XCTAssertEqual(problem?.contains("Settings → Command Mode"), true)
+        XCTAssertEqual(problem?.contains("Cleanup"), false)
     }
 }
