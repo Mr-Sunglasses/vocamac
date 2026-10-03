@@ -186,6 +186,113 @@ final class DictationOutputPipelineTests: XCTestCase {
                        "use tsx use typescript")
     }
 
+    /// Slips from real dictations to a coding assistant in a terminal, which
+    /// a letter or a real-word fragment used to keep in.
+    func testLettersPrefixChainsAndRestartsGo() {
+        let known: Set<String> = [
+            "please", "see", "the", "next", "less", "clutter", "cluttery", "reclaim", "can", "you",
+            "a", "minimum", "extract", "extracted", "ex", "have", "build", "save", "backup", "it",
+            "make", "look", "shell", "option", "command", "plan", "users", "user", "more", "powerful",
+            "power", "and", "send", "file", "xcode", "use", "code", "release",
+        ]
+        let isKnownWord: (String) -> Bool = { $0.count == 1 || known.contains($0) }
+        let cases: [(String, String)] = [
+            ("Yes, please s see what we can do", "Yes, please see what we can do"),
+            ("prepare for the n next release", "prepare for the next release"),
+            ("can you please r reclaim some space", "can you please reclaim some space"),
+            ("there is a m minimum latency", "there is a minimum latency"),
+            ("see you have ex extract extracted the data", "see you have extracted the data"),
+            ("easy to understand and less clutter l less cluttery than now",
+             "easy to understand and less cluttery than now"),
+            ("make it less clutter less cluttery", "make it less cluttery"),
+            // Letters that name something stay.
+            ("pick option b build", "pick option b build"),
+            ("press command s save", "press command s save"),
+            ("use x xcode", "use x xcode"),
+            ("the c code", "the c code"),
+            ("I want a apple", "I want a apple"),
+            // A letter set off by punctuation, or capitalised, isn't a slip.
+            ("step b, build it", "step b, build it"),
+            ("ask S see", "ask S see"),
+            // Deliberate repeats and inflections stay.
+            ("more power more powerful", "more power more powerful"),
+            // Two things, not a restart: a repeated article, or a plural.
+            ("we need the work the workers finished", "we need the work the workers finished"),
+            ("fix this test this tests file", "fix this test this tests file"),
+            // Any form of the finished word is still a restart.
+            ("make it less clutter less cluttered", "make it less cluttered"),
+            ("ship big change big changes now", "ship big change big changes now"),
+        ]
+        for (input, expected) in cases {
+            XCTAssertEqual(WritingStyleEngine.removeCutOffWords(input, isKnownWord: isKnownWord).text, expected, input)
+        }
+        // Terminal: only when it reads as sentences, not a command.
+        XCTAssertEqual(
+            WritingStyleEngine.removeCutOffWords("can you please s see why the build failed", prose: false, isKnownWord: isKnownWord).text,
+            "can you please see why the build failed"
+        )
+        XCTAssertEqual(
+            WritingStyleEngine.removeCutOffWords("git commit s save --amend now please", prose: false, isKnownWord: isKnownWord).text,
+            "git commit s save --amend now please"
+        )
+        XCTAssertEqual(
+            WritingStyleEngine.removeCutOffWords("cp a s send ./file to the dir", prose: false, isKnownWord: isKnownWord).text,
+            "cp a s send ./file to the dir"
+        )
+        XCTAssertEqual(
+            WritingStyleEngine.removeCutOffWords("git push origin s staging release", prose: false, isKnownWord: isKnownWord).text,
+            "git push origin s staging release"
+        )
+        // A tool named anywhere may own any word, so nothing goes.
+        XCTAssertEqual(
+            WritingStyleEngine.removeCutOffWords("can you run git push origin s staging", prose: false, isKnownWord: isKnownWord).text,
+            "can you run git push origin s staging"
+        )
+        XCTAssertEqual(
+            WritingStyleEngine.removeCutOffWords("please git add the docs and s staging", prose: false, isKnownWord: isKnownWord).text,
+            "please git add the docs and s staging"
+        )
+        // Plain prose styles aren't commands.
+        XCTAssertEqual(WritingStyleEngine.removeCutOffWords("please s see why git failed", isKnownWord: isKnownWord).text,
+                       "please see why git failed")
+        // A chain needs sentences too, and never starts from a one-letter word.
+        XCTAssertEqual(
+            WritingStyleEngine.removeCutOffWords("please check you have ex extract extracted it", prose: false, isKnownWord: isKnownWord).text,
+            "please check you have extracted it"
+        )
+        XCTAssertEqual(
+            WritingStyleEngine.removeCutOffWords("ex extract extracted", prose: false, isKnownWord: isKnownWord).text,
+            "ex extract extracted"
+        )
+        XCTAssertEqual(
+            WritingStyleEngine.removeCutOffWords("cp a an animal", prose: false, isKnownWord: isKnownWord).text,
+            "cp a an animal"
+        )
+        XCTAssertEqual(WritingStyleEngine.removeCutOffWords("I saw a an animal", isKnownWord: isKnownWord).text,
+                       "I saw a an animal")
+    }
+
+    func testReadsAsProse() {
+        XCTAssertTrue(WritingStyleEngine.readsAsProse("Can you check why the CI job failed on iOS."))
+        XCTAssertTrue(WritingStyleEngine.readsAsProse("do an end-to-end audit, and \"fix\" what's broken"))
+        XCTAssertFalse(WritingStyleEngine.readsAsProse("git push origin main"))
+        XCTAssertFalse(WritingStyleEngine.readsAsProse("git push origin s staging release"))
+        XCTAssertFalse(WritingStyleEngine.readsAsProse("can you see why the git push failed"))
+        XCTAssertFalse(WritingStyleEngine.readsAsProse("pip install pip pipenv requests numpy"))
+        XCTAssertFalse(WritingStyleEngine.readsAsProse("please run ls -la in the src folder"))
+        XCTAssertFalse(WritingStyleEngine.readsAsProse("open the file at src/app and fix it"))
+        XCTAssertFalse(WritingStyleEngine.readsAsProse("set the value FOO=bar and then restart it"))
+        XCTAssertFalse(WritingStyleEngine.readsAsProse("rename config.json to settings and commit it"))
+    }
+
+    func testTerminalDictationLosesSlipsWithoutTheModel() async {
+        let result = await process(
+            "So maybe see where we can improve so that we can make it easy to understand and less clutter l less cluttery that we have now.",
+            cleaner: MockTranscriptCleanup(), format: .terminal, enabled: false
+        )
+        XCTAssertTrue(result.text.hasSuffix("easy to understand and less cluttery that we have now"), result.text)
+    }
+
     func testHesitationRemovalIsEnglishOnly() async {
         let german = await process("wir treffen uns um 5 Uhr", cleaner: MockTranscriptCleanup(), enabled: false, language: "de")
         XCTAssertTrue(german.text.contains(" um 5 Uhr"))

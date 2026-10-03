@@ -17,7 +17,7 @@ import Foundation
 /// - filler words set off by commas ("it was, like, huge", "you know,")
 /// - a sentence-opening "so," / "well," / "okay,"
 /// - an accidental repeat right next to the same word ("gone gone")
-/// - a cut-off start of the next word ("sn scan")
+/// - a cut-off start of the next word ("sn scan", "web website")
 /// - a restart the speaker abandoned ("I want to, I need to fix it")
 ///
 /// Everything else the model did — rewording, re-casing, insertions — is
@@ -35,6 +35,9 @@ enum CleanupSalvage {
         let target = tokens(in: candidate)
         guard !source.isEmpty, source.count * max(target.count, 1) <= 4_000_000 else { return [] }
         let kept = alignedSourceIndices(source.map(\.core), target.map(\.core))
+        // A real word counts as clipped ("web website") only in sentences: in
+        // "pip install pip pipenv" or "make web website" both are arguments.
+        let allowsClippedWords = WritingStyleEngine.readsAsProse(original)
 
         var deletions: [NSRange] = []
         var index = 0
@@ -42,7 +45,10 @@ enum CleanupSalvage {
             guard !kept.contains(index) else { index += 1; continue }
             var end = index
             while end + 1 < source.count, !kept.contains(end + 1) { end += 1 }
-            if let ranges = safeRanges(for: Array(index...end), in: source, kept: kept, isKnownWord: isKnownWord) {
+            if let ranges = safeRanges(
+                for: Array(index...end), in: source, kept: kept,
+                allowsClippedWords: allowsClippedWords, isKnownWord: isKnownWord
+            ) {
                 deletions.append(contentsOf: ranges)
             }
             index = end + 1
@@ -71,7 +77,8 @@ enum CleanupSalvage {
     /// first copy, so "the, the build" loses "the," rather than leaving
     /// "the, build".
     private static func safeRanges(
-        for run: [Int], in source: [Token], kept: Set<Int>, isKnownWord: (String) -> Bool
+        for run: [Int], in source: [Token], kept: Set<Int>, allowsClippedWords: Bool,
+        isKnownWord: (String) -> Bool
     ) -> [NSRange]? {
         // Hesitations can go wherever they sit, even beside an unsafe edit;
         // judge what is left.
@@ -116,12 +123,13 @@ enum CleanupSalvage {
                 }
             }
         }
-        // "sn scan": a cut-off start of the very next word, both plain
-        // letters. Never a lone letter here — in a command it is a flag,
-        // drive, or variable.
+        // "sn scan", "web website": a cut-off start of the very next word,
+        // both plain letters. Never a lone letter here — in a command it is
+        // a flag, drive, or variable.
         if run.count == 1, let next, next == first + 1,
            source[first].text.allSatisfy(\.isLetter), source[next].text.allSatisfy(\.isLetter),
-           EditMerge.isCutOffStart(source[first].core, of: source[next].core, allowsLetter: false, isKnownWord: isKnownWord) {
+           EditMerge.isCutOffStart(source[first].core, of: source[next].core, allowsLetter: false, isKnownWord: isKnownWord)
+            || (allowsClippedWords && EditMerge.isClippedWord(source[first].core, of: source[next].core)) {
             return wholeRun
         }
         // "I want to, I need to": an abandoned start, marked by a comma or
