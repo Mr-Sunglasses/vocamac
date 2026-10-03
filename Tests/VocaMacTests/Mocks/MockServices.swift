@@ -293,6 +293,9 @@ final class MockPermissionManager: ObservableObject, PermissionManaging {
     @Published var micPermission: PermissionStatus = .granted
     @Published var accessibilityPermission: PermissionStatus = .granted
     @Published var inputMonitoringPermission: PermissionStatus = .granted
+    @Published var mayNeedRelaunch = false
+    @Published var isAwaitingGrant = false
+    var returnsToOnboardingAfterGrant = false
     var onAllPermissionsGranted: (() -> Void)?
 
     var checkPermissionsCallCount = 0

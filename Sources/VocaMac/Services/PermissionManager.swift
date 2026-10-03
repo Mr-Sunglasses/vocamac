@@ -7,6 +7,7 @@
 import Foundation
 import AppKit
 import Combine
+import IOKit.hid
 
 /// Manages system permissions: microphone, accessibility, and input monitoring.
 ///
@@ -26,10 +27,28 @@ final class PermissionManager: ObservableObject {
     /// Input Monitoring permission status
     @Published var inputMonitoringPermission: PermissionStatus = .notDetermined
 
+    /// Permissions VocaMac asked for since launch.
+    @Published private(set) var requestedThisLaunch: Set<RelaunchablePermission> = []
+
+    /// Permissions asked for since launch that the user has since come back
+    /// to VocaMac from. Until they return, they may still be granting it, so
+    /// a relaunch would be premature advice.
+    @Published private(set) var returnedAfterRequest: Set<RelaunchablePermission> = []
+
+    /// Set while onboarding is open. Only then does an Accessibility grant
+    /// bring VocaMac forward: elsewhere the user is working in another app,
+    /// which dictation should type into.
+    var returnsToOnboardingAfterGrant = false
+
+    /// Every permission is granted, but the hotkey tap still couldn't be
+    /// created after polling for it.
+    @Published private(set) var hotKeyStuckAfterGrant = false
+
     // MARK: - Dependencies
 
     private let audioEngine: AudioRecording
     private let hotKeyManager: HotKeyMonitoring
+    private let defaults: UserDefaults
 
     // MARK: - Private
 
@@ -42,9 +61,26 @@ final class PermissionManager: ObservableObject {
 
     // MARK: - Initialization
 
-    init(audioEngine: AudioRecording, hotKeyManager: HotKeyMonitoring) {
+    /// Whether VocaMac is the active app, and how to make it so. Injected
+    /// for tests.
+    private let isAppActive: @MainActor () -> Bool
+    private let activateApp: @MainActor () -> Void
+
+    // `NSApp` is nil until SwiftUI creates the application, after AppState
+    // and its first permission check already exist; reading it unwrapped
+    // there crashed VocaMac at launch.
+    init(
+        audioEngine: AudioRecording,
+        hotKeyManager: HotKeyMonitoring,
+        defaults: UserDefaults = .standard,
+        isAppActive: @escaping @MainActor () -> Bool = { NSApp?.isActive ?? false },
+        activateApp: @escaping @MainActor () -> Void = { NSApp?.activate(ignoringOtherApps: true) }
+    ) {
         self.audioEngine = audioEngine
         self.hotKeyManager = hotKeyManager
+        self.defaults = defaults
+        self.isAppActive = isAppActive
+        self.activateApp = activateApp
         observePermissionChanges()
     }
 
@@ -67,8 +103,13 @@ final class PermissionManager: ObservableObject {
             forName: .hotKeyEventTapDisabled, object: nil, queue: .main, using: recheck
         ))
         observers.append(NotificationCenter.default.addObserver(
-            forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main, using: recheck
-        ))
+            forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.userReturned()
+                self?.recheckHotKeyHealth()
+            }
+        })
     }
 
     deinit {
@@ -92,6 +133,8 @@ final class PermissionManager: ObservableObject {
         restoreHotKeyIfPossible()
         if !allPermissionsGranted || !isHotKeyTapHealthy {
             startPermissionPolling()
+        } else {
+            hotKeyStuckAfterGrant = false
         }
     }
 
@@ -111,15 +154,172 @@ final class PermissionManager: ObservableObject {
         inputMonitoringPermission == .granted
     }
 
+    /// Whether quitting and reopening VocaMac may get a permission through:
+    /// one the user went to System Settings for is still off, or the hotkey
+    /// tap never came up after every permission was granted.
+    var mayNeedRelaunch: Bool {
+        Self.mayNeedRelaunch(
+            accessibility: accessibilityPermission,
+            inputMonitoring: inputMonitoringPermission,
+            returnedAfterRequest: returnedAfterRequest,
+            hotKeyStuckAfterGrant: hotKeyStuckAfterGrant
+        )
+    }
+
+    static func mayNeedRelaunch(
+        accessibility: PermissionStatus,
+        inputMonitoring: PermissionStatus,
+        returnedAfterRequest: Set<RelaunchablePermission>,
+        hotKeyStuckAfterGrant: Bool
+    ) -> Bool {
+        hotKeyStuckAfterGrant || isAwaitingGrant(
+            accessibility: accessibility,
+            inputMonitoring: inputMonitoring,
+            returnedAfterRequest: returnedAfterRequest
+        )
+    }
+
+    /// Whether a permission the user went off to grant and came back from
+    /// still reads as off.
+    var isAwaitingGrant: Bool {
+        Self.isAwaitingGrant(
+            accessibility: accessibilityPermission,
+            inputMonitoring: inputMonitoringPermission,
+            returnedAfterRequest: returnedAfterRequest
+        )
+    }
+
+    static func isAwaitingGrant(
+        accessibility: PermissionStatus,
+        inputMonitoring: PermissionStatus,
+        returnedAfterRequest: Set<RelaunchablePermission>
+    ) -> Bool {
+        returnedAfterRequest.contains { permission in
+            switch permission {
+            case .accessibility: return accessibility != .granted
+            case .inputMonitoring: return inputMonitoring != .granted
+            }
+        }
+    }
+
     /// Re-check all permission statuses from the system.
     func checkPermissions() {
         micPermission = audioEngine.checkPermissionStatus()
 
         let accessibilityGranted = hotKeyManager.checkAccessibilityPermission(prompt: false)
-        accessibilityPermission = accessibilityGranted ? .granted : .denied
+        let previousAccessibility = accessibilityPermission
+        accessibilityPermission = status(granted: accessibilityGranted, for: .accessibility)
+        if Self.shouldReturnAfterGrant(
+            old: previousAccessibility,
+            new: accessibilityPermission,
+            requestedThisLaunch: requestedThisLaunch.contains(.accessibility),
+            onboardingIsOpen: returnsToOnboardingAfterGrant,
+            isActive: isAppActive()
+        ) {
+            activateApp()
+        }
 
         let inputMonitoringGranted = checkInputMonitoringPermission()
-        inputMonitoringPermission = inputMonitoringGranted ? .granted : .denied
+        inputMonitoringPermission = status(granted: inputMonitoringGranted, for: .inputMonitoring)
+    }
+
+    /// macOS can't say whether it ever asked about Accessibility or Input
+    /// Monitoring, so VocaMac remembers whether it did. Until then a missing
+    /// permission is "not determined", not "denied": nobody refused anything.
+    static func status(granted: Bool, asked: Bool) -> PermissionStatus {
+        if granted { return .granted }
+        return asked ? .denied : .notDetermined
+    }
+
+    private func status(granted: Bool, for permission: RelaunchablePermission) -> PermissionStatus {
+        // Seen granted counts as asked, so a later revoke reads as denied.
+        if granted { defaults.set(true, forKey: permission.askedKey) }
+        let macOSRefused = permission == .inputMonitoring
+            && IOHIDCheckAccess(kIOHIDRequestTypeListenEvent) == kIOHIDAccessTypeDenied
+        return Self.status(
+            granted: granted,
+            asked: Self.hasAsked(for: permission, defaults: defaults, macOSRefused: macOSRefused)
+        )
+    }
+
+    /// Whether VocaMac asked for a permission: its own flag, or macOS
+    /// reporting a refusal. Only Input Monitoring has that report
+    /// (`IOHIDCheckAccess`), which also covers installs from before the
+    /// flags. Accessibility has none, so an unflagged one reads as not asked;
+    /// its Allow… still leads to System Settings.
+    static func hasAsked(
+        for permission: RelaunchablePermission,
+        defaults: UserDefaults,
+        macOSRefused: Bool = false
+    ) -> Bool {
+        defaults.bool(forKey: permission.askedKey) || macOSRefused
+    }
+
+    /// Bring onboarding forward once Accessibility comes on in System
+    /// Settings, so the user needn't find its window again. Not for Input
+    /// Monitoring:
+    /// macOS answers that grant with its own Quit & Reopen dialog, which
+    /// coming forward would cover.
+    static func shouldReturnAfterGrant(
+        old: PermissionStatus,
+        new: PermissionStatus,
+        requestedThisLaunch: Bool,
+        onboardingIsOpen: Bool,
+        isActive: Bool
+    ) -> Bool {
+        old != .granted && new == .granted && requestedThisLaunch && onboardingIsOpen && !isActive
+    }
+
+    private func noteRequested(_ permission: RelaunchablePermission) {
+        defaults.set(true, forKey: permission.askedKey)
+        requestedThisLaunch.insert(permission)
+    }
+
+    /// VocaMac became active again: anything asked for before this has had
+    /// its chance to be granted.
+    func userReturned() {
+        returnedAfterRequest.formUnion(requestedThisLaunch)
+    }
+
+    /// Clear every permission grant for VocaMac with `tccutil`. The
+    /// asked-for flags are forgotten only when macOS forgot the grants too,
+    /// or a refused permission would read as never asked.
+    ///
+    /// - Returns: whether the reset succeeded.
+    @discardableResult
+    static func resetAllPermissions(
+        defaults: UserDefaults = .standard,
+        runReset: () -> Bool = runTCCUtilReset
+    ) -> Bool {
+        guard runReset() else {
+            VocaLogger.error(.general, "tccutil reset failed; permissions are unchanged")
+            return false
+        }
+        VocaLogger.info(.general, "TCC permissions reset via tccutil")
+        forgetPermissionRequests(defaults: defaults)
+        return true
+    }
+
+    nonisolated private static func runTCCUtilReset() -> Bool {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/tccutil")
+        task.arguments = ["reset", "All", "com.vocamac.app"]
+        do {
+            try task.run()
+        } catch {
+            VocaLogger.error(.general, "Couldn't run tccutil: \(error.localizedDescription)")
+            return false
+        }
+        task.waitUntilExit()
+        return task.terminationReason == .exit && task.terminationStatus == 0
+    }
+
+    /// Mark every permission as not yet asked for, after `tccutil` reset
+    /// their grants.
+    static func forgetPermissionRequests(defaults: UserDefaults = .standard) {
+        for permission in [RelaunchablePermission.accessibility, .inputMonitoring] {
+            defaults.set(false, forKey: permission.askedKey)
+        }
     }
 
     /// Check Input Monitoring permission using multiple strategies since no
@@ -181,12 +381,38 @@ final class PermissionManager: ObservableObject {
 
     /// Prompt the user to grant Accessibility permission.
     func requestAccessibilityPermission() {
+        noteRequested(.accessibility)
         _ = HotKeyManager.checkAccessibilityPermission(prompt: true)
         startPermissionPolling()
     }
 
-    /// Trigger Input Monitoring permission dialog and open System Settings.
+    /// What asking for Input Monitoring does.
+    enum InputMonitoringRequest: Equatable {
+        /// macOS hasn't asked yet: show its own prompt, which adds VocaMac
+        /// to the list and offers to open System Settings.
+        case askMacOS
+        /// macOS asked before and won't again: open System Settings.
+        case openSettings
+    }
+
+    static func inputMonitoringRequest(for access: IOHIDAccessType) -> InputMonitoringRequest {
+        access == kIOHIDAccessTypeUnknown ? .askMacOS : .openSettings
+    }
+
+    /// Ask for Input Monitoring: macOS's prompt the first time, System
+    /// Settings after that. Doing both at once left two windows asking.
     func requestInputMonitoringPermission() {
+        noteRequested(.inputMonitoring)
+        defer { startPermissionPolling() }
+
+        if Self.inputMonitoringRequest(for: IOHIDCheckAccess(kIOHIDRequestTypeListenEvent)) == .askMacOS {
+            // Off the main thread in case macOS waits on the prompt.
+            Task.detached(priority: .userInitiated) {
+                _ = IOHIDRequestAccess(kIOHIDRequestTypeListenEvent)
+            }
+            return
+        }
+
         // Attempting to create an event tap triggers macOS to auto-add
         // the app to the Input Monitoring list in System Settings.
         let tap = CGEvent.tapCreate(
@@ -204,8 +430,6 @@ final class PermissionManager: ObservableObject {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent") {
             NSWorkspace.shared.open(url)
         }
-
-        startPermissionPolling()
     }
 
     // MARK: - Permission Polling
@@ -262,8 +486,10 @@ final class PermissionManager: ObservableObject {
                 case .keepPolling:
                     break
                 case .stop:
+                    self.hotKeyStuckAfterGrant = false
                     self.stopPermissionPolling()
                 case .giveUpOnHotKey:
+                    self.hotKeyStuckAfterGrant = true
                     VocaLogger.warning(.appState, "Hotkey tap still couldn't be created with every permission granted; waiting for the next activation or permission change")
                     self.stopPermissionPolling()
                 }
@@ -276,6 +502,22 @@ final class PermissionManager: ObservableObject {
         VocaLogger.debug(.appState, "Stopping permission polling — all permissions granted")
         permissionPollTimer?.invalidate()
         permissionPollTimer = nil
+    }
+}
+
+// MARK: - RelaunchablePermission
+
+/// The permissions macOS may apply only after VocaMac reopens.
+enum RelaunchablePermission: Hashable {
+    case accessibility
+    case inputMonitoring
+
+    /// Whether VocaMac has ever asked for it.
+    var askedKey: String {
+        switch self {
+        case .accessibility: return PreferenceKey.askedForAccessibility
+        case .inputMonitoring: return PreferenceKey.askedForInputMonitoring
+        }
     }
 }
 

@@ -342,6 +342,29 @@ final class AppState: ObservableObject {
     var micPermission: PermissionStatus { permissionManager.micPermission }
     var accessibilityPermission: PermissionStatus { permissionManager.accessibilityPermission }
     var inputMonitoringPermission: PermissionStatus { permissionManager.inputMonitoringPermission }
+    /// Quitting and reopening may get a permission through; see `PermissionManager.mayNeedRelaunch`.
+    var permissionsMayNeedRelaunch: Bool { permissionManager.mayNeedRelaunch }
+    /// A permission the user went to System Settings for is still off.
+    var permissionsAwaitingGrant: Bool { permissionManager.isAwaitingGrant }
+    /// Quit and reopen VocaMac; see `AppRelauncher`. `false` when the new
+    /// instance couldn't be started and this one keeps running.
+    @discardableResult
+    func relaunch() -> Bool { AppRelauncher.relaunch() }
+
+    /// Clear every permission grant for VocaMac, then quit so the next
+    /// launch asks again.
+    func resetAllPermissionsAndQuit() {
+        PermissionManager.resetAllPermissions()
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(500))
+            NSApplication.shared.terminate(nil)
+        }
+    }
+
+    /// Onboarding is open, so an Accessibility grant may bring it forward.
+    func setOnboardingOpen(_ isOpen: Bool) {
+        permissionManager.returnsToOnboardingAfterGrant = isOpen
+    }
 
     /// Detected system capabilities
     @Published var systemCapabilities: SystemCapabilities?
@@ -3618,7 +3641,20 @@ final class AppState: ObservableObject {
             hotKeyManager.resetKeyState()
         }
         hasCompletedOnboarding = true
+        UserDefaults.standard.removeObject(forKey: PreferenceKey.onboardingResumeStep)
         VocaLogger.info(.appState, "Onboarding completed")
+    }
+
+    /// Where onboarding opens. Unfinished onboarding reopens on the step it
+    /// was left on, so a Quit & Reopen for a permission (VocaMac's or
+    /// macOS's own) lands back there; "Run setup again" starts over.
+    var onboardingStartStep: OnboardingStep {
+        hasCompletedOnboarding ? .welcome : OnboardingStep.resumeStep()
+    }
+
+    /// Save the step onboarding is on, for `onboardingStartStep`.
+    func recordOnboardingStep(_ step: OnboardingStep) {
+        UserDefaults.standard.set(step.rawValue, forKey: PreferenceKey.onboardingResumeStep)
     }
 
     /// Repair completion state corrupted by the old manual "Set Up VocaMac"

@@ -2232,6 +2232,12 @@ struct PermissionsLogsTab: View {
                         .foregroundStyle(.secondary)
                 }
 
+                if appState.permissionsMayNeedRelaunch {
+                    Text("Turned a permission on, but it still shows as off? macOS can wait to apply it until VocaMac reopens. Use Restart VocaMac below.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
                 HStack {
                     Button("Re-check") {
                         appState.checkPermissions()
@@ -2326,35 +2332,13 @@ struct PermissionsLogsTab: View {
         alert.addButton(withTitle: "Reset & Quit")
         alert.addButton(withTitle: "Cancel")
 
-        let response = alert.runModal()
-        if response == .alertFirstButtonReturn {
-            // Run tccutil to reset all TCC permissions for this app
-            let task = Process()
-            task.executableURL = URL(fileURLWithPath: "/usr/bin/tccutil")
-            task.arguments = ["reset", "All", "com.vocamac.app"]
-            try? task.run()
-            task.waitUntilExit()
-
-            VocaLogger.info(.general, "TCC permissions reset via tccutil")
-
-            // Quit the app so permissions take effect on next launch
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                NSApplication.shared.terminate(nil)
-            }
+        if alert.runModal() == .alertFirstButtonReturn {
+            appState.resetAllPermissionsAndQuit()
         }
     }
 
     private func restartApp() {
-        let bundlePath = Bundle.main.bundlePath
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-        task.arguments = ["-n", bundlePath, "--args", "--restarted"]
-        try? task.run()
-
-        // Give the new instance a moment to start
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            NSApplication.shared.terminate(nil)
-        }
+        appState.relaunch()
     }
 
     // MARK: - Debug Log Actions
