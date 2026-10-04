@@ -6,22 +6,12 @@ import XCTest
 
 final class MenuBarIconStyleTests: XCTestCase {
 
-    func testIdleUsesTheTemplateWaveform() {
-        XCTAssertEqual(MenuBarIconStyle.style(for: .idle), .waveform)
+    func testIdleUsesSystemMic() {
+        XCTAssertEqual(MenuBarIconStyle.style(for: .idle), .systemSymbolTemplate(name: "mic.fill"))
     }
 
-    func testRecordingUsesTheLiveWaveform() {
-        XCTAssertEqual(MenuBarIconStyle.style(for: .recording), .waveformLive)
-    }
-
-    func testWaveformBarsFitTheirRectTallestInTheMiddle() {
-        let area = CGRect(x: 0, y: 0, width: 18, height: 12)
-        let bars = VocaWaveform.barRects(in: area)
-        XCTAssertEqual(bars.count, 5)
-        XCTAssertEqual(bars.first?.minX ?? -1, 0, accuracy: 0.001)
-        XCTAssertEqual(bars.last?.maxX ?? -1, 18, accuracy: 0.001)
-        XCTAssertEqual(bars[2].height, 12, accuracy: 0.001)
-        XCTAssertTrue(bars.allSatisfy { area.contains($0) })
+    func testRecordingUsesTintedMark() {
+        XCTAssertEqual(MenuBarIconStyle.style(for: .recording), .brandMarkTinted)
     }
 
     func testProcessingUsesSystemSymbol() {
@@ -41,7 +31,7 @@ final class MenuBarIconStyleTests: XCTestCase {
             .systemSymbol(name: "wand.and.stars")
         )
         // An error or idle state is not Command Mode's to show.
-        XCTAssertEqual(MenuBarIconStyle.style(for: .idle, isCommandMode: true), .waveform)
+        XCTAssertEqual(MenuBarIconStyle.style(for: .idle, isCommandMode: true), .systemSymbolTemplate(name: "mic.fill"))
     }
 
     func testErrorUsesSystemSymbol() {

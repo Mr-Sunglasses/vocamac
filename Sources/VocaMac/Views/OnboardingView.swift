@@ -200,7 +200,7 @@ struct OnboardingView: View {
     private var sceneText: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 8) {
-                VocaMarkView(size: 20)
+                BrandLogoView(size: 20)
                 Text("VocaMac")
                     .font(.system(size: 13, weight: .semibold))
                     .tracking(1)

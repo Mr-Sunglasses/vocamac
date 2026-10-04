@@ -20,7 +20,7 @@ enum BrandAssets {
         image(named: "voca-logo-512")
     }
 
-    /// Mic-only silhouette of the original logo.
+    /// Mic-only silhouette for the menu bar (tintable).
     static var mark: NSImage? {
         image(named: "voca-mark")
     }
@@ -31,11 +31,10 @@ enum BrandAssets {
 
 /// Which artwork the menu bar should show for a given app status.
 enum MenuBarIconStyle: Equatable {
-    /// The paper waveform as a template, so macOS follows the menu bar
-    /// appearance like its neighbours.
-    case waveform
-    /// The waveform in clay while the microphone is live.
-    case waveformLive
+    /// SF Symbol drawn as a template so macOS follows the menu bar appearance.
+    case systemSymbolTemplate(name: String)
+    /// The Voca mic mark tinted brand green while recording (mic hot).
+    case brandMarkTinted
     /// SF Symbol for processing, error and Command Mode.
     case systemSymbol(name: String)
 
@@ -47,9 +46,9 @@ enum MenuBarIconStyle: Equatable {
         }
         switch status {
         case .idle:
-            return .waveform
+            return .systemSymbolTemplate(name: "mic.fill")
         case .recording:
-            return .waveformLive
+            return .brandMarkTinted
         case .processing:
             return .systemSymbol(name: "ellipsis.circle")
         case .error:

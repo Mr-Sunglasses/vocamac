@@ -454,7 +454,7 @@ struct MenuBarView: View {
 
     private var headerRow: some View {
         HStack(spacing: 10) {
-            VocaMarkView(size: 32)
+            BrandLogoView(size: 32)
 
             VStack(alignment: .leading, spacing: 1) {
                 Text("VocaMac")
