@@ -149,7 +149,7 @@ struct SettingsView: View {
     private var settingsSidebar: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
-                VocaMarkView(size: 26)
+                BrandLogoView(size: 26)
                 Text("VocaMac").font(VocaDesign.display(20))
                 Spacer()
             }
