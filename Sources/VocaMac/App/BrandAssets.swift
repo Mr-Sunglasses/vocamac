@@ -58,21 +58,26 @@ enum MenuBarIconStyle: Equatable {
 }
 
 /// Renders the canonical Voca logo with a safe fallback for development builds.
+///
+/// Decorative: every use sits beside a visible "VocaMac" label, so the logo is
+/// hidden from VoiceOver rather than read out twice.
 struct BrandLogoView: View {
     let size: CGFloat
 
     var body: some View {
-        if let logo = BrandAssets.logo {
-            Image(nsImage: logo)
-                .resizable()
-                .scaledToFit()
-                .frame(width: size, height: size)
-        } else {
-            Image(systemName: "mic.circle.fill")
-                .font(.system(size: size))
-                .foregroundStyle(Color(nsColor: BrandAssets.brandGreen))
-                .frame(width: size, height: size)
+        Group {
+            if let logo = BrandAssets.logo {
+                Image(nsImage: logo)
+                    .resizable()
+                    .scaledToFit()
+            } else {
+                Image(systemName: "mic.circle.fill")
+                    .font(.system(size: size))
+                    .foregroundStyle(Color(nsColor: BrandAssets.brandGreen))
+            }
         }
+        .frame(width: size, height: size)
+        .accessibilityHidden(true)
     }
 }
 

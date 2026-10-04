@@ -379,7 +379,7 @@ This helps us pinpoint the exact code you're running if you report an issue.
 
 | Action | What Happens |
 |--------|-------------|
-| **Hold Right Option** | Recording starts (menu bar icon turns red) |
+| **Hold Right Option** | Recording starts (menu bar icon turns green) |
 | **Speak** | Audio is captured locally |
 | **Release Right Option** | Recording stops → transcription → text injected at cursor |
 
