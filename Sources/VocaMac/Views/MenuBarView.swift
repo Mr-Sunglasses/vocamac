@@ -974,6 +974,17 @@ struct MenuBarView: View {
             }
             .disabled(appState.lastDictationText == nil || appState.isRecording || appState.appStatus == .processing)
             menuRow("History", systemImage: "clock.arrow.circlepath", shortcut: nil) { openHistory() }
+            // The same switch as "Save dictation history" in Settings, one
+            // click away for a private moment.
+            menuRow(
+                appState.historyEnabled ? "Pause History" : "Resume History",
+                systemImage: appState.historyEnabled ? "pause.circle" : "play.circle",
+                shortcut: nil
+            ) {
+                // Said explicitly so this open menu redraws its own label.
+                appState.objectWillChange.send()
+                appState.historyEnabled.toggle()
+            }
             menuRow("Settings…", systemImage: "gearshape", shortcut: "⌘,", keyEquivalent: ",") {
                 settingsManager.open(appState: appState)
             }
