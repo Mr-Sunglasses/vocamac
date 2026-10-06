@@ -305,7 +305,13 @@ final class AppState: ObservableObject {
 
     /// The most recent transcription result
     @Published var lastTranscription: VocaTranscription?
-    @Published private(set) var liveTranscript: String = ""
+    /// Words recognised so far in a live recording. Lives in its own object,
+    /// like `audioMeter`, so partial results don't redraw every observer.
+    let liveTranscriptState = LiveTranscriptState()
+    private(set) var liveTranscript: String {
+        get { liveTranscriptState.text }
+        set { liveTranscriptState.update(newValue) }
+    }
     /// The most recent Command Mode edit, so its original can be copied back.
     /// Cleared by the next dictation.
     @Published private(set) var lastCommandEdit: CommandModeEdit?
@@ -3393,6 +3399,21 @@ final class AppState: ObservableObject {
     static let deliveryFailureMessageDuration: TimeInterval = 10
 
     /// Surface a short-lived error state for settings and menu UI.
+    /// A deep link that couldn't do what it was asked, shown like any other
+    /// passing error.
+    ///
+    /// Never over a dictation in progress: the error status would hide its
+    /// controls and disarm Escape while the microphone kept recording. Then
+    /// the message is logged and the Mac beeps.
+    func showDeepLinkError(_ message: String) {
+        VocaLogger.warning(.appState, message)
+        guard !isRecording, appStatus != .recording, appStatus != .processing else {
+            NSSound.beep()
+            return
+        }
+        showTemporaryError(message)
+    }
+
     private func showTemporaryError(_ message: String, duration: TimeInterval = 5.0) {
         errorMessage = message
         appStatus = .error
@@ -3623,6 +3644,13 @@ final class AppState: ObservableObject {
             VocaLogger.warning(.appState, "Hotkey listener failed to start. Check Accessibility & Input Monitoring permissions.")
         }
 
+        // The update check is a network round trip that needs nothing below.
+        // Start it now instead of after both models finish loading, which on
+        // a cold CoreML compile can take minutes.
+        let updateCheck = Task<Void, Never> { @MainActor [weak self] in
+            await self?.updateChecker.checkOnLaunchIfNeeded()
+        }
+
         // 4. Load the user's preferred model.
         let preparation = Task<Void, Never> { @MainActor [weak self] in
             await self?.prepareStartupModel()
@@ -3637,7 +3665,7 @@ final class AppState: ObservableObject {
             await syncTranscriptCleanup()
         }
 
-        await updateChecker.checkOnLaunchIfNeeded()
+        await updateCheck.value
 
         VocaLogger.info(.appState, "Startup complete!")
     }
