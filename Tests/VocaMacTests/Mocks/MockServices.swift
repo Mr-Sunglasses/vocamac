@@ -966,6 +966,7 @@ extension AppState {
         UserDefaults.standard.removeObject(forKey: PreferenceKey.transcriptCleanupPrompt)
         for key in [
             PreferenceKey.historyEnabled, PreferenceKey.historyKeepsAudio, PreferenceKey.historyRetention,
+            PreferenceKey.historyExcludedApps,
             PreferenceKey.escapeCancelsDictation, PreferenceKey.pasteLastShortcut, PreferenceKey.handsFreeShortcut,
             PreferenceKey.mouseTriggerButton, PreferenceKey.wordReplacements, PreferenceKey.dictionarySuggestions,
             PreferenceKey.dismissedDictionarySuggestions, PreferenceKey.learnCorrectionsMode,

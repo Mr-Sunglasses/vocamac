@@ -310,7 +310,13 @@ final class AppState: ObservableObject {
 
     /// The most recent transcription result
     @Published var lastTranscription: VocaTranscription?
-    @Published private(set) var liveTranscript: String = ""
+    /// Words recognised so far in a live recording. Lives in its own object,
+    /// like `audioMeter`, so partial results don't redraw every observer.
+    let liveTranscriptState = LiveTranscriptState()
+    private(set) var liveTranscript: String {
+        get { liveTranscriptState.text }
+        set { liveTranscriptState.update(newValue) }
+    }
     /// The most recent Command Mode edit, so its original can be copied back.
     /// Cleared by the next dictation.
     @Published private(set) var lastCommandEdit: CommandModeEdit?
@@ -503,6 +509,33 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// Apps whose dictations are never saved to History (password managers,
+    /// banking, health). Same entry type and matching as the auto-pause list.
+    var historyExcludedApps: [AutoPauseAppEntry] {
+        get { AppListCoding.decode(UserDefaults.standard.string(forKey: PreferenceKey.historyExcludedApps)) }
+        set {
+            UserDefaults.standard.set(AppListCoding.encode(newValue), forKey: PreferenceKey.historyExcludedApps)
+            objectWillChange.send()
+        }
+    }
+
+    func addHistoryExcludedApp(_ entry: AutoPauseAppEntry) {
+        var apps = historyExcludedApps
+        guard !apps.contains(where: { $0.id == entry.id }) else { return }
+        apps.append(entry)
+        historyExcludedApps = apps
+    }
+
+    func removeHistoryExcludedApp(_ entry: AutoPauseAppEntry) {
+        historyExcludedApps.removeAll { $0.id == entry.id }
+    }
+
+    /// Whether a dictation into `app` may be saved to History.
+    func historyRecords(_ app: RunningAppSnapshot?) -> Bool {
+        guard historyEnabled else { return false }
+        return !HistoryExclusion.isExcluded(app, by: historyExcludedApps)
+    }
+
     /// JSON-encoded `[AutoPauseAppEntry]` list (complex value not stored via `@AppStorage`).
     var autoPauseAppsJSON: String {
         get { UserDefaults.standard.string(forKey: PreferenceKey.autoPauseApps) ?? "[]" }
@@ -635,6 +668,10 @@ final class AppState: ObservableObject {
     @Published private(set) var activeWritingTargetName: String?
     @Published var nextWritingProfile: WritingProfile?
     @Published private(set) var lastOutput: DictationOutputResult?
+    /// The last dictation typed into an app kept out of History. History's
+    /// newest entry is older than it, so paste-last uses this instead. Kept
+    /// apart from `lastOutput`, which in-app tests and the scratchpad set too.
+    private(set) var lastUnsavedDictation: String?
     @Published private(set) var heldOutput: String?
 
     /// Explicit recovery only: never paste a delayed result into a changed app.
@@ -2679,6 +2716,22 @@ final class AppState: ObservableObject {
                     }
                 }
                 lastOutput = output
+                // The destination is read again at delivery: the user may have
+                // switched to an excluded app while this was transcribed.
+                var historyID = historyID
+                if injectResult {
+                    let destination = frontmostAppResolver.currentFrontmostApp()
+                        ?? frontmostAppResolver.lastActiveApp() ?? pendingTargetApp
+                    if let id = historyID, !historyRecords(destination) {
+                        historyStore.delete(id)
+                        historyID = nil
+                        activeHistoryEntryID = nil
+                        VocaLogger.info(.history, "Removed this dictation from History: \(destination?.displayName ?? "the app") is excluded")
+                    }
+                    // Paused History counts too: resuming it mustn't bring
+                    // back an older saved dictation for Paste Last.
+                    lastUnsavedDictation = historyID == nil ? output.text : nil
+                }
                 if let historyID {
                     historyStore.complete(
                         historyID, rawText: result.text, finalText: output.text, summary: output.summary,
@@ -3408,6 +3461,21 @@ final class AppState: ObservableObject {
     static let deliveryFailureMessageDuration: TimeInterval = 10
 
     /// Surface a short-lived error state for settings and menu UI.
+    /// A deep link that couldn't do what it was asked, shown like any other
+    /// passing error.
+    ///
+    /// Never over a dictation in progress: the error status would hide its
+    /// controls and disarm Escape while the microphone kept recording. Then
+    /// the message is logged and the Mac beeps.
+    func showDeepLinkError(_ message: String) {
+        VocaLogger.warning(.appState, message)
+        guard !isRecording, appStatus != .recording, appStatus != .processing else {
+            NSSound.beep()
+            return
+        }
+        showTemporaryError(message)
+    }
+
     private func showTemporaryError(_ message: String, duration: TimeInterval = 5.0) {
         errorMessage = message
         appStatus = .error
@@ -3638,6 +3706,13 @@ final class AppState: ObservableObject {
             VocaLogger.warning(.appState, "Hotkey listener failed to start. Check Accessibility & Input Monitoring permissions.")
         }
 
+        // The update check is a network round trip that needs nothing below.
+        // Start it now instead of after both models finish loading, which on
+        // a cold CoreML compile can take minutes.
+        let updateCheck = Task<Void, Never> { @MainActor [weak self] in
+            await self?.updateChecker.checkOnLaunchIfNeeded()
+        }
+
         // 4. Load the user's preferred model.
         let preparation = Task<Void, Never> { @MainActor [weak self] in
             await self?.prepareStartupModel()
@@ -3652,7 +3727,7 @@ final class AppState: ObservableObject {
             await syncTranscriptCleanup()
         }
 
-        await updateChecker.checkOnLaunchIfNeeded()
+        await updateCheck.value
 
         VocaLogger.info(.appState, "Startup complete!")
     }
@@ -4153,7 +4228,13 @@ extension AppState {
     /// Record a dictation in history before it is transcribed. Returns nil
     /// when history is off.
     fileprivate func beginHistoryEntry(audio: [Float]) async -> UUID? {
-        guard historyEnabled else { return nil }
+        let target = frontmostAppResolver.currentFrontmostApp() ?? pendingTargetApp
+        guard historyRecords(target) else {
+            if historyEnabled {
+                VocaLogger.info(.history, "Not saving this dictation: \(target?.displayName ?? "the app") is excluded from History")
+            }
+            return nil
+        }
         historyStore.applyRetention(historyRetention)
         let modelID = currentModel?.size.rawValue ?? selectedModelSize
         // Transcription starts as soon as the entry is journaled. The audio is
@@ -4161,7 +4242,7 @@ extension AppState {
         // but in parallel rather than first.
         return await historyStore.begin(
             audio: audio,
-            target: frontmostAppResolver.currentFrontmostApp() ?? pendingTargetApp,
+            target: target,
             modelID: modelID,
             language: selectedLanguage == "auto" ? nil : selectedLanguage,
             audioSeconds: Double(audio.count) / 16_000,
@@ -4231,6 +4312,7 @@ extension AppState {
                 return nil
             }
             lastOutput = output
+            lastUnsavedDictation = nil
             copyToClipboard(output.text)
             VocaLogger.info(.appState, "Retried dictation \(id) with \(result.modelUsed.displayName)")
             return output.text
@@ -4976,7 +5058,7 @@ extension AppState {
         instruction: String, original: String, replacement: String, summary: String,
         app: RunningAppSnapshot?, language: String?, audioSeconds: Double
     ) {
-        guard historyEnabled else { return }
+        guard historyRecords(app) else { return }
         // Same retention as dictations, applied now rather than at the next
         // dictation, so a run of edits can't outlive the setting.
         defer { historyStore.applyRetention(historyRetention) }
