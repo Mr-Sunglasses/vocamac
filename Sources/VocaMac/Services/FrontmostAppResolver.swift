@@ -29,7 +29,8 @@ final class FrontmostAppResolver: FrontmostAppResolving {
     /// Last non-VocaMac app to be activated. Written from the activation
     /// notification, which `NSWorkspace` delivers on the main thread.
     private var lastActive: RunningAppSnapshot?
-    private var observer: NSObjectProtocol?
+    /// nonisolated(unsafe): only `init` sets it and `deinit` reads it.
+    nonisolated(unsafe) private var observer: NSObjectProtocol?
 
     init() {
         lastActive = AppIdentityMatching.snapshot(for: NSWorkspace.shared.frontmostApplication)

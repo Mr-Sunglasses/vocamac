@@ -51,9 +51,9 @@ final class ProgressThrottle: @unchecked Sendable {
 
     /// Wrap a progress handler so only throttled values reach it.
     static func wrap(
-        _ handler: @escaping (Double) -> Void,
+        _ handler: @escaping @Sendable (Double) -> Void,
         throttle: ProgressThrottle = ProgressThrottle()
-    ) -> (Double) -> Void {
+    ) -> @Sendable (Double) -> Void {
         { progress in
             if throttle.shouldDeliver(progress) { handler(progress) }
         }
@@ -78,7 +78,7 @@ enum FileDownloaderError: LocalizedError {
 final class FileDownloader: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
 
     private let destination: URL
-    private let onProgress: (Double) -> Void
+    private let onProgress: @Sendable (Double) -> Void
     private let progressThrottle = ProgressThrottle()
     private var continuation: CheckedContinuation<Void, Error>?
     private var task: URLSessionDownloadTask?
@@ -88,7 +88,7 @@ final class FileDownloader: NSObject, URLSessionDownloadDelegate, @unchecked Sen
     /// arrive on the session queue, racing cancellation from the caller.
     private let stateLock = NSLock()
 
-    private init(destination: URL, onProgress: @escaping (Double) -> Void) {
+    private init(destination: URL, onProgress: @escaping @Sendable (Double) -> Void) {
         self.destination = destination
         self.onProgress = onProgress
     }
@@ -99,7 +99,7 @@ final class FileDownloader: NSObject, URLSessionDownloadDelegate, @unchecked Sen
     static func download(
         from url: URL,
         to destination: URL,
-        onProgress: @escaping (Double) -> Void = { _ in }
+        onProgress: @escaping @Sendable (Double) -> Void = { _ in }
     ) async throws {
         let downloader = FileDownloader(destination: destination, onProgress: onProgress)
         let session = URLSession(

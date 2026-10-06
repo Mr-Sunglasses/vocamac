@@ -383,13 +383,17 @@ struct VocaMacApp: App {
                 let returnTarget: NSRunningApplication?
                 if link.requiresExternalConfirmation {
                     returnTarget = NSWorkspace.shared.frontmostApplication
-                    let alert = NSAlert()
-                    alert.alertStyle = .warning
-                    alert.messageText = "Allow VocaMac action?"
-                    alert.informativeText = "Another app or website asked VocaMac to \(link.confirmationDescription). Continue only if you initiated this action."
-                    alert.addButton(withTitle: "Allow")
-                    alert.addButton(withTitle: "Cancel")
-                    guard alert.runModal() == .alertFirstButtonReturn else { return }
+                    // Registered on the main queue, so this is the main actor.
+                    let allowed = MainActor.assumeIsolated {
+                        let alert = NSAlert()
+                        alert.alertStyle = .warning
+                        alert.messageText = "Allow VocaMac action?"
+                        alert.informativeText = "Another app or website asked VocaMac to \(link.confirmationDescription). Continue only if you initiated this action."
+                        alert.addButton(withTitle: "Allow")
+                        alert.addButton(withTitle: "Cancel")
+                        return alert.runModal() == .alertFirstButtonReturn
+                    }
+                    guard allowed else { return }
                 } else {
                     returnTarget = nil
                 }
