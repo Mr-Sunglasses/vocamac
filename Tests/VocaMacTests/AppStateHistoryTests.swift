@@ -475,4 +475,27 @@ final class HistoryExclusionDeliveryTests: XCTestCase {
 
         XCTAssertEqual(appState.lastDictationText, delivered)
     }
+
+    func testDictationWhileHistoryIsPausedStaysTheOneToPaste() async {
+        let (appState, mocks) = AppState.makeTestState()
+        mocks.frontmostAppResolver.frontmostApp = notes
+        mocks.audioEngine.stopRecordingResult = speech
+        mocks.whisperService.mockTranscriptionResult = VocaTranscription(
+            text: "saved words", duration: 0.1, detectedLanguage: "en", audioLengthSeconds: 0.5, modelUsed: .tiny
+        )
+        await appState.startRecording()
+        await appState.stopRecordingAndTranscribe()
+
+        appState.historyEnabled = false
+        mocks.whisperService.mockTranscriptionResult = VocaTranscription(
+            text: "paused words", duration: 0.1, detectedLanguage: "en", audioLengthSeconds: 0.5, modelUsed: .tiny
+        )
+        await appState.startRecording()
+        await appState.stopRecordingAndTranscribe()
+        let newest = mocks.textInjector.lastInjectedText
+        appState.historyEnabled = true
+
+        XCTAssertEqual(appState.historyStore.entries.count, 1)
+        XCTAssertEqual(appState.lastDictationText, newest)
+    }
 }

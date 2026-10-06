@@ -2713,7 +2713,9 @@ final class AppState: ObservableObject {
                         activeHistoryEntryID = nil
                         VocaLogger.info(.history, "Removed this dictation from History: \(destination?.displayName ?? "the app") is excluded")
                     }
-                    lastUnsavedDictation = historyID == nil && historyEnabled ? output.text : nil
+                    // Paused History counts too: resuming it mustn't bring
+                    // back an older saved dictation for Paste Last.
+                    lastUnsavedDictation = historyID == nil ? output.text : nil
                 }
                 if let historyID {
                     historyStore.complete(
