@@ -14,7 +14,7 @@ import ApplicationServices
 final class MockAudioEngine: AudioRecording {
     var isCurrentlyRecording = false
     var onAudioLevel: ((Float) -> Void)?
-    var onAudioSamples: (([Float], Int) -> Void)?
+    var onAudioSamples: (@Sendable ([Float], Int) -> Void)?
     var onSilenceDetected: (() -> Void)?
     var onMaxDurationReached: (() -> Void)?
     var onAudioDeviceChanged: (() -> Void)?
@@ -99,7 +99,7 @@ final class MockAudioEngine: AudioRecording {
         permissionStatus = status
     }
 
-    func requestPermission(completion: @escaping (Bool) -> Void) {
+    func requestPermission(completion: @escaping @Sendable (Bool) -> Void) {
         completion(permissionStatus == .granted)
     }
 }
@@ -504,7 +504,7 @@ final class MockModelManager: ModelManaging {
         ModelSize.allCases.first { modelIdentifier(for: $0) == identifier }
     }
 
-    func downloadModel(size: ModelSize, onProgress: @escaping (Double) -> Void) async throws {
+    func downloadModel(size: ModelSize, onProgress: @escaping @Sendable (Double) -> Void) async throws {
         downloadRequests.append(size)
         activeDownloadCount += 1
         maxConcurrentDownloadCount = max(maxConcurrentDownloadCount, activeDownloadCount)
@@ -603,7 +603,7 @@ final class MockWhisperService: SpeechTranscribing {
         return mockTranscriptionResult
     }
 
-    func _loadModel(name: String?, folder: URL?, onPhaseChange: ((String) -> Void)?) async throws {
+    func _loadModel(name: String?, folder: URL?, onPhaseChange: (@Sendable (String) -> Void)?) async throws {
         loadRequests.append((name: name, folder: folder))
         activeLoadCount += 1
         maxConcurrentLoadCount = max(maxConcurrentLoadCount, activeLoadCount)
@@ -1183,7 +1183,7 @@ final class MockCorrectionObserver: CorrectionObserving {
     var observedTexts: [String] = []
     var flushCallCount = 0
 
-    func observe(insertedText text: String, processID: pid_t, isKnownWord: @escaping (String) -> Bool) {
+    func observe(insertedText text: String, processID: pid_t, isKnownWord: @escaping @MainActor @Sendable (String) -> Bool) {
         observedTexts.append(text)
     }
 

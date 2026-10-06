@@ -2255,7 +2255,7 @@ final class AppState: ObservableObject {
         cursorOverlay.setLiveWordsAvailable(session != nil && partialHandler != nil && engineSendsPartials)
         recordingTranscription = session
         audioEngine.onAudioSamples = session.map { session in
-            { samples, offset in session.append(samples, at: offset) }
+            { @Sendable samples, offset in session.append(samples, at: offset) }
         }
         let automaticExternal = automaticExternalInputIfNeeded()
         let didStartRecording = await startAudioEngine(
