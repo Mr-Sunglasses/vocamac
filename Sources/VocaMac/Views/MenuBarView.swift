@@ -920,7 +920,7 @@ struct MenuBarView: View {
             Label("VocaMac quit unexpectedly last time", systemImage: "exclamationmark.triangle")
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(VocaDesign.warning)
-            Text("Report opens a GitHub issue filled in with where it crashed, for you to read and send. Nothing is sent until you do.")
+            Text("Report opens a new GitHub issue in your browser, filled in with where it crashed. Opening it gives those details to GitHub; nothing is posted until you submit.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

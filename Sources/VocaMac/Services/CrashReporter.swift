@@ -136,9 +136,16 @@ enum CrashIssue {
     /// Browsers and GitHub start refusing URLs around 8 KB.
     static let maximumURLLength = 7_500
 
+    /// Longest symbol put in a title; Swift generic symbols run to hundreds
+    /// of characters.
+    static let maximumTitleSymbolLength = 120
+
     static func title(for report: CrashReport) -> String {
         if let frame = report.firstAppFrame, let symbol = frame.symbol {
-            return "Crash: \(report.summary) in \(symbol)"
+            let shown = symbol.count > maximumTitleSymbolLength
+                ? String(symbol.prefix(maximumTitleSymbolLength)) + "…"
+                : symbol
+            return "Crash: \(report.summary) in \(shown)"
         }
         return "Crash: \(report.summary)"
     }
@@ -169,7 +176,14 @@ enum CrashIssue {
                 return url
             }
         }
-        return url(for: report, frameLimit: 0) ?? newIssueURL
+        // Even with no frames it didn't fit (a very long reason): the form
+        // and a short title, and the user attaches the file.
+        var components = URLComponents(url: newIssueURL, resolvingAgainstBaseURL: false)
+        components?.queryItems = [
+            URLQueryItem(name: "template", value: "bug_report.yml"),
+            URLQueryItem(name: "title", value: "Crash: \(report.summary)"),
+        ]
+        return components?.url ?? newIssueURL
     }
 
     private static func url(for report: CrashReport, frameLimit: Int) -> URL? {

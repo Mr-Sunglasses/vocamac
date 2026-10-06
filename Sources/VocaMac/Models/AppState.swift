@@ -4109,7 +4109,11 @@ extension AppState {
     /// user reads it in the browser and decides whether to submit.
     func reportPendingCrash() {
         guard let pending = pendingCrashReport else { return }
-        NSWorkspace.shared.open(CrashIssue.url(for: pending.report))
+        guard NSWorkspace.shared.open(CrashIssue.url(for: pending.report)) else {
+            // Keep the card so the user can try again or use Show File.
+            showTemporaryError("Couldn't open your browser to report the crash. Use Show File to attach the report to an issue.")
+            return
+        }
         dismissPendingCrash()
     }
 

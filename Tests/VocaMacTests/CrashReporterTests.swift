@@ -119,6 +119,25 @@ final class CrashReporterTests: XCTestCase {
         XCTAssertTrue(url.absoluteString.contains("template=bug_report.yml"))
     }
 
+    func testAHugeSymbolIsShortenedInTheTitle() throws {
+        var report = try XCTUnwrap(CrashReport.parse(Self.ips()))
+        let symbol = String(repeating: "VeryLongGenericSymbol", count: 600)
+        report.frames = [CrashReport.Frame(image: "VocaMac", symbol: symbol, offset: 1)]
+        report.exceptionFrames = []
+        let title = CrashIssue.title(for: report)
+        XCTAssertLessThanOrEqual(title.count, 40 + CrashIssue.maximumTitleSymbolLength)
+        XCTAssertLessThanOrEqual(CrashIssue.url(for: report).absoluteString.count, CrashIssue.maximumURLLength)
+    }
+
+    func testAReasonTooLongForAnyURLFallsBackToTheBareForm() throws {
+        var report = try XCTUnwrap(CrashReport.parse(Self.ips()))
+        // Past the redaction limit on purpose: the fallback must still fit.
+        report.reason = String(repeating: "%", count: 20_000)
+        let url = CrashIssue.url(for: report)
+        XCTAssertLessThanOrEqual(url.absoluteString.count, CrashIssue.maximumURLLength)
+        XCTAssertTrue(url.absoluteString.contains("template=bug_report.yml"))
+    }
+
     // MARK: - Finding reports
 
     private func makeFinder() throws -> (CrashReportFinder, URL, UserDefaults) {
