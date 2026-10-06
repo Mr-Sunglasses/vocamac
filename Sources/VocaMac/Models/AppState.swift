@@ -254,11 +254,16 @@ final class AppState: ObservableObject {
 
     /// Whether the app is actively recording audio
     private var recordingGeneration = UUID()
+    /// Starts, stops, and cancels in progress, nested or interleaved across
+    /// awaits. The dictation flags are checked when it returns to zero.
+    private var dictationOperationDepth = 0
+    /// What the last check found, for tests.
+    private(set) var lastDictationStateViolations: [String] = []
     /// Practice sessions keep their output local even when a hotkey stops them.
     private var recordingInjectsResult = true
     /// Whether the active recording belongs to an in-window practice control.
     var isPracticeRecording: Bool {
-        (isRecording || appStatus == .recording) && !recordingInjectsResult && activeCommandTarget == nil
+        isCapturingAudio && !recordingInjectsResult && activeCommandTarget == nil
     }
 
     private var recordingTranscription: RecordingTranscription?
@@ -1646,7 +1651,7 @@ final class AppState: ObservableObject {
         modelKeepAlive.cancel()
 
         queuedRecordingStart = nil
-        if isRecording || appStatus == .recording {
+        if isCapturingAudio {
             VocaLogger.warning(.appState, "Auto-pause entered while recording: stopping without inject")
             recordingGeneration = UUID()
             _ = await stopAudioEngine()
@@ -2040,13 +2045,15 @@ final class AppState: ObservableObject {
         outputDestination: ScratchpadOutputDestination = .settingsTest,
         verifiesShortcut: Bool = false
     ) async {
+        beginDictationOperation()
+        defer { endDictationOperation("start") }
         let interval = PerformanceTrace.begin("RecordingStart")
         defer { PerformanceTrace.end(interval) }
         overlayPreview.stop()
         // If we're already recording, this is a recovery attempt — the user
         // pressed the hotkey again because a previous key-up was missed.
         // Stop the current recording and transcribe what we have.
-        if appStatus == .recording || isRecording {
+        if isCapturingAudio {
             VocaLogger.warning(.appState, "startRecording called while already recording — treating as stop (recovery)")
             await stopRecordingAndTranscribe()
             return
@@ -2479,6 +2486,8 @@ final class AppState: ObservableObject {
     ///   overlay) must also end the hotkey's double-tap session, or the next
     ///   double-tap would be taken as a stop and do nothing.
     private func stopRecordingAndTranscribe(endsHotKeyToggle: Bool) async {
+        beginDictationOperation()
+        defer { endDictationOperation("stop") }
         // Start-time recordingInjectsResult alone decides injection.
         // Practice/settings UIs cannot demote an ordinary hotkey session.
         let injectResult = recordingInjectsResult
@@ -2487,7 +2496,7 @@ final class AppState: ObservableObject {
         // Accept stop if we're recording OR if the audio engine thinks
         // it's recording (covers stuck-state recovery scenarios where
         // isRecording and appStatus may be out of sync).
-        guard isRecording || appStatus == .recording else {
+        guard isCapturingAudio else {
             if isLoadingModelForRecording { pendingStopDuringModelLoad = .transcribe }
             if queuedRecordingStart != nil {
                 // Released (or toggled off) before the previous dictation
@@ -2814,8 +2823,52 @@ final class AppState: ObservableObject {
         }
     }
 
+    // MARK: - Dictation state
+
+    /// The microphone is on, or a stop hasn't been taken yet. The two can
+    /// briefly disagree during recovery, so every start, stop, and cancel
+    /// asks this rather than either flag alone.
+    var isCapturingAudio: Bool { isRecording || appStatus == .recording }
+
+    /// The dictation flags in one value.
+    var dictationFlags: DictationFlags {
+        DictationFlags(
+            appStatus: appStatus,
+            isRecording: isRecording,
+            isStartingAudio: isStartingAudio,
+            isStoppingAudio: isStoppingAudio,
+            isLoadingModel: isLoadingModelForRecording,
+            isTranscribing: isTranscribing,
+            isTranscribingMedia: isTranscribingMedia,
+            hasPendingStopDuringStart: pendingStopDuringStart != nil,
+            hasPendingStopDuringModelLoad: pendingStopDuringModelLoad != nil
+        )
+    }
+
+    var dictationPhase: DictationPhase { dictationFlags.phase }
+
+    private func beginDictationOperation() {
+        dictationOperationDepth += 1
+    }
+
+    /// Once nothing else is starting, stopping, or cancelling, check that no
+    /// flag was left behind. A finding is logged, not repaired: the log line
+    /// is what turns a "the hotkey stopped working" report into a fix.
+    private func endDictationOperation(_ operation: String) {
+        dictationOperationDepth -= 1
+        guard dictationOperationDepth == 0 else { return }
+        let flags = dictationFlags
+        lastDictationStateViolations = flags.violations
+        guard !lastDictationStateViolations.isEmpty else { return }
+        VocaLogger.warning(
+            .appState,
+            "Dictation state after \(operation) is inconsistent: "
+                + lastDictationStateViolations.joined(separator: "; ") + " [\(flags)]"
+        )
+    }
+
     func toggleScratchpadRecording() async {
-        if isRecording || appStatus == .recording {
+        if isCapturingAudio {
             await stopRecordingAndTranscribe()
         } else {
             await startRecording(injectResult: false, outputDestination: .scratchpad)
@@ -2825,7 +2878,9 @@ final class AppState: ObservableObject {
     /// Cancels the active recording without sending its audio to a transcription
     /// engine. This is used by the overlay's cancel button.
     func cancelRecording() async {
-        guard isRecording || appStatus == .recording else {
+        beginDictationOperation()
+        defer { endDictationOperation("cancel") }
+        guard isCapturingAudio else {
             if isLoadingModelForRecording { pendingStopDuringModelLoad = .discard }
             queuedRecordingStart = nil
             return
@@ -2868,7 +2923,9 @@ final class AppState: ObservableObject {
     /// transcribed. A dictation cancelled mid-transcription keeps its audio in
     /// history, so an accidental Escape can be undone with Retry.
     func cancelDictation() async {
-        if isRecording || appStatus == .recording {
+        beginDictationOperation()
+        defer { endDictationOperation("cancel dictation") }
+        if isCapturingAudio {
             await cancelRecording()
             return
         }
@@ -3383,9 +3440,14 @@ final class AppState: ObservableObject {
     /// main-actor turn, so a key release can't slip between them and leave a
     /// push-to-talk recording running with nobody holding the key.
     private func startQueuedRecordingIfReady() async {
-        guard let queued = queuedRecordingStart,
-              !isTranscribing, !isRecording, !isTranscribingMedia,
-              appStatus == .idle || appStatus == .error else { return }
+        guard let queued = queuedRecordingStart else { return }
+        guard !isTranscribing, !isRecording, !isTranscribingMedia,
+              appStatus == .idle || appStatus == .error else {
+            // Nothing will try again until the next key press, which would
+            // then withdraw this start instead of beginning one.
+            VocaLogger.warning(.appState, "Queued dictation couldn't start: \(dictationFlags)")
+            return
+        }
         queuedRecordingStart = nil
         VocaLogger.info(.appState, "Previous dictation delivered — starting the queued one")
         if queued.isHandsFree { isHandsFreeSession = true }
@@ -4401,7 +4463,7 @@ extension AppState {
                 // keys that asked for it approve it.
                 await acceptCommandReview()
             } else if activeCommandTarget != nil,
-                      isRecording || appStatus == .recording {
+                      isCapturingAudio {
                 // A second press completes a Command Mode session that was
                 // started with a quick press instead of a hold.
                 commandModePressStartedAt = nil
@@ -4439,7 +4501,7 @@ extension AppState {
         // a press-again one would record speech they meant as done. Call it
         // off instead and say how to time it.
         guard activeCommandTarget != nil,
-              isRecording || appStatus == .recording else {
+              isCapturingAudio else {
             commandModeReleasedBeforeRecording = true
             VocaLogger.debug(.appState, "Command Mode released before recording began — cancelling")
             return
@@ -4552,7 +4614,7 @@ extension AppState {
         // Released while the speech model was still loading for this session.
         if commandModeReleasedBeforeRecording {
             commandModeReleasedBeforeRecording = false
-            if isRecording || appStatus == .recording { await cancelRecording() }
+            if isCapturingAudio { await cancelRecording() }
             resetCommandModeState()
             showTemporaryError(Self.commandReleasedEarlyMessage)
             return
@@ -5265,7 +5327,7 @@ extension AppState {
     /// Start a dictation that runs until the shortcut is pressed again (or
     /// silence ends it), whatever the activation mode is.
     func toggleHandsFreeDictation() async {
-        if isRecording || appStatus == .recording {
+        if isCapturingAudio {
             await stopRecordingAndTranscribe()
             return
         }
