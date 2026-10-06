@@ -29,11 +29,14 @@ final class FrontmostAppResolver: FrontmostAppResolving {
     /// Last non-VocaMac app to be activated. Written from the activation
     /// notification, which `NSWorkspace` delivers on the main thread.
     private var lastActive: RunningAppSnapshot?
+    private var lastActiveInstance: NSRunningApplication?
     /// nonisolated(unsafe): only `init` sets it and `deinit` reads it.
     nonisolated(unsafe) private var observer: NSObjectProtocol?
 
     init() {
-        lastActive = AppIdentityMatching.snapshot(for: NSWorkspace.shared.frontmostApplication)
+        let frontmost = NSWorkspace.shared.frontmostApplication
+        lastActive = AppIdentityMatching.snapshot(for: frontmost)
+        if lastActive != nil { lastActiveInstance = frontmost }
         observer = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification,
             object: nil,
@@ -47,6 +50,7 @@ final class FrontmostAppResolver: FrontmostAppResolving {
             // turn, which is exactly when the cache is read.
             MainActor.assumeIsolated {
                 self?.lastActive = snapshot
+                self?.lastActiveInstance = app
             }
         }
     }
@@ -70,5 +74,10 @@ final class FrontmostAppResolver: FrontmostAppResolving {
 
     func lastActiveApp() -> RunningAppSnapshot? {
         lastActive
+    }
+
+    func lastActiveApplication() -> NSRunningApplication? {
+        guard let lastActiveInstance, !lastActiveInstance.isTerminated else { return nil }
+        return lastActiveInstance
     }
 }
