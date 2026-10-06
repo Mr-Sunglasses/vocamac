@@ -4107,9 +4107,15 @@ extension AppState {
 
     /// Open a pre-filled GitHub issue for the crash. Nothing is sent: the
     /// user reads it in the browser and decides whether to submit.
-    func reportPendingCrash() {
-        guard let pending = pendingCrashReport else { return }
-        guard NSWorkspace.shared.open(CrashIssue.url(for: pending.report)) else {
+    /// Report waits for a dictation to finish: a browser error would replace
+    /// its status and hide its controls.
+    var canReportPendingCrash: Bool {
+        pendingCrashReport != nil && !isRecording && appStatus != .recording && appStatus != .processing
+    }
+
+    func reportPendingCrash(open: (URL) -> Bool = { NSWorkspace.shared.open($0) }) {
+        guard canReportPendingCrash, let pending = pendingCrashReport else { return }
+        guard open(CrashIssue.url(for: pending.report)) else {
             // Keep the card so the user can try again or use Show File.
             showTemporaryError("Couldn't open your browser to report the crash. Use Show File to attach the report to an issue.")
             return

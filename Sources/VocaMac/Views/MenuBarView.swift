@@ -928,6 +928,8 @@ struct MenuBarView: View {
                 Button("Report…") { appState.reportPendingCrash() }
                     .buttonStyle(VocaPrimaryButtonStyle())
                     .controlSize(.small)
+                    .disabled(!appState.canReportPendingCrash)
+                    .help(appState.canReportPendingCrash ? "" : "Available when the dictation finishes")
                 Button("Dismiss") { appState.dismissPendingCrash() }
                     .controlSize(.small)
                 Spacer()

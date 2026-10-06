@@ -220,4 +220,28 @@ final class CrashReporterTests: XCTestCase {
         await appState.checkForCrashReport()
         XCTAssertNil(appState.pendingCrashReport)
     }
+
+    @MainActor
+    func testReportWaitsForADictationToFinish() async throws {
+        let (finder, directory, _) = try makeFinder()
+        let start = Date().addingTimeInterval(-100)
+        XCTAssertNil(finder.newestUnseenReport(now: start))
+        try write("VocaMac-y.ips", in: directory, modified: start.addingTimeInterval(10))
+        let (appState, _) = AppState.makeTestState(crashReportFinder: finder)
+        await appState.checkForCrashReport()
+        await appState.startRecording()
+
+        var opened = 0
+        XCTAssertFalse(appState.canReportPendingCrash)
+        appState.reportPendingCrash { _ in opened += 1; return false }
+        XCTAssertEqual(opened, 0)
+        XCTAssertEqual(appState.appStatus, .recording, "The recording keeps its controls")
+        XCTAssertNotNil(appState.pendingCrashReport)
+        await appState.cancelRecording()
+
+        // Afterwards a browser that won't open keeps the card.
+        appState.reportPendingCrash { _ in opened += 1; return false }
+        XCTAssertEqual(opened, 1)
+        XCTAssertNotNil(appState.pendingCrashReport)
+    }
 }
