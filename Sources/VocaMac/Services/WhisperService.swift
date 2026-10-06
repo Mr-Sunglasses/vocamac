@@ -399,7 +399,7 @@ final class WhisperService: @unchecked Sendable {
         // WhisperKit isn't annotated Sendable, but concurrent transcribe calls
         // on one instance are how it decodes long audio itself
         // (`concurrentWorkerCount`); the chunks share nothing else.
-        nonisolated(unsafe) let kit = kit
+        let kitBox = UncheckedSendableBox(kit)
         try await withThrowingTaskGroup(of: (Int, [TranscriptionResult]).self) { group in
             var running = 0
             for (index, chunk) in chunks.enumerated() {
@@ -414,10 +414,10 @@ final class WhisperService: @unchecked Sendable {
                     sampleCount: chunk.audioSamples.count
                 )
                 let samples = chunk.audioSamples
-                // A constant, so the task captures a copy rather than the var.
-                let decodeOptions = chunkOptions
+                // Each task gets its own copy of the options.
+                let decodeOptions = UncheckedSendableBox(chunkOptions)
                 group.addTask {
-                    (index, try await kit.transcribe(audioArray: samples, decodeOptions: decodeOptions))
+                    (index, try await kitBox.value.transcribe(audioArray: samples, decodeOptions: decodeOptions.value))
                 }
                 running += 1
             }

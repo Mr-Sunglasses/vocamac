@@ -413,8 +413,10 @@ final class AudioEngine: @unchecked Sendable {
         engine = nil
         VocaLogger.info(.audioEngine, "Audio engine retired after configuration change")
 
+        // Only kept alive here, never used.
+        let retired = UncheckedSendableBox(oldEngine)
         lifecycleQueue.asyncAfter(deadline: .now() + Self.idleEngineReleaseDelay) {
-            withExtendedLifetime(oldEngine) {}
+            withExtendedLifetime(retired) {}
         }
     }
 
@@ -1274,15 +1276,17 @@ final class AudioEngine: @unchecked Sendable {
             return nil
         }
 
-        var didProvideInput = false
+        // The input block runs synchronously inside convert(), on this thread.
+        let didProvideInput = UncheckedSendableBox(false)
+        let source = UncheckedSendableBox(sourceBuffer)
         let inputBlock: AVAudioConverterInputBlock = { _, outStatus in
-            guard !didProvideInput else {
+            guard !didProvideInput.value else {
                 outStatus.pointee = .endOfStream
                 return nil
             }
-            didProvideInput = true
+            didProvideInput.value = true
             outStatus.pointee = .haveData
-            return sourceBuffer
+            return source.value
         }
 
         var error: NSError?
