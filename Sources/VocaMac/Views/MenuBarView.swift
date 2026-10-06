@@ -207,6 +207,11 @@ struct MenuBarView: View {
                     .menuPanelCard(padding: 0)
             }
 
+            if let crash = appState.pendingCrashReport {
+                crashSection(crash)
+                    .menuPanelCard()
+            }
+
             // A dictation that failed or was interrupted, with its audio saved
             if let entry = appState.recoverableHistoryEntry {
                 recoverySection(entry)
@@ -906,6 +911,30 @@ struct MenuBarView: View {
                 Button("History…") { openHistory() }
                     .buttonStyle(.vocaLink)
                     .font(.caption)
+            }
+        }
+    }
+
+    private func crashSection(_ crash: PendingCrashReport) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label("VocaMac quit unexpectedly last time", systemImage: "exclamationmark.triangle")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(VocaDesign.warning)
+            Text("Report opens a GitHub issue filled in with where it crashed, for you to read and send. Nothing is sent until you do.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack {
+                Button("Report…") { appState.reportPendingCrash() }
+                    .buttonStyle(VocaPrimaryButtonStyle())
+                    .controlSize(.small)
+                Button("Dismiss") { appState.dismissPendingCrash() }
+                    .controlSize(.small)
+                Spacer()
+                Button("Show File") { appState.revealPendingCrashReport() }
+                    .buttonStyle(.vocaLink)
+                    .font(.caption)
+                    .help(crash.fileURL.lastPathComponent)
             }
         }
     }

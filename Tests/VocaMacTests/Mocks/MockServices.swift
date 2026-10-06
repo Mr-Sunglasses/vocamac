@@ -927,7 +927,8 @@ extension AppState {
         selectedTextService: (any SelectedTextAccessing)? = nil,
         commandModelSlot: MockTranscriptCleanup? = nil,
         voiceActionPerformer: (any VoiceActionPerforming)? = nil,
-        commandReviewPresenter: (any CommandReviewPresenting)? = nil
+        commandReviewPresenter: (any CommandReviewPresenting)? = nil,
+        crashReportFinder: CrashReportFinder? = nil
     ) -> (appState: AppState, mocks: TestMocks) {
         UserDefaults.standard.removeObject(forKey: "vocamac.selectedAudioDeviceID")
         UserDefaults.standard.removeObject(forKey: "vocamac.selectedAudioDeviceName")
@@ -1024,6 +1025,7 @@ extension AppState {
             commandModelSlot: commandModelSlot,
             voiceActionPerformer: voiceActionPerformer,
             commandReviewPresenter: commandReviewPresenter,
+            crashReportFinder: crashReportFinder,
             skipSystemIntegration: true
         )
         // Spell checking depends on the machine's dictionaries; tests use a
