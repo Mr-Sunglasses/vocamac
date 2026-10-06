@@ -67,6 +67,7 @@ struct HistorySettingsPage: View {
                     Divider()
                     excludedApps
                         .disabled(!appState.historyEnabled)
+                        .settingsTarget("history-excluded-apps")
                     Divider()
                     HStack {
                         Spacer()
@@ -77,7 +78,7 @@ struct HistorySettingsPage: View {
                     }
             }
             .settingsTarget("history-retention")
-            .revealSettingsTargets(["history-retention"], expanded: $showsStorage)
+            .revealSettingsTargets(["history-retention", "history-excluded-apps"], expanded: $showsStorage)
 
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
@@ -128,8 +129,16 @@ struct HistorySettingsPage: View {
     }
 
     /// Apps whose dictations are never saved, such as password managers.
-    @ViewBuilder
+    /// One view, so the settings search target attaches once.
     private var excludedApps: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            excludedAppsRows
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private var excludedAppsRows: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text("Never save from these apps")
             Text("For password managers, banking, or anything private. Dictation still works in them.")

@@ -988,6 +988,8 @@ struct MenuBarView: View {
                 systemImage: appState.historyEnabled ? "pause.circle" : "play.circle",
                 shortcut: nil
             ) {
+                // Said explicitly so this open menu redraws its own label.
+                appState.objectWillChange.send()
                 appState.historyEnabled.toggle()
             }
             menuRow("Settings…", systemImage: "gearshape", shortcut: "⌘,", keyEquivalent: ",") {

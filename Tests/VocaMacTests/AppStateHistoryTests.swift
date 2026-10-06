@@ -426,3 +426,53 @@ final class HistoryExclusionTests: XCTestCase {
         XCTAssertEqual(AppListCoding.decode(AppListCoding.encode([entry])), [entry])
     }
 }
+
+// MARK: - Review follow-ups
+
+@MainActor
+final class HistoryExclusionDeliveryTests: XCTestCase {
+    private let speech = [Float](repeating: 0.2, count: 8_000)
+    private let notes = RunningAppSnapshot(displayName: "Notes", bundleIdentifier: "com.apple.Notes")
+    private let vault = RunningAppSnapshot(displayName: "1Password", bundleIdentifier: "com.1password.1password")
+
+    func testSwitchingToAnExcludedAppDuringTranscriptionRemovesTheEntry() async {
+        let (appState, mocks) = AppState.makeTestState()
+        appState.addHistoryExcludedApp(AutoPauseAppEntry.from(snapshot: vault))
+        mocks.frontmostAppResolver.frontmostApp = notes
+        mocks.whisperService.mockTranscriptionResult = VocaTranscription(
+            text: "secret words", duration: 0.1, detectedLanguage: "en", audioLengthSeconds: 0.5, modelUsed: .tiny
+        )
+        mocks.whisperService.transcribeDelayNanoseconds = 200_000_000
+        mocks.audioEngine.stopRecordingResult = speech
+        await appState.startRecording()
+        let stop = Task { await appState.stopRecordingAndTranscribe() }
+        for _ in 0..<200 where appState.historyStore.entries.isEmpty { await Task.yield() }
+        XCTAssertEqual(appState.historyStore.entries.count, 1, "Saved when recording ended in Notes")
+        // The user moves to the excluded app before the text arrives.
+        mocks.frontmostAppResolver.frontmostApp = vault
+        await stop.value
+
+        XCTAssertTrue(appState.historyStore.entries.isEmpty)
+        XCTAssertEqual(appState.lastDictationText, mocks.textInjector.lastInjectedText)
+    }
+
+    func testInAppTestDictationDoesNotReplaceTheLastDelivered() async {
+        let (appState, mocks) = AppState.makeTestState()
+        mocks.frontmostAppResolver.frontmostApp = notes
+        mocks.whisperService.mockTranscriptionResult = VocaTranscription(
+            text: "real dictation", duration: 0.1, detectedLanguage: "en", audioLengthSeconds: 0.5, modelUsed: .tiny
+        )
+        mocks.audioEngine.stopRecordingResult = speech
+        await appState.startRecording()
+        await appState.stopRecordingAndTranscribe()
+        let delivered = appState.lastDictationText
+
+        mocks.whisperService.mockTranscriptionResult = VocaTranscription(
+            text: "settings test", duration: 0.1, detectedLanguage: "en", audioLengthSeconds: 0.5, modelUsed: .tiny
+        )
+        await appState.startRecording(injectResult: false)
+        await appState.stopRecordingAndTranscribe()
+
+        XCTAssertEqual(appState.lastDictationText, delivered)
+    }
+}

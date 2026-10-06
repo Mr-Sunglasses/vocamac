@@ -657,9 +657,10 @@ final class AppState: ObservableObject {
     @Published private(set) var activeWritingTargetName: String?
     @Published var nextWritingProfile: WritingProfile?
     @Published private(set) var lastOutput: DictationOutputResult?
-    /// The last output went to an app kept out of History, so History's
-    /// newest entry is older than it and paste-last must not use it.
-    private(set) var lastOutputIsUnsaved = false
+    /// The last dictation typed into an app kept out of History. History's
+    /// newest entry is older than it, so paste-last uses this instead. Kept
+    /// apart from `lastOutput`, which in-app tests and the scratchpad set too.
+    private(set) var lastUnsavedDictation: String?
     @Published private(set) var heldOutput: String?
 
     /// Explicit recovery only: never paste a delayed result into a changed app.
@@ -2700,7 +2701,20 @@ final class AppState: ObservableObject {
                     }
                 }
                 lastOutput = output
-                lastOutputIsUnsaved = historyID == nil
+                // The destination is read again at delivery: the user may have
+                // switched to an excluded app while this was transcribed.
+                var historyID = historyID
+                if injectResult {
+                    let destination = frontmostAppResolver.currentFrontmostApp()
+                        ?? frontmostAppResolver.lastActiveApp() ?? pendingTargetApp
+                    if let id = historyID, !historyRecords(destination) {
+                        historyStore.delete(id)
+                        historyID = nil
+                        activeHistoryEntryID = nil
+                        VocaLogger.info(.history, "Removed this dictation from History: \(destination?.displayName ?? "the app") is excluded")
+                    }
+                    lastUnsavedDictation = historyID == nil && historyEnabled ? output.text : nil
+                }
                 if let historyID {
                     historyStore.complete(
                         historyID, rawText: result.text, finalText: output.text, summary: output.summary,
@@ -4206,7 +4220,7 @@ extension AppState {
                 return nil
             }
             lastOutput = output
-            lastOutputIsUnsaved = false
+            lastUnsavedDictation = nil
             copyToClipboard(output.text)
             VocaLogger.info(.appState, "Retried dictation \(id) with \(result.modelUsed.displayName)")
             return output.text
