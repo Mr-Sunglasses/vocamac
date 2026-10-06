@@ -13,6 +13,7 @@ struct HistorySettingsPage: View {
     @State private var query = ""
     @State private var confirmingDeleteAll = false
     @State private var showsStorage = false
+    @State private var showingExcludedAppPicker = false
 
     private var entries: [DictationHistoryEntry] {
         appState.historyStore.search(query)
@@ -64,6 +65,9 @@ struct HistorySettingsPage: View {
                     }
                     .disabled(!appState.historyEnabled)
                     Divider()
+                    excludedApps
+                        .disabled(!appState.historyEnabled)
+                    Divider()
                     HStack {
                         Spacer()
                         Button("Delete Audio") { appState.deleteAllHistoryAudio() }
@@ -111,6 +115,51 @@ struct HistorySettingsPage: View {
             Text("This removes every saved dictation and recording from this Mac.")
         }
         .onDisappear { player.stop() }
+        .sheet(isPresented: $showingExcludedAppPicker) {
+            AutoPauseAppPickerSheet(
+                message: "Pick an app. Dictations into it are typed as usual but never saved to History."
+            ) { entry in
+                appState.addHistoryExcludedApp(entry)
+                showingExcludedAppPicker = false
+            } onCancel: {
+                showingExcludedAppPicker = false
+            }
+        }
+    }
+
+    /// Apps whose dictations are never saved, such as password managers.
+    @ViewBuilder
+    private var excludedApps: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("Never save from these apps")
+            Text("For password managers, banking, or anything private. Dictation still works in them.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        ForEach(appState.historyExcludedApps) { app in
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(app.displayName)
+                    if let detail = app.bundleIdentifier ?? app.processName {
+                        Text(detail)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Spacer()
+                Button(role: .destructive) {
+                    appState.removeHistoryExcludedApp(app)
+                } label: {
+                    Image(systemName: "minus.circle.fill")
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.secondary)
+                .help("Remove \(app.displayName)")
+                .accessibilityLabel("Remove \(app.displayName)")
+            }
+        }
+        Button("Add App…") { showingExcludedAppPicker = true }
     }
 
     /// How much is kept, and for how long.

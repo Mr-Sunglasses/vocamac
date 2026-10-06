@@ -397,7 +397,7 @@ enum SettingsSearchIndex {
             page: .history,
             title: "Keep History For",
             subtitle: "Delete dictations after a day, a week, or a month",
-            keywords: ["retention", "delete", "privacy", "storage", "keep audio"]
+            keywords: ["retention", "delete", "privacy", "storage", "keep audio", "exclude", "password", "private apps"]
         ),
 
         // Audio
