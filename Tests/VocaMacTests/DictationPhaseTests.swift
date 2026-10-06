@@ -140,21 +140,29 @@ final class DictationStateCheckTests: XCTestCase {
 
     func testStopWhileTheMicrophoneIsConnecting() async {
         let (appState, mocks) = AppState.makeTestState()
-        mocks.audioEngine.startRecordingDelay = 0.4
+        let gate = StepGate()
+        mocks.audioEngine.startRecordingGate = gate
         let start = Task { await appState.startRecording() }
-        try? await Task.sleep(nanoseconds: 100_000_000)
+        let reachedGate = await gate.waitUntilReached()
+        XCTAssertTrue(reachedGate)
         XCTAssertEqual(appState.dictationPhase, .startingAudio)
         await appState.stopRecordingAndTranscribe()
+        gate.open()
         await start.value
         assertClean(appState)
     }
 
     func testCancelWhileTheMicrophoneIsConnecting() async {
         let (appState, mocks) = AppState.makeTestState()
-        mocks.audioEngine.startRecordingDelay = 0.4
+        let gate = StepGate()
+        mocks.audioEngine.startRecordingGate = gate
         let start = Task { await appState.startRecording() }
-        try? await Task.sleep(nanoseconds: 100_000_000)
+        let reachedGate = await gate.waitUntilReached()
+        XCTAssertTrue(reachedGate)
+        XCTAssertEqual(appState.dictationPhase, .startingAudio)
         await appState.cancelRecording()
+        XCTAssertEqual(mocks.audioEngine.cancelPendingStartCallCount, 1, "Cancelled the start, not a running recording")
+        gate.open()
         await start.value
         assertClean(appState)
     }
@@ -165,16 +173,19 @@ final class DictationStateCheckTests: XCTestCase {
         let whisperService = MockWhisperService()
         whisperService.loadedModelName = nil
         whisperService.isModelLoaded = false
-        whisperService.loadDelayNanoseconds = 100_000_000
+        let gate = StepGate()
+        whisperService.loadGate = gate
         let (appState, _) = AppState.makeTestState(modelManager: modelManager, whisperService: whisperService)
         let originalModel = appState.selectedModelSize
         defer { appState.selectedModelSize = originalModel }
         appState.selectedModelSize = ModelSize.tiny.rawValue
 
         let start = Task { await appState.startRecording() }
-        for _ in 0..<200 where appState.dictationPhase != .loadingModel { await Task.yield() }
+        let reachedGate = await gate.waitUntilReached()
+        XCTAssertTrue(reachedGate)
         XCTAssertEqual(appState.dictationPhase, .loadingModel)
         await appState.stopRecordingAndTranscribe()
+        gate.open()
         await start.value
         assertClean(appState)
     }
@@ -182,12 +193,15 @@ final class DictationStateCheckTests: XCTestCase {
     func testEscapeWhileTranscribing() async {
         let (appState, mocks) = AppState.makeTestState()
         mocks.audioEngine.stopRecordingResult = speech
-        mocks.whisperService.transcribeDelayNanoseconds = 300_000_000
+        let gate = StepGate()
+        mocks.whisperService.transcribeGate = gate
         await appState.startRecording()
         let stop = Task { await appState.stopRecordingAndTranscribe() }
-        for _ in 0..<200 where appState.dictationPhase != .transcribing { await Task.yield() }
+        let reachedGate = await gate.waitUntilReached()
+        XCTAssertTrue(reachedGate)
         XCTAssertEqual(appState.dictationPhase, .transcribing)
         await appState.cancelDictation()
+        gate.open()
         await stop.value
         XCTAssertEqual(appState.dictationPhase, .idle)
         assertClean(appState)
