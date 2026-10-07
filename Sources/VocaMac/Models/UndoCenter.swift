@@ -26,10 +26,23 @@ final class UndoCenter {
     private(set) var current: Entry?
 
     @ObservationIgnored private let duration: Duration
+    @ObservationIgnored private let sleep: @Sendable (Duration) async throws -> Void
+    @ObservationIgnored private let onTimerFinished: (@MainActor @Sendable () -> Void)?
     @ObservationIgnored private var dismissTask: Task<Void, Never>?
 
-    init(duration: Duration = .seconds(6)) {
+    /// - Parameters:
+    ///   - sleep: How the offer waits out `duration`. Tests pass one they
+    ///     finish by hand, so they don't depend on a busy machine's timing.
+    ///   - onTimerFinished: Called once an offer's timer has done everything
+    ///     it will do (expired the offer, or found it replaced). For tests.
+    init(
+        duration: Duration = .seconds(6),
+        sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
+        onTimerFinished: (@MainActor @Sendable () -> Void)? = nil
+    ) {
         self.duration = duration
+        self.sleep = sleep
+        self.onTimerFinished = onTimerFinished
     }
 
     /// Offer to take back a change. Replaces any earlier offer.
@@ -37,10 +50,12 @@ final class UndoCenter {
         dismissTask?.cancel()
         let entry = Entry(message: message, restore: restore)
         current = entry
-        dismissTask = Task { [weak self, duration] in
-            try? await Task.sleep(for: duration)
-            guard !Task.isCancelled else { return }
-            self?.expire(entry.id)
+        dismissTask = Task { [weak self, duration, sleep, onTimerFinished] in
+            try? await sleep(duration)
+            if !Task.isCancelled {
+                self?.expire(entry.id)
+            }
+            onTimerFinished?()
         }
     }
 

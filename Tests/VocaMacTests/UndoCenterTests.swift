@@ -104,23 +104,35 @@ final class UndoCenterTests: XCTestCase {
     }
 
     func testOfferExpiresAfterItsDuration() async throws {
-        let center = UndoCenter(duration: .milliseconds(30))
+        let timers = ManualTimers()
+        let center = UndoCenter(duration: .seconds(3), sleep: timers.sleep, onTimerFinished: timers.timerFinished)
         center.offer("Removed") {}
         XCTAssertNotNil(center.current)
 
-        try await Task.sleep(for: .milliseconds(250))
+        try await timers.fire(0)
+        try await timers.waitUntilFinished(1)
 
+        XCTAssertEqual(timers.durations, [.seconds(3)], "The configured duration reaches the timer")
         XCTAssertNil(center.current)
     }
 
     func testEarlierOfferTimerDoesNotExpireALaterOffer() async throws {
-        let center = UndoCenter(duration: .milliseconds(150))
+        let timers = ManualTimers()
+        let center = UndoCenter(sleep: timers.sleep, onTimerFinished: timers.timerFinished)
         center.offer("first") {}
-        try await Task.sleep(for: .milliseconds(90))
+        try await timers.waitUntilStarted(1)
         center.offer("second") {}
-        try await Task.sleep(for: .milliseconds(90))
+        try await timers.waitUntilStarted(2)
 
+        // The first offer's timer runs out after the second offer was made,
+        // and has finished everything it will do before this is checked.
+        try await timers.fire(0)
+        try await timers.waitUntilFinished(1)
         XCTAssertEqual(center.current?.message, "second")
+
+        try await timers.fire(1)
+        try await timers.waitUntilFinished(2)
+        XCTAssertNil(center.current)
     }
 
     // MARK: - Newer work wins
@@ -256,5 +268,77 @@ final class UndoCenterTests: XCTestCase {
         let c = WebsiteStyleBinding(hostPattern: "other.com", displayName: "C", style: .plain)
         XCTAssertTrue(WebsiteStyleBinding.sharesHost(a, b))
         XCTAssertFalse(WebsiteStyleBinding.sharesHost(a, c))
+    }
+}
+
+struct ManualTimerTimeout: Error, CustomStringConvertible {
+    let description: String
+}
+
+/// Timers a test runs out by hand. Each `sleep` waits until `fire(index)`,
+/// where `index` counts the sleeps in the order they began.
+///
+/// Unchecked: `lock` guards every read and write of `waiting`, `started`,
+/// `finished`, and `requested`.
+private final class ManualTimers: @unchecked Sendable {
+    private let lock = NSLock()
+    private var waiting: [Int: CheckedContinuation<Void, Never>] = [:]
+    private var started = 0
+    private var finished = 0
+    private var requested: [Duration] = []
+
+    /// The durations the timers were started with, in order.
+    var durations: [Duration] { lock.withLock { requested } }
+
+    var sleep: @Sendable (Duration) async throws -> Void {
+        { [self] duration in
+            await withCheckedContinuation { continuation in
+                lock.withLock {
+                    waiting[started] = continuation
+                    started += 1
+                    requested.append(duration)
+                }
+            }
+        }
+    }
+
+    /// Pass as `UndoCenter`'s `onTimerFinished`.
+    var timerFinished: @MainActor @Sendable () -> Void {
+        { [self] in lock.withLock { finished += 1 } }
+    }
+
+    /// Wait until `count` timers have begun; throws if they don't within
+    /// five seconds, so a slow runner reports the real cause.
+    @MainActor
+    func waitUntilStarted(_ count: Int) async throws {
+        try await waitUntil("\(count) timer(s) to start") { started >= count }
+    }
+
+    /// Wait until `count` timers have finished their work after sleeping.
+    @MainActor
+    func waitUntilFinished(_ count: Int) async throws {
+        try await waitUntil("\(count) timer(s) to finish") { finished >= count }
+    }
+
+    /// Run out the `index`th timer. Throws if it never started or was
+    /// already fired.
+    @MainActor
+    func fire(_ index: Int) async throws {
+        try await waitUntilStarted(index + 1)
+        guard let continuation = lock.withLock({ waiting.removeValue(forKey: index) }) else {
+            throw ManualTimerTimeout(description: "timer \(index) is not waiting")
+        }
+        continuation.resume()
+    }
+
+    /// Wait up to five seconds, then throw if `condition` is still false.
+    /// Runs `condition` while holding `lock`; it must not take the same lock.
+    @MainActor
+    private func waitUntil(_ what: String, _ condition: () -> Bool) async throws {
+        let deadline = Date().addingTimeInterval(5)
+        while !lock.withLock(condition) {
+            guard Date() < deadline else { throw ManualTimerTimeout(description: "timed out waiting for \(what)") }
+            try await Task.sleep(for: .milliseconds(1))
+        }
     }
 }
