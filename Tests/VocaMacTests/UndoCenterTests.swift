@@ -331,6 +331,8 @@ private final class ManualTimers: @unchecked Sendable {
         continuation.resume()
     }
 
+    /// Wait up to five seconds, then throw if `condition` is still false.
+    /// Runs `condition` while holding `lock`; it must not take the same lock.
     @MainActor
     private func waitUntil(_ what: String, _ condition: () -> Bool) async throws {
         let deadline = Date().addingTimeInterval(5)
