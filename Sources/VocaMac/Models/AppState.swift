@@ -1134,6 +1134,11 @@ final class AppState: ObservableObject {
                 .store(in: &cancellables)
         }
 
+        updateChecker.isDictationBusy = { [weak self] in
+            guard let self else { return false }
+            return self.isRecording || self.appStatus == .recording || self.appStatus == .processing
+        }
+
         // Forward updateChecker changes so SwiftUI views observing AppState
         // re-render when updateState changes (nested ObservableObject fix).
         updateChecker.objectWillChange
@@ -3712,6 +3717,9 @@ final class AppState: ObservableObject {
         }
 
         await checkForCrashReport()
+
+        // What the last in-place install did, before a new check runs.
+        updateChecker.reportLastInstallResult()
 
         // The update check is a network round trip that needs nothing below.
         // Start it now instead of after both models finish loading, which on

@@ -132,7 +132,7 @@ final class UpdateChecker: ObservableObject {
     }
 
     func checkForUpdates(releaseProvider: () async throws -> GitHubRelease) async {
-        guard updateState != .checking else { return }
+        guard updateState != .checking, !isInstalling else { return }
         updateState = .checking
 
         do {
@@ -186,6 +186,64 @@ final class UpdateChecker: ObservableObject {
 
     func openDMG(at url: URL) {
         NSWorkspace.shared.open(url)
+    }
+
+    /// Replaces this app with the downloaded update and relaunches it.
+    var installer = UpdateInstaller()
+
+    /// Verify and stage the update, then quit so the helper can swap it in
+    /// and relaunch. On failure nothing has changed and the DMG can still be
+    /// opened by hand.
+    /// Whether a dictation is recording or being transcribed. Quitting then
+    /// would lose it. Set by AppState.
+    var isDictationBusy: () -> Bool = { false }
+
+    /// How long a finished stage waits for a dictation to end before giving up.
+    var busyWaitSeconds: TimeInterval = 60
+
+    var isInstalling: Bool {
+        if case .installing = updateState { return true }
+        return false
+    }
+
+    func installAndRelaunch(dmgPath: URL) async {
+        // A second click while staging would start a second helper.
+        guard !isInstalling else { return }
+        updateState = .installing
+        do {
+            let staged = try await installer.stage(dmg: dmgPath)
+            // A dictation may have started while the update was staged.
+            // Wait for it; quitting would cut it off.
+            let deadline = Date().addingTimeInterval(busyWaitSeconds)
+            while isDictationBusy(), Date() < deadline {
+                try? await Task.sleep(nanoseconds: 250_000_000)
+            }
+            guard !isDictationBusy() else {
+                try? FileManager.default.removeItem(at: staged.stagedAppURL)
+                throw UpdateInstallError.dictationInProgress
+            }
+            // No await from here to terminate: nothing can start in between.
+            _ = try installer.launchSwapHelper(for: staged)
+            VocaLogger.info(.updateChecker, "Installing \(staged.version) and relaunching")
+            try? FileManager.default.removeItem(at: dmgPath)
+            NSApp.terminate(nil)
+        } catch {
+            let message = error.localizedDescription
+            VocaLogger.warning(.updateChecker, "In-place install stopped: \(message)")
+            updateState = .installFailed(dmgPath: dmgPath, message: message)
+        }
+    }
+
+    /// Report what the last in-place install's helper did, once.
+    func reportLastInstallResult(_ result: String? = UpdateInstaller.consumeResult()) {
+        guard let result else { return }
+        if result.hasPrefix("failed") {
+            VocaLogger.error(.updateChecker, "Last update: \(result)")
+            let reason = result.dropFirst("failed: ".count)
+            updateState = .error("The last update didn't install: \(reason). Download it again or install from the DMG.")
+        } else {
+            VocaLogger.info(.updateChecker, "Last update: \(result)")
+        }
     }
 
     func skipVersion(_ version: String) {
