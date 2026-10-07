@@ -104,23 +104,41 @@ final class UndoCenterTests: XCTestCase {
     }
 
     func testOfferExpiresAfterItsDuration() async throws {
-        let center = UndoCenter(duration: .milliseconds(30))
+        let timers = ManualTimers()
+        let center = UndoCenter(sleep: timers.sleep)
         center.offer("Removed") {}
         XCTAssertNotNil(center.current)
 
-        try await Task.sleep(for: .milliseconds(250))
+        await timers.fire(0)
 
-        XCTAssertNil(center.current)
+        let expired = await eventually { center.current == nil }
+        XCTAssertTrue(expired)
     }
 
     func testEarlierOfferTimerDoesNotExpireALaterOffer() async throws {
-        let center = UndoCenter(duration: .milliseconds(150))
+        let timers = ManualTimers()
+        let center = UndoCenter(sleep: timers.sleep)
         center.offer("first") {}
-        try await Task.sleep(for: .milliseconds(90))
+        await timers.waitUntilStarted(1)
         center.offer("second") {}
-        try await Task.sleep(for: .milliseconds(90))
+        await timers.waitUntilStarted(2)
 
+        // The first offer's timer runs out after the second offer was made.
+        await timers.fire(0)
         XCTAssertEqual(center.current?.message, "second")
+
+        await timers.fire(1)
+        let expired = await eventually { center.current == nil }
+        XCTAssertTrue(expired)
+    }
+
+    /// Wait (up to five seconds) for the expiry to run on the main actor.
+    private func eventually(_ condition: @MainActor () -> Bool) async -> Bool {
+        let deadline = Date().addingTimeInterval(5)
+        while !condition(), Date() < deadline {
+            try? await Task.sleep(for: .milliseconds(1))
+        }
+        return condition()
     }
 
     // MARK: - Newer work wins
@@ -256,5 +274,40 @@ final class UndoCenterTests: XCTestCase {
         let c = WebsiteStyleBinding(hostPattern: "other.com", displayName: "C", style: .plain)
         XCTAssertTrue(WebsiteStyleBinding.sharesHost(a, b))
         XCTAssertFalse(WebsiteStyleBinding.sharesHost(a, c))
+    }
+}
+
+/// Timers a test runs out by hand. Each `sleep` waits until `fire(index)`,
+/// where `index` counts the sleeps in the order they began.
+private final class ManualTimers: @unchecked Sendable {
+    private let lock = NSLock()
+    private var waiting: [Int: CheckedContinuation<Void, Never>] = [:]
+    private var started = 0
+
+    var sleep: @Sendable (Duration) async throws -> Void {
+        { [self] _ in
+            await withCheckedContinuation { continuation in
+                lock.withLock {
+                    waiting[started] = continuation
+                    started += 1
+                }
+            }
+        }
+    }
+
+    /// Wait until `count` timers have begun.
+    @MainActor
+    func waitUntilStarted(_ count: Int) async {
+        let deadline = Date().addingTimeInterval(5)
+        while lock.withLock({ started }) < count, Date() < deadline {
+            try? await Task.sleep(for: .milliseconds(1))
+        }
+    }
+
+    /// Run out the `index`th timer, then let its task finish.
+    @MainActor
+    func fire(_ index: Int) async {
+        await waitUntilStarted(index + 1)
+        lock.withLock { waiting.removeValue(forKey: index) }?.resume()
     }
 }

@@ -26,10 +26,17 @@ final class UndoCenter {
     private(set) var current: Entry?
 
     @ObservationIgnored private let duration: Duration
+    @ObservationIgnored private let sleep: @Sendable (Duration) async throws -> Void
     @ObservationIgnored private var dismissTask: Task<Void, Never>?
 
-    init(duration: Duration = .seconds(6)) {
+    /// - Parameter sleep: How the offer waits out `duration`. Tests pass one
+    ///   they finish by hand, so they don't depend on a busy machine's timing.
+    init(
+        duration: Duration = .seconds(6),
+        sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
+    ) {
         self.duration = duration
+        self.sleep = sleep
     }
 
     /// Offer to take back a change. Replaces any earlier offer.
@@ -37,8 +44,8 @@ final class UndoCenter {
         dismissTask?.cancel()
         let entry = Entry(message: message, restore: restore)
         current = entry
-        dismissTask = Task { [weak self, duration] in
-            try? await Task.sleep(for: duration)
+        dismissTask = Task { [weak self, duration, sleep] in
+            try? await sleep(duration)
             guard !Task.isCancelled else { return }
             self?.expire(entry.id)
         }
