@@ -48,9 +48,20 @@ struct GatewaySettingsTab: View {
                             .truncationMode(.middle)
                     }
                 } else {
-                    Label("Native vocagateway binary not found on PATH", systemImage: "exclamationmark.triangle")
-                        .foregroundStyle(VocaDesign.warning)
-                        .font(.caption)
+                    Label {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Native vocagateway binary not found")
+                                .foregroundStyle(VocaDesign.warning)
+                            Text(gateway.isLive
+                                 ? "A gateway is already reachable; only the embedded native binary is missing."
+                                 : "Install the vocagateway companion to pair a phone or expose local speech APIs.")
+                                .foregroundStyle(.secondary)
+                        }
+                    } icon: {
+                        Image(systemName: "shippingbox")
+                            .foregroundStyle(VocaDesign.warning)
+                    }
+                    .font(.caption)
                 }
 
                 if let message = gateway.lastErrorMessage, case .error = gateway.status {

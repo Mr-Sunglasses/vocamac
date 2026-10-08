@@ -119,7 +119,8 @@ struct MenuBarView: View {
     @State private var bindNotice: String?
     @State private var panelWindow = MenuPanelWindowReference()
     /// Time of day for the header scene, read when the menu opens.
-    @State private var headerMood = SceneMood.current()
+    @State private var headerMood: SceneMood = .day
+    @Environment(\.colorScheme) private var colorScheme
 
     @EnvironmentObject var appState: AppState
     @ObservedObject var settingsManager: SettingsWindowManager
@@ -195,13 +196,18 @@ struct MenuBarView: View {
         .onAppear {
             let screen = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main
             availableHeight = min(720, (screen?.visibleFrame.height ?? 760) - 40)
-            headerMood = SceneMood.current()
+            headerMood = SceneMood.menuHeader(for: colorScheme)
             bindNotice = nil
             appState.refreshActiveWritingStyle(readingWebsite: true)
             Task { await gateway.refreshStatus() }
         }
         // A "saved for Ghostty" notice is wrong once the user is in Discord.
         .onChange(of: appState.activeWritingTargetName) { _, _ in bindNotice = nil }
+        // The header mood clamps night in light mode, so re-evaluate it when
+        // the system appearance flips while the popover is open.
+        .onChange(of: colorScheme) { _, scheme in
+            headerMood = SceneMood.menuHeader(for: scheme)
+        }
     }
 
     private var supplementaryContent: some View {
@@ -1259,7 +1265,7 @@ struct MenuBarView: View {
         if appState.isAutoPaused { return .secondary }
         switch appState.appStatus {
         case .idle:       return appState.isDictationReady ? VocaDesign.success : VocaDesign.warning
-        case .recording:  return Color(nsColor: BrandAssets.brandGreen)
+        case .recording:  return Color(nsColor: BrandAssets.brandColor)
         case .processing: return VocaDesign.busy
         case .error:      return VocaDesign.warning
         }

@@ -25,15 +25,15 @@ enum BrandAssets {
         image(named: "voca-mark")
     }
 
-    /// Brand green `#0F6B57`.
-    static let brandGreen = NSColor(red: 0.059, green: 0.420, blue: 0.341, alpha: 1.0)
+    /// Brand teal `#0F6B57` — the official mark color, now also the accent.
+    static let brandColor = VocaPalette.teal
 }
 
 /// Which artwork the menu bar should show for a given app status.
 enum MenuBarIconStyle: Equatable {
     /// SF Symbol drawn as a template so macOS follows the menu bar appearance.
     case systemSymbolTemplate(name: String)
-    /// The Voca mic mark tinted brand green while recording (mic hot).
+    /// The Voca mic mark tinted with the brand color while recording (mic hot).
     case brandMarkTinted
     /// SF Symbol for processing, error and Command Mode.
     case systemSymbol(name: String)
@@ -73,7 +73,7 @@ struct BrandLogoView: View {
             } else {
                 Image(systemName: "mic.circle.fill")
                     .font(.system(size: size))
-                    .foregroundStyle(Color(nsColor: BrandAssets.brandGreen))
+                    .foregroundStyle(Color(nsColor: BrandAssets.brandColor))
             }
         }
         .frame(width: size, height: size)
