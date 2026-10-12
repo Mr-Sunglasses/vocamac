@@ -111,14 +111,8 @@ struct DictationOutputPipeline {
         // any. An emoji ends a sentence on its own, so a full stop that
         // cleanup puts after it is dropped on the way out.
         var closingGlyph: String?
-        // Snippet expansions and dictionary terms, which the greeting line
-        // must leave exactly as saved.
-        var protectedSpans: [String] = []
         func result(_ text: String, _ summary: String) -> DictationOutputResult {
-            var text = closingGlyph.map { Self.droppingFullStop(after: $0, in: text) } ?? text
-            if options.laysOutParagraphs, options.profile.format == .email, options.profile.cleanup != .raw {
-                text = PauseParagraphs.separatingGreeting(text, protected: protectedSpans)
-            }
+            let text = closingGlyph.map { Self.droppingFullStop(after: $0, in: text) } ?? text
             return DictationOutputResult(original: original, text: text, summary: summary)
         }
         guard options.profile.cleanup != .raw else { return result(original, "Raw transcription") }
@@ -131,7 +125,6 @@ struct DictationOutputPipeline {
             prepared = value
         }
         closingGlyph = prepared.closingGlyph
-        protectedSpans = prepared.masked.replacements
 
         let plan: CleanupPlan
         switch planCleanup(prepared, options: options) {
@@ -219,17 +212,17 @@ struct DictationOutputPipeline {
         finalRules.filler = .keep
 
         func format(_ text: String) -> String {
-            masked.restore(in: WritingStyleEngine.format(
+            masked.restore(in: Self.layingOut(WritingStyleEngine.format(
                 text, rules: finalRules, globalAutoCapitalize: options.autoCapitalize,
                 globalTrailingSpace: options.trailingSpace
-            ))
+            ), options: options))
         }
         func finish(_ formatting: MaskedText) -> String {
             let formatted = WritingStyleEngine.format(
                 formatting.text, rules: finalRules, globalAutoCapitalize: options.autoCapitalize,
                 globalTrailingSpace: options.trailingSpace
             )
-            return masked.restore(in: formatting.restore(in: formatted))
+            return masked.restore(in: formatting.restore(in: Self.layingOut(formatted, options: options)))
         }
 
         let styleName = plan.styleName
@@ -484,10 +477,10 @@ struct DictationOutputPipeline {
         let masked = prepared.masked
         let effectiveLevel = prepared.effectiveLevel
         let noting = prepared.noting
-        let fallback = masked.restore(in: WritingStyleEngine.format(
+        let fallback = masked.restore(in: Self.layingOut(WritingStyleEngine.format(
             masked.text, rules: profile.rules, globalAutoCapitalize: options.autoCapitalize,
             globalTrailingSpace: options.trailingSpace
-        ))
+        ), options: options))
         // Code and Terminal text may be a command. The model may only point
         // at filler there; see `CleanupSalvage`.
         let technical = !profile.format.supportsWording
@@ -917,6 +910,15 @@ struct DictationOutputPipeline {
             offsets.append(offset)
         }
         return (collapsed, offsets)
+    }
+
+    /// `formatted` with an email's greeting on a line of its own, when the
+    /// options lay out paragraphs. Takes text whose protected spans are still
+    /// placeholders, so a snippet or dictionary term stays exactly as saved.
+    static func layingOut(_ formatted: String, options: DictationOutputOptions) -> String {
+        guard options.laysOutParagraphs, options.profile.format == .email,
+              options.profile.cleanup != .raw else { return formatted }
+        return PauseParagraphs.separatingGreeting(formatted)
     }
 
     private static let paragraphBreakExpression = try? NSRegularExpression(pattern: #"\s*\n[ \t]*\n\s*"#)

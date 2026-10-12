@@ -232,25 +232,6 @@ final class PauseParagraphsTests: XCTestCase {
         )
     }
 
-    func testGreetingLeavesProtectedTextAsSaved() {
-        let snippet = "Hi Sarah, eBay sent the invoice."
-        XCTAssertEqual(PauseParagraphs.separatingGreeting(snippet, protected: [snippet]), snippet)
-        XCTAssertEqual(
-            PauseParagraphs.separatingGreeting("Hi Sarah, eBay sent the invoice today.", protected: ["eBay"]),
-            "Hi Sarah,\n\neBay sent the invoice today."
-        )
-        XCTAssertEqual(
-            PauseParagraphs.separatingGreeting("Hi Sarah, thanks for the deck.", protected: ["Sarah, thanks"]),
-            "Hi Sarah, thanks for the deck.",
-            "A term spanning the comma keeps its space"
-        )
-        XCTAssertEqual(
-            PauseParagraphs.separatingGreeting("Hi Sarah, thanks for the eBay invoice.", protected: ["eBay"]),
-            "Hi Sarah,\n\nThanks for the eBay invoice.",
-            "A term further on changes nothing"
-        )
-    }
-
     func testNotEveryHeyIsAGreeting() {
         for text in [
             "Hey, can you send me the deck?",
@@ -356,18 +337,33 @@ final class PauseParagraphsPipelineTests: XCTestCase {
         XCTAssertEqual(chat.text, input, "Only emails get a greeting line")
     }
 
-    func testEmailSnippetKeepsItsSavedText() async {
-        let expansion = "Hi Sarah, eBay sent the invoice."
-        let result = await DictationOutputPipeline(cleaner: MockTranscriptCleanup(), snippets: SnippetExpander()).process(
-            "invoice note",
+    private func processEmail(_ input: String, snippets: [Snippet]) async -> DictationOutputResult {
+        await DictationOutputPipeline(cleaner: MockTranscriptCleanup(), snippets: SnippetExpander()).process(
+            input,
             profile: WritingProfile(format: .email, rules: WritingStyle.email.defaultRules, intent: .preserve, cleanup: .inherit),
-            snippetList: [Snippet(trigger: "invoice note", expansion: expansion)],
-            cleanupEnabled: false, rewritingEnabled: false,
+            snippetList: snippets, cleanupEnabled: false, rewritingEnabled: false,
             model: .defaultKind, customPrompt: "", cleanupLevel: .medium,
             language: "en", autoCapitalize: true, trailingSpace: false,
             laysOutParagraphs: true
         )
-        XCTAssertEqual(result.text, expansion)
+    }
+
+    func testEmailSnippetKeepsItsSavedText() async {
+        let expansion = "Hi Sarah, eBay sent the invoice."
+        let whole = await processEmail("invoice note", snippets: [Snippet(trigger: "invoice note", expansion: expansion)])
+        XCTAssertEqual(whole.text, expansion)
+
+        let term = await processEmail(
+            "hi sarah, shop name sent the invoice today.", snippets: [Snippet(trigger: "shop name", expansion: "eBay")]
+        )
+        XCTAssertEqual(term.text, "Hi sarah,\n\neBay sent the invoice today.", "The break is made; the casing is kept")
+    }
+
+    func testSnippetElsewhereStillGetsAGreetingLine() async {
+        let result = await processEmail(
+            "hi Sarah, thanks for the notes from her name.", snippets: [Snippet(trigger: "her name", expansion: "Sarah")]
+        )
+        XCTAssertEqual(result.text, "Hi Sarah,\n\nThanks for the notes from Sarah.")
     }
 
     func testExactlyAsTranscribedGetsNoLayout() {

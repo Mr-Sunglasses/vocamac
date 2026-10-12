@@ -104,37 +104,17 @@ enum PauseParagraphs {
     /// An email's opening "Hi Sarah," on a line of its own, with the next
     /// sentence capitalized. Needs a name after the greeting word ("Hey,
     /// can you…" is not a greeting line) and a few words after it. Runs on
-    /// the finished text: it needs no timings, and the model never sees a
-    /// greeting cut off from its sentence.
-    ///
-    /// - Parameter protected: Text restored from a mask (snippet expansions,
-    ///   dictionary terms), kept exactly as saved. The greeting is left alone
-    ///   when one covers it or the space after it, and a protected word
-    ///   after the break keeps its own casing ("eBay", not "EBay").
-    static func separatingGreeting(_ text: String, protected: [String] = []) -> String {
+    /// the formatted text before its placeholders are restored: it needs no
+    /// timings, the model never sees a greeting cut off from its sentence,
+    /// and protected text (a snippet, a dictionary term) is still one
+    /// caseless placeholder, so it is neither split nor recased.
+    static func separatingGreeting(_ text: String) -> String {
         guard let greetingExpression,
               let match = greetingExpression.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
               let greeting = Range(match.range(at: 1), in: text),
               let next = Range(match.range(at: 2), in: text),
               words(in: String(text[next.lowerBound...])).count >= 3 else { return text }
-        let nextLocation = match.range(at: 2).location
-        var keepsCase = false
-        let nsText = text as NSString
-        for span in protected where !span.isEmpty {
-            var searchStart = 0
-            while searchStart < nextLocation + 1 {
-                let found = nsText.range(
-                    of: span, range: NSRange(location: searchStart, length: nsText.length - searchStart)
-                )
-                guard found.location != NSNotFound, found.location <= nextLocation else { break }
-                // Reaches back into the greeting or the space after it.
-                if found.location < nextLocation, NSMaxRange(found) > match.range.location { return text }
-                if found.location == nextLocation { keepsCase = true }
-                searchStart = found.location + 1
-            }
-        }
-        let first = keepsCase ? String(text[next]) : text[next].uppercased()
-        return String(text[greeting]) + "\n\n" + first + String(text[next.upperBound...])
+        return String(text[greeting]) + "\n\n" + text[next].uppercased() + String(text[next.upperBound...])
     }
 
     // MARK: - Pauses in the audio
