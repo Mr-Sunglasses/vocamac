@@ -215,14 +215,16 @@ struct DictationOutputPipeline {
             masked.restore(in: Self.layingOut(WritingStyleEngine.format(
                 text, rules: finalRules, globalAutoCapitalize: options.autoCapitalize,
                 globalTrailingSpace: options.trailingSpace
-            ), options: options))
+            ), options: options, restore: masked.restore))
         }
         func finish(_ formatting: MaskedText) -> String {
             let formatted = WritingStyleEngine.format(
                 formatting.text, rules: finalRules, globalAutoCapitalize: options.autoCapitalize,
                 globalTrailingSpace: options.trailingSpace
             )
-            return masked.restore(in: formatting.restore(in: Self.layingOut(formatted, options: options)))
+            return masked.restore(in: formatting.restore(in: Self.layingOut(
+                formatted, options: options, restore: { masked.restore(in: formatting.restore(in: $0)) }
+            )))
         }
 
         let styleName = plan.styleName
@@ -480,7 +482,7 @@ struct DictationOutputPipeline {
         let fallback = masked.restore(in: Self.layingOut(WritingStyleEngine.format(
             masked.text, rules: profile.rules, globalAutoCapitalize: options.autoCapitalize,
             globalTrailingSpace: options.trailingSpace
-        ), options: options))
+        ), options: options, restore: masked.restore))
         // Code and Terminal text may be a command. The model may only point
         // at filler there; see `CleanupSalvage`.
         let technical = !profile.format.supportsWording
@@ -915,10 +917,13 @@ struct DictationOutputPipeline {
     /// `formatted` with an email's greeting on a line of its own, when the
     /// options lay out paragraphs. Takes text whose protected spans are still
     /// placeholders, so a snippet or dictionary term stays exactly as saved.
-    static func layingOut(_ formatted: String, options: DictationOutputOptions) -> String {
+    /// `restore` puts the protected text back; it is only used to count words.
+    static func layingOut(
+        _ formatted: String, options: DictationOutputOptions, restore: (String) -> String
+    ) -> String {
         guard options.laysOutParagraphs, options.profile.format == .email,
               options.profile.cleanup != .raw else { return formatted }
-        return PauseParagraphs.separatingGreeting(formatted)
+        return PauseParagraphs.separatingGreeting(formatted, restore: restore)
     }
 
     private static let paragraphBreakExpression = try? NSRegularExpression(pattern: #"\s*\n[ \t]*\n\s*"#)

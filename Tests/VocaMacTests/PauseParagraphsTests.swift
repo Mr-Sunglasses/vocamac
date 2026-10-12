@@ -359,6 +359,13 @@ final class PauseParagraphsPipelineTests: XCTestCase {
         XCTAssertEqual(term.text, "Hi sarah,\n\neBay sent the invoice today.", "The break is made; the casing is kept")
     }
 
+    func testSnippetCountsAsItsWordsAfterTheGreeting() async {
+        let result = await processEmail(
+            "hi Sarah, thanks reply text.", snippets: [Snippet(trigger: "reply text", expansion: "for sending the deck over")]
+        )
+        XCTAssertEqual(result.text, "Hi Sarah,\n\nThanks for sending the deck over.")
+    }
+
     func testSnippetElsewhereStillGetsAGreetingLine() async {
         let result = await processEmail(
             "hi Sarah, thanks for the notes from her name.", snippets: [Snippet(trigger: "her name", expansion: "Sarah")]

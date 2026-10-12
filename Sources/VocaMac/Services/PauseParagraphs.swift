@@ -108,12 +108,16 @@ enum PauseParagraphs {
     /// timings, the model never sees a greeting cut off from its sentence,
     /// and protected text (a snippet, a dictionary term) is still one
     /// caseless placeholder, so it is neither split nor recased.
-    static func separatingGreeting(_ text: String) -> String {
+    ///
+    /// - Parameter restore: Puts the protected text back, for counting the
+    ///   words after the greeting as they will read: a snippet is one
+    ///   placeholder but may be a whole sentence.
+    static func separatingGreeting(_ text: String, restore: (String) -> String = { $0 }) -> String {
         guard let greetingExpression,
               let match = greetingExpression.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
               let greeting = Range(match.range(at: 1), in: text),
               let next = Range(match.range(at: 2), in: text),
-              words(in: String(text[next.lowerBound...])).count >= 3 else { return text }
+              words(in: restore(String(text[next.lowerBound...]))).count >= 3 else { return text }
         return String(text[greeting]) + "\n\n" + text[next].uppercased() + String(text[next.upperBound...])
     }
 
