@@ -111,10 +111,13 @@ struct DictationOutputPipeline {
         // any. An emoji ends a sentence on its own, so a full stop that
         // cleanup puts after it is dropped on the way out.
         var closingGlyph: String?
+        // Snippet expansions and dictionary terms, which the greeting line
+        // must leave exactly as saved.
+        var protectedSpans: [String] = []
         func result(_ text: String, _ summary: String) -> DictationOutputResult {
             var text = closingGlyph.map { Self.droppingFullStop(after: $0, in: text) } ?? text
             if options.laysOutParagraphs, options.profile.format == .email, options.profile.cleanup != .raw {
-                text = PauseParagraphs.separatingGreeting(text)
+                text = PauseParagraphs.separatingGreeting(text, protected: protectedSpans)
             }
             return DictationOutputResult(original: original, text: text, summary: summary)
         }
@@ -128,6 +131,7 @@ struct DictationOutputPipeline {
             prepared = value
         }
         closingGlyph = prepared.closingGlyph
+        protectedSpans = prepared.masked.replacements
 
         let plan: CleanupPlan
         switch planCleanup(prepared, options: options) {

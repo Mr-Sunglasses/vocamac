@@ -232,6 +232,25 @@ final class PauseParagraphsTests: XCTestCase {
         )
     }
 
+    func testGreetingLeavesProtectedTextAsSaved() {
+        let snippet = "Hi Sarah, eBay sent the invoice."
+        XCTAssertEqual(PauseParagraphs.separatingGreeting(snippet, protected: [snippet]), snippet)
+        XCTAssertEqual(
+            PauseParagraphs.separatingGreeting("Hi Sarah, eBay sent the invoice today.", protected: ["eBay"]),
+            "Hi Sarah,\n\neBay sent the invoice today."
+        )
+        XCTAssertEqual(
+            PauseParagraphs.separatingGreeting("Hi Sarah, thanks for the deck.", protected: ["Sarah, thanks"]),
+            "Hi Sarah, thanks for the deck.",
+            "A term spanning the comma keeps its space"
+        )
+        XCTAssertEqual(
+            PauseParagraphs.separatingGreeting("Hi Sarah, thanks for the eBay invoice.", protected: ["eBay"]),
+            "Hi Sarah,\n\nThanks for the eBay invoice.",
+            "A term further on changes nothing"
+        )
+    }
+
     func testNotEveryHeyIsAGreeting() {
         for text in [
             "Hey, can you send me the deck?",
@@ -335,6 +354,30 @@ final class PauseParagraphsPipelineTests: XCTestCase {
 
         let chat = await process(input, cleaner: MockTranscriptCleanup(), format: .chat, enabled: false)
         XCTAssertEqual(chat.text, input, "Only emails get a greeting line")
+    }
+
+    func testEmailSnippetKeepsItsSavedText() async {
+        let expansion = "Hi Sarah, eBay sent the invoice."
+        let result = await DictationOutputPipeline(cleaner: MockTranscriptCleanup(), snippets: SnippetExpander()).process(
+            "invoice note",
+            profile: WritingProfile(format: .email, rules: WritingStyle.email.defaultRules, intent: .preserve, cleanup: .inherit),
+            snippetList: [Snippet(trigger: "invoice note", expansion: expansion)],
+            cleanupEnabled: false, rewritingEnabled: false,
+            model: .defaultKind, customPrompt: "", cleanupLevel: .medium,
+            language: "en", autoCapitalize: true, trailingSpace: false,
+            laysOutParagraphs: true
+        )
+        XCTAssertEqual(result.text, expansion)
+    }
+
+    func testExactlyAsTranscribedGetsNoLayout() {
+        func profile(_ format: WritingStyle, _ cleanup: WritingCleanupPolicy) -> WritingProfile {
+            WritingProfile(format: format, rules: format.defaultRules, intent: .preserve, cleanup: cleanup)
+        }
+        XCTAssertTrue(AppState.laysOutParagraphs(enabled: true, profile: profile(.email, .inherit)))
+        XCTAssertFalse(AppState.laysOutParagraphs(enabled: true, profile: profile(.email, .raw)))
+        XCTAssertFalse(AppState.laysOutParagraphs(enabled: true, profile: profile(.plain, .raw)))
+        XCTAssertFalse(AppState.laysOutParagraphs(enabled: false, profile: profile(.email, .inherit)))
     }
 
     func testPiecesStillMatchAcrossAParagraphBreak() {

@@ -2808,7 +2808,7 @@ final class AppState: ObservableObject {
                     nextWritingProfile = nil
                     activeWritingStyle = resolved
                 }
-                let laysOutParagraphs = pauseParagraphs && profile.format.allowsParagraphs
+                let laysOutParagraphs = Self.laysOutParagraphs(enabled: pauseParagraphs, profile: profile)
                 let spoken = laysOutParagraphs
                     ? await Self.paragraphsAtPauses(result, audio: audioData)
                     : result.text
@@ -4573,6 +4573,13 @@ extension AppState {
         dismissedRecoveryEntryID = id
     }
 
+    /// Whether a dictation in `profile` gets paragraph breaks at its pauses:
+    /// only in a style that allows paragraphs, and never "Exactly as
+    /// transcribed", which promises no formatting at all.
+    nonisolated static func laysOutParagraphs(enabled: Bool, profile: WritingProfile) -> Bool {
+        enabled && profile.format.allowsParagraphs && profile.cleanup != .raw
+    }
+
     /// The transcript with a paragraph break at each long pause between two
     /// sentences. Reads the whole recording's loudness, so it runs off the
     /// main thread.
@@ -4612,7 +4619,7 @@ extension AppState {
             var output: DictationOutputResult?
             if !text.isEmpty {
                 let profile = resolveWritingStyle(for: entry.targetApp).profile
-                let laysOutParagraphs = pauseParagraphs && profile.format.allowsParagraphs
+                let laysOutParagraphs = Self.laysOutParagraphs(enabled: pauseParagraphs, profile: profile)
                 let spoken = laysOutParagraphs
                     ? await Self.paragraphsAtPauses(result, audio: samples)
                     : result.text
