@@ -35,9 +35,12 @@ final class TextInjector: @unchecked Sendable {
     /// Time left after the target's read for it to finish with the data.
     private let pasteReceiptSettle: Double = 0.05
 
-    /// Delay before simulating the Cmd+V keystroke, giving the
-    /// pasteboard a moment to settle after we write to it.
-    private let prePasteDelay: Double = 0.05
+    /// Delay before simulating the Cmd+V keystroke. The write itself is
+    /// done when it returns; this is the window in which a clipboard manager
+    /// that rewrites the board is caught by the change-count check after it.
+    /// Managers that poll do so far less often than 50 ms, so the longer wait
+    /// only delayed every paste.
+    private let prePasteDelay: Double = 0.01
 
     /// Default virtual key code for the V key on a US-QWERTY layout.
     /// Used as a fallback when the active layout cannot be inspected.
@@ -338,8 +341,7 @@ final class TextInjector: @unchecked Sendable {
     ///            `.uncertain` if the write timed out and may still land.
     @discardableResult
     private func injectViaAccessibility(text: String, targetPID: pid_t?) -> AccessibilityInsertion {
-        let systemWide = AXUIElementCreateSystemWide()
-        AXUIElementSetMessagingTimeout(systemWide, 0.1)
+        let systemWide = AccessibilityTimeout.systemWideElement()
         var focusedRef: CFTypeRef?
 
         let fetchResult = AXUIElementCopyAttributeValue(

@@ -224,7 +224,11 @@ final class AudioEngine: @unchecked Sendable {
     private let firstBufferSeen = OSAllocatedUnfairLock(initialState: false)
     private var configuredInputDeviceID: AudioDeviceID?
     /// Zero-based input channel chosen by the user for multi-channel devices.
-    private var preferredInputChannel = 0
+    /// Read by the input tap, so it lives in `captureSettings`.
+    private var preferredInputChannel: Int {
+        get { captureSettings.withLock { $0.preferredInputChannel } }
+        set { captureSettings.withLock { $0.preferredInputChannel = newValue } }
+    }
     /// Device layout the persisted input-channel index belongs to.
     private var preferredInputChannelDeviceUID: String?
     private var preferredInputChannelCount = 0
@@ -248,6 +252,8 @@ final class AudioEngine: @unchecked Sendable {
     static let firstInputBufferTimeout: TimeInterval = 0.75
     static let firstInputBufferPollInterval: TimeInterval = 0.01
     static let idleEngineReleaseDelay: TimeInterval = 3.0
+    /// Seconds of audio reserved before a recording starts.
+    static let reservedCaptureSeconds: TimeInterval = 50
     /// A nil format asks AVAudioEngine to bind the tap to the input node's live
     /// hardware format. The format can change while USB and Bluetooth routes settle.
     static let inputTapFormat: AVAudioFormat? = nil
@@ -290,10 +296,49 @@ final class AudioEngine: @unchecked Sendable {
 
     // Silence detection
     private let silenceDetector = OSAllocatedUnfairLock(initialState: SilenceDetector())
-    private var silenceThreshold: Float = 0.01
-    private var silenceDuration: Double = 2.0
-    private var maxDuration: TimeInterval = 60.0
-    private var recordingStartTime: Date = Date()
+
+    /// What the input tap reads on every buffer. `lifecycleQueue` writes it
+    /// while the tap runs on Core Audio's thread, so it sits behind a lock
+    /// like `capturePhase` rather than in plain properties.
+    private struct CaptureSettings {
+        var silenceThreshold: Float = 0.01
+        var silenceDuration: Double = 2.0
+        var maxDuration: TimeInterval = 60.0
+        var recordingStartTime = Date()
+        /// Whether the max-duration callback has already fired.
+        var maxDurationCallbackFired = false
+        var preferredInputChannel = 0
+    }
+
+    private let captureSettings = OSAllocatedUnfairLock(initialState: CaptureSettings())
+
+    private var silenceThreshold: Float {
+        get { captureSettings.withLock { $0.silenceThreshold } }
+        set { captureSettings.withLock { $0.silenceThreshold = newValue } }
+    }
+    private var silenceDuration: Double {
+        get { captureSettings.withLock { $0.silenceDuration } }
+        set { captureSettings.withLock { $0.silenceDuration = newValue } }
+    }
+    private var maxDuration: TimeInterval {
+        get { captureSettings.withLock { $0.maxDuration } }
+        set { captureSettings.withLock { $0.maxDuration = newValue } }
+    }
+    private var recordingStartTime: Date {
+        get { captureSettings.withLock { $0.recordingStartTime } }
+        set { captureSettings.withLock { $0.recordingStartTime = newValue } }
+    }
+    private var maxDurationCallbackFired: Bool {
+        get { captureSettings.withLock { $0.maxDurationCallbackFired } }
+        set { captureSettings.withLock { $0.maxDurationCallbackFired = newValue } }
+    }
+
+    /// Buffers the tap has kept, so a stop can wait for the one in flight.
+    private let deliveredBufferCount = OSAllocatedUnfairLock(initialState: 0)
+    /// Set while a stop waits for `lifecycleQueue`, so a route-change restart
+    /// holding it gives up its settle loops instead of making the stop wait
+    /// seconds behind it. Read lock-free for the same reason as `startCancelled`.
+    private let stopRequested = OSAllocatedUnfairLock(initialState: false)
 
     // Audio level throttling
     private var lastLevelReportTime: Date = Date()
@@ -389,6 +434,13 @@ final class AudioEngine: @unchecked Sendable {
     /// Must be called on `lifecycleQueue`.
     private func scheduleEngineRelease() {
         pendingEngineRelease?.cancel()
+        pendingEngineRelease = nil
+
+        let isBluetooth = configuredInputDeviceID.map(Self.isBluetoothDevice) ?? true
+        guard Self.releasesEngineWhenIdle(isBluetoothInput: isBluetooth) else {
+            VocaLogger.debug(.audioEngine, "AVAudioEngine instance kept for the next recording (not Bluetooth)")
+            return
+        }
 
         let workItem = DispatchWorkItem { [weak self] in
             guard let self, !self._isCurrentlyRecording else { return }
@@ -398,6 +450,22 @@ final class AudioEngine: @unchecked Sendable {
 
         lifecycleQueue.asyncAfter(deadline: .now() + Self.idleEngineReleaseDelay, execute: workItem)
         VocaLogger.debug(.audioEngine, "AVAudioEngine instance scheduled for idle release")
+    }
+
+    /// Whether a stopped engine is released after `idleEngineReleaseDelay`.
+    ///
+    /// Only a Bluetooth input needs it: a stopped engine keeps the headset in
+    /// its call (HFP) profile, which degrades its audio and breaks media
+    /// controls in other apps. A built-in or USB microphone has no such
+    /// profile, and keeping the engine spares the next recording a cold start.
+    /// An unknown input is treated as Bluetooth. A route change while idle
+    /// still retires the engine (`handleAudioConfigurationChange`).
+    static func releasesEngineWhenIdle(isBluetoothInput: Bool) -> Bool {
+        isBluetoothInput
+    }
+
+    var isConfiguredInputBluetoothForTesting: Bool {
+        lifecycleQueue.sync { configuredInputDeviceID.map(Self.isBluetoothDevice) ?? true }
     }
 
     // MARK: - Audio Configuration Change
@@ -453,6 +521,16 @@ final class AudioEngine: @unchecked Sendable {
                     return
                 }
 
+                if self.stopRequested.withLock({ $0 }) {
+                    // A stop is waiting behind this restart and gave up its
+                    // settle. Leave the recording on for it, with what was
+                    // captured before the change, and drop the broken graph.
+                    VocaLogger.info(.audioEngine, "Stop arrived during the route-change restart; ending the recording there")
+                    self.setCaptureActive(false)
+                    self.removeInputTap(reason: "stop during configuration-change restart")
+                    self.retireEngineAfterConfigurationChange()
+                    return
+                }
                 VocaLogger.warning(.audioEngine, "Failed to restart audio graph after configuration change")
                 self.setRecordingActive(false)
                 self.silenceDetector.withLock { $0.reset() }
@@ -599,8 +677,10 @@ final class AudioEngine: @unchecked Sendable {
         startCancelled.withLock { $0 = true }
     }
 
+    /// Whether route negotiation should give up: the start was cancelled,
+    /// or a stop is waiting behind a route-change restart.
     private var isStartCancelled: Bool {
-        startCancelled.withLock { $0 }
+        startCancelled.withLock { $0 } || stopRequested.withLock { $0 }
     }
 
     /// Start recording audio from the microphone
@@ -797,9 +877,14 @@ final class AudioEngine: @unchecked Sendable {
     /// Stop recording and return the captured audio samples
     /// - Returns: Array of Float32 PCM samples at 16kHz mono
     func stopRecording() -> [Float] {
-        lifecycleQueue.sync {
+        // Before queuing: a route-change restart holding `lifecycleQueue`
+        // (seconds on Bluetooth) sees this and stops settling.
+        stopRequested.withLock { $0 = true }
+        return lifecycleQueue.sync {
+            defer { stopRequested.withLock { $0 = false } }
             guard _isCurrentlyRecording else { return [] }
 
+            collectInputTail()
             setRecordingActive(false)
             removeInputTap(reason: "stop recording")
             engine?.stop()
@@ -817,6 +902,29 @@ final class AudioEngine: @unchecked Sendable {
             scheduleEngineRelease()
 
             return samples
+        }
+    }
+
+    /// Longest a stop waits for the tap's next buffer.
+    static let stopTailWait: TimeInterval = 0.1
+
+    /// Wait for the buffer Core Audio is filling when the user stops.
+    ///
+    /// The tap delivers a buffer every ~85 ms (4,096 frames at 48 kHz).
+    /// Removing it at once threw away whatever had been captured since the
+    /// last one, often the end of the last word. The tap keeps taking audio
+    /// meanwhile, without silence or time-limit checks, until one more buffer
+    /// arrives or `stopTailWait` passes. Smaller tap buffers would not help:
+    /// AVAudioEngine does not go below about 100 ms on macOS.
+    /// Must be called on `lifecycleQueue`.
+    private func collectInputTail() {
+        guard engine?.isRunning == true,
+              capturePhase.withLock({ $0 == .recording }) else { return }
+        capturePhase.withLock { $0 = .preparing }
+        let delivered = deliveredBufferCount.withLock { $0 }
+        let deadline = Date().addingTimeInterval(Self.stopTailWait)
+        while Date() < deadline, deliveredBufferCount.withLock({ $0 }) == delivered {
+            Thread.sleep(forTimeInterval: 0.005)
         }
     }
 
@@ -859,8 +967,9 @@ final class AudioEngine: @unchecked Sendable {
     private func resetRecordingState() {
         clearAudioBuffer()
         // Allocate before the tap starts, including room for route preparation.
-        // Cap speculative reservation; unexpectedly long recordings can still grow.
-        let seconds = maxDuration.isFinite ? min(600, max(0, maxDuration)) : 60
+        // Most dictations are short, so reserve a minute (~4 MB) rather than
+        // the whole limit (39 MB at ten minutes); a longer one grows as it goes.
+        let seconds = maxDuration.isFinite ? min(Self.reservedCaptureSeconds, max(0, maxDuration)) : 60
         capturedAudio.withLock { $0.reserveCapacity(Int((seconds + 10) * 16_000)) }
         silenceDetector.withLock { $0.reset() }
         recordingStartTime = Date()
@@ -1199,9 +1308,6 @@ final class AudioEngine: @unchecked Sendable {
 
     // MARK: - Audio Processing
 
-    /// Whether max duration callback has already fired
-    private var maxDurationCallbackFired = false
-
     /// Process an incoming audio buffer from AVAudioEngine
     private func processAudioBuffer(_ buffer: AVAudioPCMBuffer, inputFormat: AVAudioFormat) {
         // Deliberately not `isCurrentlyRecording`: that reads through
@@ -1267,6 +1373,7 @@ final class AudioEngine: @unchecked Sendable {
                     : Array(UnsafeBufferPointer(start: channelData[0], count: frameCount))
                 observer(chunk, offset)
             }
+            deliveredBufferCount.withLock { $0 &+= 1 }
         }
 
         // Capture buffers during startup so the first word is preserved, but
@@ -1275,10 +1382,15 @@ final class AudioEngine: @unchecked Sendable {
         // before changing this phase to `.recording`.
         guard capturePhase.withLock({ $0.evaluatesStopConditions }) else { return }
 
-        // Check max duration (fire callback only once)
-        let elapsed = now.timeIntervalSince(recordingStartTime)
-        if elapsed >= maxDuration && !maxDurationCallbackFired {
-            maxDurationCallbackFired = true
+        // Check max duration (fire callback only once). Checked and marked
+        // in one step, so a reset from `lifecycleQueue` can't land between.
+        let (reachedMaxDuration, settings) = captureSettings.withLock { settings -> (Bool, CaptureSettings) in
+            let reached = now.timeIntervalSince(settings.recordingStartTime) >= settings.maxDuration
+                && !settings.maxDurationCallbackFired
+            if reached { settings.maxDurationCallbackFired = true }
+            return (reached, settings)
+        }
+        if reachedMaxDuration {
             DispatchQueue.main.async { [weak self] in
                 self?.onMaxDurationReached?()
             }
@@ -1288,8 +1400,8 @@ final class AudioEngine: @unchecked Sendable {
         let didDetectSilence = silenceDetector.withLock {
             $0.observe(
                 energy: energy,
-                threshold: silenceThreshold,
-                duration: silenceDuration,
+                threshold: settings.silenceThreshold,
+                duration: settings.silenceDuration,
                 at: now
             )
         }

@@ -39,6 +39,8 @@ actor ParakeetVocabularyBoost {
     private var generation = 0
     private var session: VocabularyBoostingSession?
     private var sessionTerms: [String] = []
+    /// Whether `session` was built for written-form (ITN) output.
+    private var sessionWritesNumbers = false
 
     // MARK: - Model files
 
@@ -101,6 +103,7 @@ actor ParakeetVocabularyBoost {
         generation &+= 1
         session = nil
         sessionTerms = []
+        sessionWritesNumbers = false
         models = nil
     }
 
@@ -110,6 +113,9 @@ actor ParakeetVocabularyBoost {
     ///
     /// - Parameter language: The dictation language, if known. Decides
     ///   whether heard words are checked against the English spell checker.
+    /// - Parameter writesNumbers: The model writes numbers and symbols
+    ///   ("35.3%"), as Parakeet Unified does, so the rescorer uses FluidAudio's
+    ///   stricter settings for that kind of text.
     /// - Returns: The boosted text, or nil when there is nothing to boost,
     ///   the model is not ready, or no replacement passed the safety checks.
     ///   A nil result always means "keep the plain transcript".
@@ -118,7 +124,8 @@ actor ParakeetVocabularyBoost {
         tokenTimings: [TokenTiming]?,
         audio: [Float],
         terms: [String],
-        language: String?
+        language: String?,
+        writesNumbers: Bool = false
     ) async -> String? {
         guard !terms.isEmpty, let tokenTimings, !tokenTimings.isEmpty else { return nil }
         // Removed from Settings while Parakeet stays loaded: turn off now.
@@ -128,8 +135,17 @@ actor ParakeetVocabularyBoost {
             if models != nil || isLoadingModels { unload() }
             return nil
         }
-        guard let session = await session(for: terms) else {
+        guard let session = await session(for: terms, writesNumbers: writesNumbers) else {
             prepare()
+            return nil
+        }
+
+        // The CTC pass costs a third to half a second. When no run of the
+        // words Parakeet heard is spelled close enough to a term to pass
+        // `accepted`, nothing it proposes could be kept, so skip it.
+        let words = buildWordTimings(from: tokenTimings).map(\.word)
+        guard Self.couldAcceptReplacement(heardWords: words, terms: terms) else {
+            VocaLogger.debug(.parakeetService, "Vocabulary boost skipped: no words close to a Dictionary term")
             return nil
         }
 
@@ -175,13 +191,54 @@ actor ParakeetVocabularyBoost {
             guard !heardWords.allSatisfy(isKnownWord) else { return false }
             let heard = DictionaryCorrector.normalized(replacement.original)
             let term = DictionaryCorrector.normalized(replacement.replacement)
-            guard known.contains(term), !heard.isEmpty, heard != term,
-                  DictionaryCorrector.firstSound(heard) == DictionaryCorrector.firstSound(term) else { return false }
-            let limit = max(1, Int(Double(max(heard.count, term.count)) * 0.34))
-            return DictionaryCorrector.levenshtein(heard, term, limit: limit) <= limit
+            return known.contains(term) && isSpelledClose(heard: heard, term: term)
         }
         let wordCount = text.split(whereSeparator: \.isWhitespace).count
         return close.count <= maximumReplacements(wordCount: wordCount) ? close : []
+    }
+
+    /// Whether heard words (normalized) could be written over with `term`
+    /// (normalized): spelled close to it, with the same first sound.
+    static func isSpelledClose(heard: String, term: String) -> Bool {
+        guard !heard.isEmpty, heard != term,
+              DictionaryCorrector.firstSound(heard) == DictionaryCorrector.firstSound(term) else { return false }
+        let limit = closenessLimit(heardCount: heard.count, termCount: term.count)
+        return DictionaryCorrector.levenshtein(heard, term, limit: limit) <= limit
+    }
+
+    /// Edits allowed between heard words and a term: a third of the longer.
+    private static func closenessLimit(heardCount: Int, termCount: Int) -> Int {
+        max(1, Int(Double(max(heardCount, termCount)) * 0.34))
+    }
+
+    /// Whether any run of consecutive words in the transcript passes
+    /// `isSpelledClose` for one of `terms`.
+    ///
+    /// The rescorer only ever proposes a run of the decoder's own words (its
+    /// word timings, which `heardWords` must be), and `accepted` keeps a
+    /// proposal only when that run is spelled close to a term. So when this is
+    /// false, rescoring cannot change the transcript and can be skipped. It
+    /// leaves out `accepted`'s other checks (real words, how many), so it is
+    /// never false where they would have let something through.
+    static func couldAcceptReplacement(heardWords: [String], terms: [String]) -> Bool {
+        let words = heardWords.map(DictionaryCorrector.normalized)
+        let keys = Set(terms.map(DictionaryCorrector.normalized)).filter { !$0.isEmpty }
+        for term in keys {
+            for start in words.indices {
+                var heard = ""
+                for word in words[start...] {
+                    heard += word
+                    // Longer runs only differ more in length: once a run is
+                    // further from the term than the limit allows, so is every
+                    // longer one.
+                    let limit = closenessLimit(heardCount: heard.count, termCount: term.count)
+                    if heard.count - term.count > limit { break }
+                    if heard.count + limit < term.count { continue }
+                    if isSpelledClose(heard: heard, term: term) { return true }
+                }
+            }
+        }
+        return false
     }
 
     /// The words in `words` that the system spell checker knows. It checks
@@ -218,22 +275,27 @@ actor ParakeetVocabularyBoost {
     /// The boosting session for this term list, or nil until the CTC model
     /// has loaded. Rebuilding re-tokenizes every term (a few milliseconds),
     /// so it only happens when the list changes.
-    private func session(for terms: [String]) async -> VocabularyBoostingSession? {
-        if let session, sessionTerms == terms { return session }
+    private func session(for terms: [String], writesNumbers: Bool) async -> VocabularyBoostingSession? {
+        if let session, sessionTerms == terms, sessionWritesNumbers == writesNumbers { return session }
         guard let models else { return nil }
         do {
             let vocabulary = CustomVocabularyContext(
                 terms: terms.map { CustomVocabularyTerm(text: $0) },
                 minTermLength: RecognitionHints.minimumBoostTermLength
             )
-            let session = try await VocabularyBoostingSession(vocabulary: vocabulary, ctcModels: models)
+            let session = try await VocabularyBoostingSession(
+                vocabulary: vocabulary, ctcModels: models,
+                config: writesNumbers ? VocabularyBoostingSession.itnDefaultConfig : nil
+            )
             self.session = session
             sessionTerms = terms
+            sessionWritesNumbers = writesNumbers
             return session
         } catch {
             VocaLogger.warning(.parakeetService, "Vocabulary boost unavailable: \(error.localizedDescription)")
             session = nil
             sessionTerms = []
+            sessionWritesNumbers = false
             return nil
         }
     }

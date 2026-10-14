@@ -1255,7 +1255,7 @@ struct MenuBarView: View {
         switch appState.appStatus {
         case .idle:       return appState.dictationReadinessTitle
         case .recording:  return "Recording..."
-        case .processing: return "Transcribing..."
+        case .processing: return appState.dictationPhase == .loadingModel ? "Loading speech model…" : "Transcribing..."
         case .error:      return appState.errorMessage ?? "Error"
         }
     }

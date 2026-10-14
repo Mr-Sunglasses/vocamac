@@ -215,6 +215,9 @@ actor VoiceActivityDetector {
         Task {
             do {
                 let manager = try await VadManager(config: VadConfig(defaultThreshold: Self.speechThreshold))
+                // CoreML's first prediction is the slow one; take it here
+                // rather than on the first dictation.
+                _ = try? await manager.process([Float](repeating: 0, count: SpeechActivityTrimmer.sampleRate))
                 self.finishLoading(manager, generation: generation)
             } catch {
                 VocaLogger.warning(.general, "Voice activity detection unavailable: \(error.localizedDescription)")
@@ -233,6 +236,14 @@ actor VoiceActivityDetector {
 
     var isLoaded: Bool { manager != nil }
     var isLoadInFlight: Bool { isLoading }
+
+    /// Wait for a load in flight to finish, for at most `timeout` seconds.
+    func waitUntilLoaded(timeout: TimeInterval) async {
+        let deadline = Date().addingTimeInterval(timeout)
+        while isLoading, Date() < deadline, !Task.isCancelled {
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+    }
 
     /// Release the model with the speech engine; the next decode reloads it.
     func unload() {

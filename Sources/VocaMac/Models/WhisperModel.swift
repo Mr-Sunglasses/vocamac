@@ -30,6 +30,7 @@ enum ModelSize: String, CaseIterable, Codable, Identifiable {
     case parakeetUltra                = "parakeet-ultra"
     case parakeetV3                   = "parakeet-tdt-0.6b-v3"
     case parakeetV2                   = "parakeet-tdt-0.6b-v2"
+    case parakeetUnified              = "parakeet-unified-en-0.6b"
     case parakeetTdtCtc110m           = "parakeet-tdt-ctc-110m"
 
     // Apple Speech (macOS 26+ system engine)
@@ -51,7 +52,7 @@ enum ModelSize: String, CaseIterable, Codable, Identifiable {
     /// Which engine runs this model.
     var engine: TranscriptionEngine {
         switch self {
-        case .parakeetUltra, .parakeetV3, .parakeetV2, .parakeetTdtCtc110m:
+        case .parakeetUltra, .parakeetV3, .parakeetV2, .parakeetUnified, .parakeetTdtCtc110m:
             return .parakeet
         case .appleSpeech:
             return .appleSpeech
@@ -170,6 +171,7 @@ enum ModelSize: String, CaseIterable, Codable, Identifiable {
     static let standardCatalog: [ModelSize] = [
         .parakeetUltra,
         .parakeetV3,
+        .parakeetUnified,
         .parakeetV2,
         .parakeetTdtCtc110m,
         .tiny,
@@ -215,6 +217,7 @@ enum ModelSize: String, CaseIterable, Codable, Identifiable {
         case .parakeetUltra:             return "Parakeet Ultra (Multilingual)"
         case .parakeetV3:                return "Parakeet v3 (Multilingual)"
         case .parakeetV2:                return "Parakeet v2 (English)"
+        case .parakeetUnified:           return "Parakeet Unified (English)"
         case .parakeetTdtCtc110m:        return "Parakeet 110M (English)"
         case .appleSpeech:               return "Apple Speech (System)"
         case .moonshineTiny:             return "Moonshine v2 Tiny (English)"
@@ -257,6 +260,8 @@ enum ModelSize: String, CaseIterable, Codable, Identifiable {
         case .parakeetUltra:             return 632_314_500
         case .parakeetV3:                return 483_257_242
         case .parakeetV2:                return 464_413_250
+        // The batch export only: int8 encoder, decoder, joint, and vocab.
+        case .parakeetUnified:           return 614_080_920
         case .parakeetTdtCtc110m:        return 227_468_698
         case .appleSpeech, .customEndpoint: return 0
         case .moonshineTiny:             return 44_441_158
@@ -346,6 +351,7 @@ enum ModelSize: String, CaseIterable, Codable, Identifiable {
         case .parakeetUltra:             return 1
         case .parakeetV3:                return 1
         case .parakeetV2:                return 1
+        case .parakeetUnified:           return 1
         case .parakeetTdtCtc110m:        return 1
         case .appleSpeech:               return 2
         case .moonshineTiny:             return 2
@@ -377,6 +383,7 @@ enum ModelSize: String, CaseIterable, Codable, Identifiable {
         case .parakeetUltra:             return "Excellent"
         case .parakeetV3:                return "Excellent"
         case .parakeetV2:                return "Excellent"
+        case .parakeetUnified:           return "Excellent"
         case .parakeetTdtCtc110m:        return "Great"
         case .appleSpeech:               return "Excellent"
         case .moonshineTiny:             return "Good"

@@ -267,6 +267,25 @@ final class CLITests: XCTestCase {
         XCTAssertFalse(selected.systemManaged)
     }
 
+    func testListModelsIncludesParakeetUnified() async throws {
+        let dependencies = makeDependencies(selectedModel: .parakeetUnified)
+        var standardOutput = Data()
+        let entrypoint = CLIEntrypoint(
+            headlessTranscriber: dependencies.headless,
+            stdout: { standardOutput.append($0) },
+            stderr: { _ in XCTFail("Model listing should not fail.") }
+        )
+
+        let exitCode = await entrypoint.run(arguments: ["--list-models", "--json"])
+        XCTAssertEqual(exitCode, 0)
+        let response = try JSONDecoder().decode(CLIModelListResponse.self, from: standardOutput)
+        let unified = try XCTUnwrap(response.models.first { $0.id == "parakeet-unified-en-0.6b" })
+        XCTAssertEqual(unified.name, "Parakeet Unified (English)")
+        XCTAssertEqual(unified.engine, "parakeet")
+        XCTAssertTrue(unified.selected)
+        XCTAssertFalse(unified.systemManaged)
+    }
+
     // MARK: - Transcription JSON
 
     func testSuccessJSONIncludesContractFieldsAndLanguage() async throws {

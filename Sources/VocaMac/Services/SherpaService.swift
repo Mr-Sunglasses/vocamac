@@ -256,6 +256,21 @@ final class SherpaService: @unchecked Sendable {
         return generation
     }
 
+    /// Run one short decode right after a load, so the user's first
+    /// dictation does not pay for ONNX Runtime's first run (memory arenas,
+    /// weights paged in). Decoded as a preview: once, with nothing saved.
+    func warmUp() async {
+        guard isModelLoaded else { return }
+        let start = CFAbsoluteTimeGetCurrent()
+        do {
+            _ = try await transcribe(audioData: WhisperService.warmUpAudio, isPreview: true)
+            let elapsed = CFAbsoluteTimeGetCurrent() - start
+            VocaLogger.info(.sherpaService, "Warm-up decode took \(String(format: "%.2f", elapsed))s")
+        } catch {
+            VocaLogger.debug(.sherpaService, "Warm-up decode failed: \(error.localizedDescription)")
+        }
+    }
+
     // MARK: - Transcription
 
     /// Transcribe audio data to text.

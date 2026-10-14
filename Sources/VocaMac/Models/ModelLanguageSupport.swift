@@ -56,7 +56,7 @@ extension ModelSize {
             return .only(["hi", "en"])
         case .parakeetUltra, .parakeetV3:
             return .only(Self.parakeetV3Languages)
-        case .parakeetV2, .parakeetTdtCtc110m, .moonshineTiny, .moonshineBase:
+        case .parakeetV2, .parakeetUnified, .parakeetTdtCtc110m, .moonshineTiny, .moonshineBase:
             return .only(["en"])
         case .appleSpeech:
             return .system
@@ -98,6 +98,11 @@ extension ModelSize {
         // 4.12 %, FLEURS mean 11.67 vs 14.81 %), so it ranks above v3's
         // "Excellent" without claiming Whisper Large's "Best".
         if self == .parakeetUltra { return 0.9 }
+        // Parakeet Unified: 5.91 % average WER on the Open ASR Leaderboard
+        // against v2's 6.04 %, and 2.15 % on LibriSpeech test-clean in
+        // FluidAudio's own run. Published figures, not measured in VocaMac,
+        // so it sits a step above v2 and below Ultra.
+        if self == .parakeetUnified { return 0.87 }
         switch qualityDescription {
         case "Good":      return 0.4
         case "Better":    return 0.55
@@ -141,6 +146,7 @@ extension ModelSize {
         case .parakeetUltra:             return "Parakeet v3, post-trained to be more accurate at the same speed. 25 European languages."
         case .parakeetV3:                return "Very fast on the Neural Engine, with 25 European languages."
         case .parakeetV2:                return "Very fast on the Neural Engine, with top English accuracy."
+        case .parakeetUnified:           return "NVIDIA's newest English Parakeet, with punctuation, capitals, and numbers written as digits."
         case .parakeetTdtCtc110m:        return "A compact English model with low memory use."
         case .appleSpeech:               return "Built into macOS. Nothing to download in VocaMac."
         case .moonshineTiny:             return "A tiny English model for Macs short on memory."

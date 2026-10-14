@@ -623,9 +623,11 @@ final class AppState: ObservableObject {
     private var pendingStopDuringStart: PendingStopKind?
 
     /// True while `startRecording` waits for the speech model to load after
-    /// an idle unload. A stop arriving then can't stop anything yet, so it is
-    /// remembered here and the recording is never started.
-    private var isLoadingModelForRecording = false
+    /// an idle unload. The microphone is already open (`earlyCapture`); a
+    /// stop arriving then is remembered here and applied once the model is
+    /// ready. Published so the menu can say the model is loading rather than
+    /// transcribing (`dictationPhase`).
+    @Published private(set) var isLoadingModelForRecording = false
     private var pendingStopDuringModelLoad: PendingStopKind?
 
     /// A dictation started while the previous one was still being transcribed
@@ -1865,8 +1867,11 @@ final class AppState: ObservableObject {
     ///   asks for this: it costs an Accessibility read of another app.
     func refreshActiveWritingStyle(readingWebsite: Bool = false) {
         let target = frontmostAppResolver.styleTargetApp()
-        activeWritingStyle = resolveWritingStyle(for: target)
-        activeWritingTargetName = target?.displayName
+        // Runs on every app switch: publish only what changed, or each switch
+        // redraws every view watching AppState.
+        let style = resolveWritingStyle(for: target)
+        if activeWritingStyle != style { activeWritingStyle = style }
+        if activeWritingTargetName != target?.displayName { activeWritingTargetName = target?.displayName }
         websiteRuleRefresh?.cancel()
         websiteRuleRefresh = nil
         guard readingWebsite, !websiteStyleBindings.isEmpty,
@@ -1875,7 +1880,8 @@ final class AppState: ObservableObject {
             let read = Task { @MainActor in await reader.captureDocumentURL(of: target) }
             let url = await Self.value(of: read, within: Self.screenContextTimeout, otherwise: nil)
             guard let self, !Task.isCancelled, let url else { return }
-            activeWritingStyle = resolveWritingStyle(for: target, documentURL: url)
+            let style = resolveWritingStyle(for: target, documentURL: url)
+            if activeWritingStyle != style { activeWritingStyle = style }
         }
     }
 
@@ -2227,24 +2233,56 @@ final class AppState: ObservableObject {
             appStatus = .processing
             isLoadingModelForRecording = true
             pendingStopDuringModelLoad = nil
+            // Listen while the model loads, as for a queued dictation: the
+            // microphone opens now and the recording is decoded once the
+            // model is ready. Before, it opened only after the load, and a
+            // key released in the meantime recorded nothing. Command Mode
+            // keeps its own start (and its double chime) after the load.
+            if activeCommandTarget == nil {
+                beginEarlyCapture()
+                if showCursorIndicator && overlayStyle != .off {
+                    cursorOverlay.recordingLimit = maxRecordingDuration > 0 ? TimeInterval(maxRecordingDuration) : nil
+                    cursorOverlay.show(style: overlayStyle, position: overlayPosition)
+                    cursorOverlay.setLoadingSpeechModel(true)
+                }
+            }
             if let startupModelPreparation {
                 await startupModelPreparation.value
             }
             await ensureModelLoaded()
             isLoadingModelForRecording = false
+            cursorOverlay.setLoadingSpeechModel(false)
             let pendingStop = pendingStopDuringModelLoad
             pendingStopDuringModelLoad = nil
             guard whisperService.isModelLoaded else {
+                discardEarlyCapture()
                 endHotKeyToggleSession()
                 showOverlayFailure("Couldn't load the speech model.")
                 showTemporaryError("Could not load the speech model. Open Settings → Speech Model and try again.")
                 return
             }
             appStatus = .idle
-            // The hotkey was released (or Escape pressed) while the model
-            // loaded. Starting now would leave the microphone recording with
-            // nobody holding the key.
+            // The hotkey was released while the model loaded, with the
+            // microphone already recording: transcribe what was said while
+            // the key was down, as a queued dictation does.
+            if pendingStop == .transcribe, let releasedAt = earlyCapture?.releasedAtSampleCount, releasedAt > 0 {
+                VocaLogger.info(.appState, "Dictation ended while the speech model was loading — transcribing what was recorded")
+                await startRecording(
+                    injectResult: injectResult, outputDestination: outputDestination, verifiesShortcut: verifiesShortcut
+                )
+                if isCapturingAudio {
+                    await stopRecordingAndTranscribe(endsHotKeyToggle: true, keepingFirst: releasedAt)
+                }
+                // A start that never reached the microphone leaves nothing to adopt.
+                discardEarlyCapture()
+                return
+            }
+            // Released before the microphone captured anything, or Escape:
+            // starting now would leave the microphone recording with nobody
+            // holding the key.
             if let pendingStop {
+                discardEarlyCapture()
+                cursorOverlay.hide()
                 VocaLogger.info(.appState, "Dictation ended while the speech model was loading — not starting a recording")
                 hotKeyManager.resetKeyState()
                 if pendingStop == .transcribe {
@@ -2595,7 +2633,17 @@ final class AppState: ObservableObject {
         // it's recording (covers stuck-state recovery scenarios where
         // isRecording and appStatus may be out of sync).
         guard isCapturingAudio else {
-            if isLoadingModelForRecording { pendingStopDuringModelLoad = .transcribe }
+            if isLoadingModelForRecording {
+                pendingStopDuringModelLoad = .transcribe
+                // The microphone opened while the model loads; keep what it
+                // heard until now and transcribe it once the model is ready.
+                if let early = earlyCapture, early.releasedAtSampleCount == nil {
+                    early.releasedAtSampleCount = early.counter.count
+                    if soundEffectsEnabled { soundManager.playStopSound() }
+                    cursorOverlay.transitionToProcessing()
+                }
+                return
+            }
             if queuedRecordingStart != nil, let early = earlyCapture, early.releasedAtSampleCount == nil {
                 // The microphone opened early, so what was said is kept and
                 // transcribed once the previous dictation is delivered.
@@ -2706,6 +2754,34 @@ final class AppState: ObservableObject {
         // History write, rather than one after the other.
         let contextTermsRead = Task { await Self.awaitContextTerms(contextTask) }
         let documentURLRead = Task { await Self.awaitDocumentURL(documentURLTask) }
+        // A website rule is checked against the page in front now, while the
+        // speech is decoded, rather than in another Accessibility read after
+        // it. A page changed during the decode itself is not noticed.
+        let documentURLCheck = Task { @MainActor [weak self] () -> URL? in
+            let captured = await documentURLRead.value
+            return await self?.revalidatedDocumentURL(captured)
+        }
+        let language = selectedLanguage == "auto" ? nil : selectedLanguage
+        let selectedEngine = ModelSize(rawValue: selectedModelSize)?.engine
+        // sherpa-onnx reads no vocabulary, so its batch decode starts now
+        // instead of after the History write and the screen read.
+        let earlyDecode: Task<VocaTranscription, Error>?
+        let decodesWholeRecording = session == nil || session?.language != language
+        if selectedEngine == .sherpaOnnx, decodesWholeRecording {
+            let vocabulary = Self.recognitionVocabulary(
+                customVocabulary, replacementTargets: replacementTargets, contextTerms: []
+            )
+            let transcriber = whisperService
+            let translate = translatesSpeech
+            earlyDecode = Task {
+                try await transcriber.transcribe(
+                    audioData: audioData, language: language, translate: translate, vocabulary: vocabulary
+                )
+            }
+        } else {
+            earlyDecode = nil
+        }
+        defer { earlyDecode?.cancel() }
         // Journaled before transcribing; the audio is written alongside the
         // transcription, so a failure can still be retried from history.
         let historyID = injectResult ? await beginHistoryEntry(audio: audioData) : nil
@@ -2717,14 +2793,11 @@ final class AppState: ObservableObject {
         }
 
         do {
-            let language = selectedLanguage == "auto" ? nil : selectedLanguage
             let contextTerms = await contextTermsRead.value
-            let capturedDocumentURL = await documentURLRead.value
             let recognitionVocabulary = Self.recognitionVocabulary(
                 customVocabulary, replacementTargets: replacementTargets, contextTerms: contextTerms
             )
             let result: VocaTranscription
-            let selectedEngine = ModelSize(rawValue: selectedModelSize)?.engine
             // A commit-mode session reads the vocabulary per piece, so context
             // terms reach it too, provided no piece was decoded without them.
             liveVocabulary?.update(recognitionVocabulary)
@@ -2747,6 +2820,13 @@ final class AppState: ObservableObject {
                         audioData: audioData, language: language,
                         translate: translatesSpeech, vocabulary: recognitionVocabulary
                     )
+                }
+            } else if let earlyDecode {
+                session?.cancel()
+                result = try await withTaskCancellationHandler {
+                    try await earlyDecode.value
+                } onCancel: {
+                    earlyDecode.cancel()
                 }
             } else {
                 session?.cancel()
@@ -2784,7 +2864,6 @@ final class AppState: ObservableObject {
             // The text there has changed; "shorter still" no longer has
             // anything to refer to.
             lastCommandTarget = nil
-            statsManager.recordTranscription(result)
 
             let trimmedText = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
             // Set when nothing was heard and no overlay could say so.
@@ -2792,7 +2871,7 @@ final class AppState: ObservableObject {
             if !trimmedText.isEmpty {
                 let target = frontmostAppResolver.currentFrontmostApp()
                     ?? pendingTargetApp ?? frontmostAppResolver.lastActiveApp()
-                let documentURL = await revalidatedDocumentURL(capturedDocumentURL)
+                let documentURL = await documentURLCheck.value
                 let resolved = resolveWritingStyle(for: target, documentURL: documentURL)
                 // The scratchpad is plain notes: format it with the default
                 // style, not whichever app the Settings preview was left on.
@@ -2806,7 +2885,7 @@ final class AppState: ObservableObject {
                 }
                 if injectResult {
                     nextWritingProfile = nil
-                    activeWritingStyle = resolved
+                    if activeWritingStyle != resolved { activeWritingStyle = resolved }
                 }
                 let laysOutParagraphs = Self.laysOutParagraphs(enabled: pauseParagraphs, profile: profile)
                 let spoken = laysOutParagraphs
@@ -2860,17 +2939,26 @@ final class AppState: ObservableObject {
                     // back an older saved dictation for Paste Last.
                     lastUnsavedDictation = historyID == nil ? output.text : nil
                 }
-                if let historyID {
-                    historyStore.complete(
-                        historyID, rawText: result.text, finalText: output.text, summary: output.summary,
-                        language: result.detectedLanguage, transcriptionSeconds: result.duration,
-                        segments: result.segments, keepAudio: historyKeepsAudio
-                    )
+                // Saved after the paste is under way, not before it: the
+                // journal write (and every 500th dictation a rewrite of the
+                // whole History index) and the stats update are main-thread
+                // work the text should not wait for.
+                let completedHistoryID = historyID
+                func saveResult() {
+                    if let completedHistoryID {
+                        historyStore.complete(
+                            completedHistoryID, rawText: result.text, finalText: output.text, summary: output.summary,
+                            language: result.detectedLanguage, transcriptionSeconds: result.duration,
+                            segments: result.segments, keepAudio: historyKeepsAudio
+                        )
+                    }
+                    statsManager.recordTranscription(result)
                 }
                 if injectResult {
                     let current = frontmostAppResolver.currentFrontmostApp()
                         ?? frontmostAppResolver.lastActiveApp() ?? pendingTargetApp
                     guard Self.sameOutputTarget(target, current) else {
+                        saveResult()
                         heldOutput = output.text
                         showOverlayFailure("The app changed. Your text is saved in the menu bar.")
                         cursorOverlay.hide()
@@ -2880,6 +2968,7 @@ final class AppState: ObservableObject {
                         return
                     }
                     textInjector.inject(text: output.text, preserveClipboard: preserveClipboard)
+                    saveResult()
                     if onboardingVerification.mode == .insertion,
                        !output.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                         onboardingVerification.insertionAttempted = true
@@ -2891,6 +2980,7 @@ final class AppState: ObservableObject {
                     ))
                     observeCorrections(to: output.text)
                 } else {
+                    saveResult()
                     if nonInjectedOutputDestination == .scratchpad {
                         if !scratchpadText.isEmpty, !scratchpadText.hasSuffix("\n") { scratchpadText += "\n" }
                         scratchpadText += output.text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -3009,7 +3099,10 @@ final class AppState: ObservableObject {
         beginDictationOperation()
         defer { endDictationOperation("cancel") }
         guard isCapturingAudio else {
-            if isLoadingModelForRecording { pendingStopDuringModelLoad = .discard }
+            if isLoadingModelForRecording {
+                pendingStopDuringModelLoad = .discard
+                cursorOverlay.hide()
+            }
             queuedRecordingStart = nil
             return
         }
@@ -3053,7 +3146,8 @@ final class AppState: ObservableObject {
     func cancelDictation() async {
         beginDictationOperation()
         defer { endDictationOperation("cancel dictation") }
-        if isCapturingAudio {
+        // The model is still loading, with the microphone already open.
+        if isCapturingAudio || isLoadingModelForRecording {
             await cancelRecording()
             return
         }
@@ -3167,6 +3261,10 @@ final class AppState: ObservableObject {
             guard let self else { return false }
             let started = await self.startConfiguredAudioEngine()
             guard started, self.earlyCapture?.counter === counter else { return started }
+            // Recording while the model loads: the overlay can say so now.
+            if self.isLoadingModelForRecording, self.earlyCapture?.releasedAtSampleCount == nil {
+                self.cursorOverlay.transitionToRecording()
+            }
             // Live now: silence playback as a dictation start would, so music
             // is not recorded under what the user says while waiting.
             // `discardEarlyCapture` undoes it; an adopted capture's recording

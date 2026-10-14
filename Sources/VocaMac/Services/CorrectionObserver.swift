@@ -30,6 +30,12 @@ final class CorrectionObserver: CorrectionObserving {
 
     var onCorrections: (([CorrectionLearner.Correction]) -> Void)?
 
+    /// Its own queue, not `AccessibilityTextReader.queue`: reading a long
+    /// field back (up to 50,000 characters) happens as the next dictation
+    /// starts, and on the shared queue it used up the screen-context read's
+    /// 300 ms budget before that read could begin.
+    private static let queue = DispatchQueue(label: "com.vocamac.correction-observer", qos: .utility)
+
     private struct Observation {
         let id: UUID
         let text: String
@@ -64,7 +70,7 @@ final class CorrectionObserver: CorrectionObserving {
 
         let inserted = current.text
         let isKnownWord = current.isKnownWord
-        AccessibilityTextReader.queue.async { [weak self] in
+        Self.queue.async { [weak self] in
             guard let after = AccessibilityTextReader.value(of: baseline.element.element),
                   after != baseline.value else { return }
             let before = baseline.value
@@ -100,7 +106,7 @@ final class CorrectionObserver: CorrectionObserving {
         guard let current = observation, current.id == id else { return }
         let processID = current.processID
         let inserted = current.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        AccessibilityTextReader.queue.async { [weak self] in
+        Self.queue.async { [weak self] in
             guard let element = AccessibilityTextReader.focusedTextElement(processID: processID),
                   let value = AccessibilityTextReader.value(of: element),
                   value.contains(inserted) else { return }

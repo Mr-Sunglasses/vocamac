@@ -184,7 +184,7 @@ final class ModelSizeTests: XCTestCase {
     }
 
     func testAllCasesCount() {
-        XCTAssertEqual(ModelSize.allCases.count, 25)
+        XCTAssertEqual(ModelSize.allCases.count, 26)
     }
 
     func testRawValues() {
@@ -204,6 +204,7 @@ final class ModelSizeTests: XCTestCase {
         XCTAssertEqual(ModelSize.parakeetUltra.rawValue, "parakeet-ultra")
         XCTAssertEqual(ModelSize.parakeetV3.rawValue, "parakeet-tdt-0.6b-v3")
         XCTAssertEqual(ModelSize.parakeetV2.rawValue, "parakeet-tdt-0.6b-v2")
+        XCTAssertEqual(ModelSize.parakeetUnified.rawValue, "parakeet-unified-en-0.6b")
         XCTAssertEqual(ModelSize.parakeetTdtCtc110m.rawValue, "parakeet-tdt-ctc-110m")
         XCTAssertEqual(ModelSize.appleSpeech.rawValue, "apple-speech")
         XCTAssertEqual(ModelSize.moonshineTiny.rawValue, "moonshine-v2-tiny-en")
@@ -223,6 +224,7 @@ final class ModelSizeTests: XCTestCase {
         XCTAssertEqual(ModelSize.standardCatalog.first, .parakeetUltra)
         XCTAssertTrue(ModelSize.standardCatalog.contains(.parakeetV3))
         XCTAssertTrue(ModelSize.standardCatalog.contains(.parakeetV2))
+        XCTAssertTrue(ModelSize.standardCatalog.contains(.parakeetUnified))
         XCTAssertTrue(ModelSize.standardCatalog.contains(.parakeetTdtCtc110m))
         XCTAssertTrue(ModelSize.standardCatalog.contains(.appleSpeech))
         XCTAssertTrue(ModelSize.standardCatalog.contains(.moonshineTiny))
@@ -252,6 +254,7 @@ final class ModelSizeTests: XCTestCase {
         XCTAssertEqual(ModelSize.parakeetUltra.engine, .parakeet)
         XCTAssertEqual(ModelSize.parakeetV3.engine, .parakeet)
         XCTAssertEqual(ModelSize.parakeetV2.engine, .parakeet)
+        XCTAssertEqual(ModelSize.parakeetUnified.engine, .parakeet)
         XCTAssertEqual(ModelSize.parakeetTdtCtc110m.engine, .parakeet)
         XCTAssertEqual(ModelSize.appleSpeech.engine, .appleSpeech)
         XCTAssertEqual(ModelSize.moonshineTiny.engine, .sherpaOnnx)
@@ -271,6 +274,7 @@ final class ModelSizeTests: XCTestCase {
         XCTAssertEqual(ParakeetService.modelVersion(for: .parakeetV3), .v3)
         XCTAssertEqual(ParakeetService.modelVersion(for: .parakeetV2), .v2)
         XCTAssertEqual(ParakeetService.modelVersion(for: .parakeetTdtCtc110m), .tdtCtc110m)
+        XCTAssertNil(ParakeetService.modelVersion(for: .parakeetUnified), "Unified is not a TDT model")
         XCTAssertNil(ParakeetService.modelVersion(for: .tiny))
     }
 
@@ -419,6 +423,7 @@ final class ModelManagerTests: XCTestCase {
         XCTAssertEqual(manager.modelIdentifier(for: .parakeetUltra), "parakeet-ultra")
         XCTAssertEqual(manager.modelIdentifier(for: .parakeetV3), "parakeet-tdt-0.6b-v3")
         XCTAssertEqual(manager.modelIdentifier(for: .parakeetV2), "parakeet-tdt-0.6b-v2")
+        XCTAssertEqual(manager.modelIdentifier(for: .parakeetUnified), "parakeet-unified-en-0.6b")
         XCTAssertEqual(manager.modelIdentifier(for: .parakeetTdtCtc110m), "parakeet-tdt-ctc-110m")
         XCTAssertEqual(manager.modelIdentifier(for: .appleSpeech), "apple-speech")
         XCTAssertEqual(manager.modelIdentifier(for: .tiny), "openai_whisper-tiny")
@@ -426,6 +431,7 @@ final class ModelManagerTests: XCTestCase {
         XCTAssertEqual(manager.modelSize(from: "parakeet-ultra"), .parakeetUltra)
         XCTAssertEqual(manager.modelSize(from: "parakeet-tdt-0.6b-v3"), .parakeetV3)
         XCTAssertEqual(manager.modelSize(from: "parakeet-tdt-0.6b-v2"), .parakeetV2)
+        XCTAssertEqual(manager.modelSize(from: "parakeet-unified-en-0.6b"), .parakeetUnified)
         XCTAssertEqual(manager.modelSize(from: "parakeet-tdt-ctc-110m"), .parakeetTdtCtc110m)
         XCTAssertEqual(manager.modelSize(from: "apple-speech"), .appleSpeech)
     }
