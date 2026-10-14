@@ -205,6 +205,7 @@ final class CursorOverlayManager {
         viewModel.failureMessage = ""
         viewModel.commandSession = nil
         viewModel.liveWordsAvailable = false
+        viewModel.isLoadingSpeechModel = false
         viewModel.isCleaningUp = false
         viewModel.isActive = true
         recordingStartedAt = nil
@@ -350,6 +351,10 @@ final class CursorOverlayManager {
 
     func setCommandSession(_ session: CommandModeSession?) {
         viewModel.commandSession = session
+    }
+
+    func setLoadingSpeechModel(_ loading: Bool) {
+        viewModel.isLoadingSpeechModel = loading
     }
 
     func setLiveWordsAvailable(_ available: Bool) {
@@ -550,6 +555,8 @@ final class MicIndicatorViewModel: ObservableObject {
     /// Set while the session edits selected text (Command Mode).
     @Published var commandSession: CommandModeSession?
     @Published var liveWordsAvailable = false
+    /// The speech model is still loading while the microphone records.
+    @Published var isLoadingSpeechModel = false
     @Published var failureMessage: String = ""
     @Published var recordingLimit: TimeInterval?
     /// Processing has moved from transcription to Smart Cleanup.
@@ -688,6 +695,13 @@ struct HandyOverlayView: View {
     }
 
     private var statusDetail: String {
+        if viewModel.isLoadingSpeechModel {
+            switch viewModel.phase {
+            case .recording: return "Speak now — loading speech model…"
+            case .connecting, .processing, .idle: return "Loading speech model…"
+            case .failure: break
+            }
+        }
         switch viewModel.phase {
         case .connecting: return "Waiting for microphone…"
         case .recording:

@@ -968,16 +968,22 @@ final class AudioEngineTests: XCTestCase {
             "Stopped engine should stay warm briefly for rapid push-to-talk restarts"
         )
 
+        let releases = AudioEngine.releasesEngineWhenIdle(isBluetoothInput: engine.isConfiguredInputBluetoothForTesting)
         let expectation = XCTestExpectation(description: "Idle engine release")
         DispatchQueue.main.asyncAfter(deadline: .now() + AudioEngine.idleEngineReleaseDelay + 0.5) {
             expectation.fulfill()
         }
         wait(for: [expectation], timeout: AudioEngine.idleEngineReleaseDelay + 2.0)
 
-        XCTAssertFalse(
-            engine.isEngineAllocatedForTesting,
-            "Engine should release after the idle window so the input route is not held indefinitely"
+        XCTAssertEqual(
+            engine.isEngineAllocatedForTesting, !releases,
+            "A Bluetooth input releases the engine after the idle window; other inputs keep it"
         )
+    }
+
+    func testOnlyBluetoothInputsReleaseTheIdleEngine() {
+        XCTAssertTrue(AudioEngine.releasesEngineWhenIdle(isBluetoothInput: true))
+        XCTAssertFalse(AudioEngine.releasesEngineWhenIdle(isBluetoothInput: false))
     }
 
     func testAudioBufferPreservedWhenSilenceDetected() throws {

@@ -125,6 +125,75 @@ final class RecognitionHintsTests: XCTestCase {
         ), misheard)
     }
 
+    // MARK: Parakeet boost pre-check
+
+    private func words(_ text: String) -> [String] {
+        text.split(whereSeparator: \.isWhitespace).map(String.init)
+    }
+
+    func testPreCheckFindsCloseSpellingsTheRescorerCouldUse() {
+        XCTAssertTrue(ParakeetVocabularyBoost.couldAcceptReplacement(heardWords: words(transcript), terms: terms))
+        XCTAssertTrue(ParakeetVocabularyBoost.couldAcceptReplacement(
+            heardWords: words("open voca mack now"), terms: ["VocaMac"]
+        ), "A term heard as two words is found across them")
+        XCTAssertTrue(ParakeetVocabularyBoost.couldAcceptReplacement(
+            heardWords: words("I sent it to Sergei."), terms: ["Sergey"]
+        ))
+    }
+
+    func testPreCheckSkipsTranscriptsNoTermIsCloseTo() {
+        XCTAssertFalse(ParakeetVocabularyBoost.couldAcceptReplacement(
+            heardWords: words("Yes, please restart the server tomorrow."), terms: ["Kubernetes", "Namrata"]
+        ))
+        XCTAssertFalse(ParakeetVocabularyBoost.couldAcceptReplacement(
+            heardWords: words("Send the Kubernetes report."), terms: ["Kubernetes"]
+        ), "A term already spelled right has nothing to replace")
+        XCTAssertFalse(ParakeetVocabularyBoost.couldAcceptReplacement(heardWords: [], terms: ["Namrata"]))
+        XCTAssertFalse(ParakeetVocabularyBoost.couldAcceptReplacement(heardWords: words("hello there"), terms: []))
+    }
+
+    /// Every proposal `accepted` keeps must have passed the pre-check, or
+    /// skipping the rescorer would change the text.
+    func testPreCheckPassesWheneverAcceptedKeepsAReplacement() {
+        let kept = ParakeetVocabularyBoost.accepted(observed, in: transcript, terms: terms, isKnownWord: { _ in false })
+        XCTAssertFalse(kept.isEmpty)
+        for replacement in kept {
+            XCTAssertTrue(ParakeetVocabularyBoost.couldAcceptReplacement(
+                heardWords: words(replacement.original), terms: [replacement.replacement]
+            ))
+        }
+    }
+
+    /// The early stop on long runs agrees with checking every run.
+    func testPreCheckMatchesCheckingEveryRunOfWords() {
+        let sentences = [
+            "please send the report to namratha and ask her about it",
+            "cube er net ease is down again",
+            "voca mack and voca mac and vocal mac",
+            "the in video drivers need an update",
+            "phil ip and fill up the tank",
+            "a b c d e f g h",
+        ]
+        let candidates = ["Namrata", "Kubernetes", "VocaMac", "NVIDIA", "Philip", "abcdefgh", "Zorblax", "kubectl"]
+        for sentence in sentences {
+            let heard = words(sentence)
+            for term in candidates {
+                let key = DictionaryCorrector.normalized(term)
+                var expected = false
+                for start in heard.indices {
+                    for end in start..<heard.count {
+                        let run = heard[start...end].map(DictionaryCorrector.normalized).joined()
+                        if ParakeetVocabularyBoost.isSpelledClose(heard: run, term: key) { expected = true }
+                    }
+                }
+                XCTAssertEqual(
+                    ParakeetVocabularyBoost.couldAcceptReplacement(heardWords: heard, terms: [term]), expected,
+                    "\(term) in “\(sentence)”"
+                )
+            }
+        }
+    }
+
     func testApplyKeepsPunctuationAndOrder() {
         let text = "Namratha, then Namratha."
         let result = ParakeetVocabularyBoost.apply(

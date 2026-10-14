@@ -50,7 +50,8 @@ extension AppState {
 
     /// What the menu says while a dictation is being worked on.
     var processingStatusText: String {
-        isCleaningUp ? "Cleaning up…" : "Transcribing…"
+        if dictationPhase == .loadingModel { return "Loading speech model…" }
+        return isCleaningUp ? "Cleaning up…" : "Transcribing…"
     }
 
     // MARK: - Error Notice

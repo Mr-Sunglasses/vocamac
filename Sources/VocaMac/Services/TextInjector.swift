@@ -35,9 +35,12 @@ final class TextInjector: @unchecked Sendable {
     /// Time left after the target's read for it to finish with the data.
     private let pasteReceiptSettle: Double = 0.05
 
-    /// Delay before simulating the Cmd+V keystroke, giving the
-    /// pasteboard a moment to settle after we write to it.
-    private let prePasteDelay: Double = 0.05
+    /// Delay before simulating the Cmd+V keystroke. The write itself is
+    /// done when it returns; this is the window in which a clipboard manager
+    /// that rewrites the board is caught by the change-count check after it.
+    /// Managers that poll do so far less often than 50 ms, so the longer wait
+    /// only delayed every paste.
+    private let prePasteDelay: Double = 0.01
 
     /// Default virtual key code for the V key on a US-QWERTY layout.
     /// Used as a fallback when the active layout cannot be inspected.
@@ -118,6 +121,7 @@ final class TextInjector: @unchecked Sendable {
     /// `clearContents()`. Returning `false` forces the failure that is
     /// otherwise reachable only when another process owns the board mid-write.
     private let clipboardWriteOverride: ((String, NSPasteboard) -> Bool)?
+    private let prePasteWaitOverride: (@MainActor (NSPasteboard) async -> Void)?
     var onFailure: ((String) -> Void)?
 
     /// Clipboard fallback injections must run one at a time. Otherwise a
@@ -139,7 +143,8 @@ final class TextInjector: @unchecked Sendable {
         pasteActionOverride: (() -> Void)? = nil,
         accessibilityWorkerOverride: (@Sendable (String) -> Bool)? = nil,
         frontmostPIDProvider: @escaping () -> pid_t? = { NSWorkspace.shared.frontmostApplication?.processIdentifier },
-        clipboardWriteOverride: ((String, NSPasteboard) -> Bool)? = nil
+        clipboardWriteOverride: ((String, NSPasteboard) -> Bool)? = nil,
+        prePasteWaitOverride: (@MainActor (NSPasteboard) async -> Void)? = nil
     ) {
         self.pasteboard = pasteboard
         self.accessibilityTrustedOverride = accessibilityTrustedOverride
@@ -148,6 +153,7 @@ final class TextInjector: @unchecked Sendable {
         self.accessibilityWorkerOverride = accessibilityWorkerOverride
         self.frontmostPIDProvider = frontmostPIDProvider
         self.clipboardWriteOverride = clipboardWriteOverride
+        self.prePasteWaitOverride = prePasteWaitOverride
     }
 
     // MARK: - Public API
@@ -338,8 +344,7 @@ final class TextInjector: @unchecked Sendable {
     ///            `.uncertain` if the write timed out and may still land.
     @discardableResult
     private func injectViaAccessibility(text: String, targetPID: pid_t?) -> AccessibilityInsertion {
-        let systemWide = AXUIElementCreateSystemWide()
-        AXUIElementSetMessagingTimeout(systemWide, 0.1)
+        let systemWide = AccessibilityTimeout.systemWideElement()
         var focusedRef: CFTypeRef?
 
         let fetchResult = AXUIElementCopyAttributeValue(
@@ -461,7 +466,11 @@ final class TextInjector: @unchecked Sendable {
                     return
                 }
                 var expectedChangeCount = pasteboard.changeCount
-                try await Task.sleep(nanoseconds: UInt64(prePasteDelay * 1_000_000_000))
+                if let prePasteWaitOverride {
+                    await prePasteWaitOverride(pasteboard)
+                } else {
+                    try await Task.sleep(nanoseconds: UInt64(prePasteDelay * 1_000_000_000))
+                }
                 if pasteboard.changeCount != expectedChangeCount {
                     // The snapshot is reassigned first, so a failure here puts
                     // back the clipboard that replaced the original, not the

@@ -11,6 +11,7 @@
 
 import Foundation
 import AVFoundation
+import os
 #if canImport(Speech)
 import Speech
 #endif
@@ -45,6 +46,9 @@ enum AppleSpeechError: LocalizedError {
 
 // MARK: - AppleSpeechService
 
+/// Unchecked: the prepared state lives in `state`, behind a lock. The router
+/// reads it from the main actor and unloads it (`abandonEngines`) while a
+/// transcription it gave up on may still be running.
 final class AppleSpeechService: @unchecked Sendable {
 
     // MARK: - Properties
@@ -58,14 +62,24 @@ final class AppleSpeechService: @unchecked Sendable {
         return false
     }
 
-    /// Whether the engine has been prepared (assets checked/installed)
-    private var isPrepared = false
-    private var preparedSession: (any PreparedSpeechSession)?
-    private var preparedLocale: String?
+    private struct State {
+        /// Whether the engine has been prepared (assets checked/installed)
+        var isPrepared = false
+        /// An analyzer ready for the next utterance, and its locale.
+        var preparedSession: (any PreparedSpeechSession)?
+        var preparedLocale: String?
+        /// Bumped by every load and unload, so a session prepared for an
+        /// earlier one is discarded instead of installed.
+        var generation = 0
+        /// A replacement session is being prepared in the background.
+        var isPreparingNext = false
+    }
 
-    var isModelLoaded: Bool { isPrepared }
+    private let state = OSAllocatedUnfairLock(initialState: State())
 
-    var loadedModelName: String? { isPrepared ? ModelSize.appleSpeech.rawValue : nil }
+    var isModelLoaded: Bool { state.withLock { $0.isPrepared } }
+
+    var loadedModelName: String? { isModelLoaded ? ModelSize.appleSpeech.rawValue : nil }
 
     /// Language codes SpeechTranscriber supports on this Mac, or nil when
     /// the system has no SpeechAnalyzer or reports none.
@@ -105,9 +119,20 @@ final class AppleSpeechService: @unchecked Sendable {
         onPhaseChange?("Checking speech assets…")
         let locale = language.map { Locale(identifier: $0) } ?? Locale.current
         await unloadModel()
-        preparedSession = try await AppleSpeechEngine.prepareSession(for: locale, onPhaseChange: onPhaseChange)
-        preparedLocale = locale.identifier
-        isPrepared = true
+        let generation = state.withLock { $0.generation }
+        let session = try await AppleSpeechEngine.prepareSession(for: locale, onPhaseChange: onPhaseChange)
+        // A load given up on, or unloaded under, must not install itself.
+        let installed = state.withLock { state -> Bool in
+            guard state.generation == generation, !Task.isCancelled else { return false }
+            state.preparedSession = session
+            state.preparedLocale = locale.identifier
+            state.isPrepared = true
+            return true
+        }
+        guard installed else {
+            await session.cancel()
+            throw CancellationError()
+        }
 
         let elapsed = CFAbsoluteTimeGetCurrent() - startTime
         VocaLogger.info(.appleSpeechService, "Apple Speech ready in \(String(format: "%.2f", elapsed))s")
@@ -117,10 +142,15 @@ final class AppleSpeechService: @unchecked Sendable {
     }
 
     func unloadModel() async {
-        isPrepared = false
-        let session = preparedSession
-        preparedSession = nil
-        preparedLocale = nil
+        let session = state.withLock { state -> (any PreparedSpeechSession)? in
+            state.generation &+= 1
+            state.isPrepared = false
+            defer {
+                state.preparedSession = nil
+                state.preparedLocale = nil
+            }
+            return state.preparedSession
+        }
         await session?.cancel()
     }
 
@@ -158,16 +188,28 @@ final class AppleSpeechService: @unchecked Sendable {
     ) async throws -> VocaTranscription {
         #if compiler(>=6.2)
         guard #available(macOS 26.0, *) else { throw AppleSpeechError.unsupportedSystem }
-        guard isPrepared else { throw AppleSpeechError.modelNotLoaded }
         let locale = language.map { Locale(identifier: $0) } ?? Locale.current
         let start = CFAbsoluteTimeGetCurrent()
+        // Take the prepared analyzer, if it is for this locale. Finished
+        // sessions are never reused, so the next one is prepared once this
+        // utterance is done (`prepareNextSession`).
+        let taken = state.withLock { state -> (isPrepared: Bool, session: (any PreparedSpeechSession)?, matches: Bool, generation: Int) in
+            let session = state.preparedSession
+            let matches = state.preparedLocale == locale.identifier
+            state.preparedSession = nil
+            state.preparedLocale = nil
+            return (state.isPrepared, session, matches, state.generation)
+        }
+        guard taken.isPrepared else {
+            await taken.session?.cancel()
+            throw AppleSpeechError.modelNotLoaded
+        }
+        defer { prepareNextSession(for: locale, generation: taken.generation) }
         let session: any PreparedSpeechSession
-        if let preparedSession, preparedLocale == locale.identifier {
-            session = preparedSession
-            self.preparedSession = nil
+        if let prepared = taken.session, taken.matches {
+            session = prepared
         } else {
-            await preparedSession?.cancel()
-            preparedSession = nil
+            await taken.session?.cancel()
             session = try await AppleSpeechEngine.prepareSession(for: locale)
         }
         do {
@@ -203,6 +245,34 @@ final class AppleSpeechService: @unchecked Sendable {
         #endif
     }
 
+    #if compiler(>=6.2)
+    /// Prepare the analyzer for the next utterance in the background, so it
+    /// is ready (assets resolved, preheated) by the time the user dictates
+    /// again, as the first one is after a load.
+    @available(macOS 26.0, *)
+    private func prepareNextSession(for locale: Locale, generation: Int) {
+        let starts = state.withLock { state -> Bool in
+            guard state.isPrepared, state.generation == generation,
+                  state.preparedSession == nil, !state.isPreparingNext else { return false }
+            state.isPreparingNext = true
+            return true
+        }
+        guard starts else { return }
+        Task.detached(priority: .utility) { [weak self] in
+            let session = try? await AppleSpeechEngine.prepareSession(for: locale)
+            let installed = self?.state.withLock { state -> Bool in
+                state.isPreparingNext = false
+                // Unloaded, reloaded, or already replaced meanwhile.
+                guard let session, state.isPrepared, state.generation == generation,
+                      state.preparedSession == nil else { return false }
+                state.preparedSession = session
+                state.preparedLocale = locale.identifier
+                return true
+            } ?? false
+            if !installed { await session?.cancel() }
+        }
+    }
+    #endif
 }
 
 // MARK: - AppleSpeechEngine (SpeechAnalyzer wrapper)

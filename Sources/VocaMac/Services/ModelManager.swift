@@ -9,7 +9,6 @@
 import CryptoKit
 import Foundation
 import WhisperKit
-import FluidAudio
 
 // MARK: - ModelManagerError
 
@@ -286,16 +285,6 @@ final class ModelManager: @unchecked Sendable {
         )
     }
 
-    /// FluidAudio's model version for a Parakeet catalog entry.
-    private func parakeetVersion(for size: ModelSize) -> AsrModelVersion? {
-        ParakeetService.modelVersion(for: size)
-    }
-
-    /// Directory where FluidAudio caches a Parakeet model's files.
-    private func parakeetDirectory(for version: AsrModelVersion) -> URL {
-        AsrModels.defaultCacheDirectory(for: version)
-    }
-
     /// Map a ModelSize enum to the identifier its engine understands.
     /// WhisperKit uses its own variant names; other engines use the
     /// ModelSize raw value directly.
@@ -337,7 +326,7 @@ final class ModelManager: @unchecked Sendable {
             return "openai_whisper-medium"
         case .vocaHinglish:
             return "vocahq_voca-hinglish_820MB"
-        case .parakeetUltra, .parakeetV3, .parakeetV2, .parakeetTdtCtc110m, .appleSpeech,
+        case .parakeetUltra, .parakeetV3, .parakeetV2, .parakeetUnified, .parakeetTdtCtc110m, .appleSpeech,
              .moonshineTiny, .moonshineBase, .senseVoiceSmall, .gigaamV3, .canary180mFlash,
              .qwen3Asr06B, .customEndpoint:
             // Not WhisperKit models — identified by their raw value.
@@ -352,8 +341,7 @@ final class ModelManager: @unchecked Sendable {
             guard let modelDir = modelFolder(for: size) else { return false }
             return hasRequiredModelAssets(at: modelDir)
         case .parakeet:
-            guard let version = parakeetVersion(for: size) else { return false }
-            return AsrModels.modelsExist(at: parakeetDirectory(for: version), version: version)
+            return ParakeetService.modelFilesExist(for: size)
         case .appleSpeech:
             // Assets are system-managed; installation happens at load time.
             return true
@@ -376,9 +364,8 @@ final class ModelManager: @unchecked Sendable {
             }
             return nil
         case .parakeet:
-            guard let version = parakeetVersion(for: size),
-                  isModelDownloaded(size) else { return nil }
-            return parakeetDirectory(for: version)
+            guard isModelDownloaded(size) else { return nil }
+            return ParakeetService.modelDirectory(for: size)
         case .appleSpeech, .customEndpoint:
             return nil
         case .sherpaOnnx:
@@ -624,7 +611,7 @@ final class ModelManager: @unchecked Sendable {
         case .whisperKit:
             directory = installedModelDirectory(for: size)
         case .parakeet:
-            directory = parakeetVersion(for: size).map { parakeetDirectory(for: $0) }
+            directory = ParakeetService.modelDirectory(for: size)
         case .sherpaOnnx, .appleSpeech, .customEndpoint:
             // Sherpa stages downloads and removes the staging directory itself;
             // the endpoint and the system keep their own files.
@@ -854,19 +841,16 @@ final class ModelManager: @unchecked Sendable {
         size: ModelSize,
         onProgress: @escaping @Sendable (Double) -> Void
     ) async throws {
-        guard let version = parakeetVersion(for: size) else {
+        guard let directory = ParakeetService.modelDirectory(for: size) else {
             throw ModelManagerError.modelNotAvailable(size.rawValue)
         }
 
         VocaLogger.info(.modelManager, "Downloading Parakeet model: \(size.rawValue)")
 
         do {
-            try await AsrModels.download(version: version) { progress in
-                onProgress(progress.fractionCompleted)
-            }
+            try await ParakeetService.downloadModel(for: size, onProgress: onProgress)
 
-            let directory = parakeetDirectory(for: version)
-            guard AsrModels.modelsExist(at: directory, version: version) else {
+            guard ParakeetService.modelFilesExist(for: size) else {
                 throw ModelManagerError.missingModelDirectory(directory.path)
             }
             try verifyInstalledSize(of: size, at: directory)
@@ -966,10 +950,10 @@ final class ModelManager: @unchecked Sendable {
         case .whisperKit:
             modelDir = installedModelDirectory(for: size)
         case .parakeet:
-            guard let version = parakeetVersion(for: size) else {
+            guard let directory = ParakeetService.modelDirectory(for: size) else {
                 throw ModelManagerError.modelNotAvailable(modelIdentifier(for: size))
             }
-            modelDir = parakeetDirectory(for: version)
+            modelDir = directory
         case .appleSpeech, .customEndpoint:
             // System-managed or remotely hosted: the app owns no files to delete.
             return
@@ -994,12 +978,8 @@ final class ModelManager: @unchecked Sendable {
         [
             modelStorageBase(forRepo: Self.argmaxModelRepo),
             modelStorageBase(forRepo: Self.communityModelRepo),
-            parakeetDirectory(for: .ultra),
-            parakeetDirectory(for: .v3),
-            parakeetDirectory(for: .v2),
-            parakeetDirectory(for: .tdtCtc110m),
             SherpaService.storageRoot,
-        ]
+        ] + ParakeetService.modelDirectories
     }
 
     /// Get total disk space used by downloaded models across all engines.

@@ -182,17 +182,23 @@ extension ClipboardPreservationTests {
         let board = NSPasteboard(name: .init("com.vocamac.tests.\(UUID())"))
         defer { board.releaseGlobally() }
         board.setString("original", forType: .string)
-        var pid: pid_t = 123
+        // The frontmost app is read when the paste is queued, before the AX
+        // attempt, as the clipboard path starts, and just before Cmd+V.
+        // Focus moves between the last two: after the transcript is on the
+        // clipboard, while the paste waits.
+        var reads = 0
         let cancelled = expectation(description: "focus change reported")
         let injector = TextInjector(
             pasteboard: board, accessibilityTrustedOverride: true,
             accessibilityInjectionOverride: { _ in false },
             pasteActionOverride: { XCTFail("Must not paste into another app") },
-            frontmostPIDProvider: { pid }
+            frontmostPIDProvider: {
+                reads += 1
+                return reads > 3 ? 456 : 123
+            }
         )
         injector.onFailure = { _ in cancelled.fulfill() }
         injector.inject(text: "result", preserveClipboard: true)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) { pid = 456 }
         await fulfillment(of: [cancelled], timeout: 1)
         XCTAssertEqual(board.string(forType: .string), "original")
     }
@@ -340,14 +346,15 @@ extension ClipboardPreservationTests {
             frontmostPIDProvider: { 123 },
             clipboardWriteOverride: { text, pasteboard in
                 guard writes.next() == 1 else { return false }
-                // The board was just cleared for us; land the transcript, then
-                // let another app replace it during the pre-paste delay.
+                // The board was just cleared for us; land the transcript.
                 pasteboard.setString(text, forType: .string)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) {
-                    pasteboard.clearContents()
-                    pasteboard.setString("replacement", forType: .string)
-                }
                 return true
+            },
+            prePasteWaitOverride: { pasteboard in
+                // Another app replaces the transcript during the pre-paste
+                // wait. Done in the wait itself, not on a timer that races it.
+                pasteboard.clearContents()
+                pasteboard.setString("replacement", forType: .string)
             }
         )
         var failures = 0

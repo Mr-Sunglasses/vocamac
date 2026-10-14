@@ -624,7 +624,9 @@ final class TranscriptCleanupService: ObservableObject, TranscriptCleaning {
                 VocaLogger.info(.transcriptCleanup, "Rebuilding \(kind.descriptor.displayName) after \(consecutiveFailures) failed cleanups")
                 unload()
             } else {
-                modelState = .ready
+                // Every warm-up and dictation comes through here; publish only
+                // a real change, or each one redraws every view watching it.
+                if modelState != .ready { modelState = .ready }
                 return
             }
         }
@@ -721,14 +723,23 @@ final class TranscriptCleanupService: ObservableObject, TranscriptCleaning {
                 // On a repetition-heavy transcript the 1.2 default cut 11
                 // occurrences of a word down to 7 and merged clauses; at 1.0
                 // every clause survived.
-                LLMBox(LLM(
+                let llm = LLM(
                     from: path,
                     seed: 42,
                     topP: 0.9,
                     temp: 0.1,
                     repeatPenalty: 1.0,
                     maxTokenCount: maxTokens
-                ))
+                )
+                // LLM.swift creates its context with embeddings on, which makes
+                // llama.cpp output logits for every token it reads, not just
+                // the last: the ~1,000-token prompt then pays for the output
+                // layer a thousand times and reserves a logits buffer for each
+                // token. `getEmbeddings` turns embeddings off when it returns
+                // (its `defer`) and clears the cache it used, so it runs once
+                // here, before any prompt is read. Its result is not needed.
+                _ = try? await llm?.getEmbeddings(Self.primingInput)
+                return LLMBox(llm)
             }
             let loaded = await loading.value.llm
             guard let self else { return false }

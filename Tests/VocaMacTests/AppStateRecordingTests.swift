@@ -210,7 +210,14 @@ final class AppStateRecordingTests: XCTestCase {
         XCTAssertFalse(appState.modelKeepAliveEnabled)
     }
 
-    func testReleasingTheHotkeyWhileTheModelLoadsNeverStartsTheMicrophone() async {
+    private func waitUntil(_ condition: () -> Bool) async {
+        let deadline = Date().addingTimeInterval(2)
+        while !condition(), Date() < deadline {
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+    }
+
+    func testReleasingTheHotkeyBeforeAnyAudioWhileTheModelLoadsRecordsNothing() async {
         let modelManager = MockModelManager()
         modelManager.downloadedModels = [.tiny]
         let whisperService = MockWhisperService()
@@ -225,15 +232,114 @@ final class AppStateRecordingTests: XCTestCase {
         let start = Task { await appState.startRecording() }
         for _ in 0..<200 where appState.appStatus != .processing { await Task.yield() }
         XCTAssertEqual(appState.appStatus, .processing)
-        // Push-to-talk key-up arrives while the model is still loading.
+        XCTAssertEqual(appState.dictationPhase, .loadingModel)
+        // Push-to-talk key-up arrives while the model is still loading, before
+        // the microphone delivered anything.
         await appState.stopRecordingAndTranscribe()
         await start.value
+        await waitUntil { !mocks.audioEngine.isCurrentlyRecording }
 
         XCTAssertTrue(mocks.whisperService.isModelLoaded)
         XCTAssertFalse(appState.isRecording)
         XCTAssertNotEqual(appState.appStatus, .recording)
-        XCTAssertNil(mocks.audioEngine.lastMaxDuration, "The audio engine must not be started")
+        XCTAssertFalse(mocks.audioEngine.isCurrentlyRecording, "The microphone opened for the load must close")
+        XCTAssertEqual(mocks.textInjector.injectCallCount, 0)
         XCTAssertGreaterThanOrEqual(mocks.hotKeyManager.resetKeyStateCallCount, 1)
+    }
+
+    func testReleasingTheHotkeyWhileTheModelLoadsTranscribesWhatWasSaid() async {
+        let modelManager = MockModelManager()
+        modelManager.downloadedModels = [.tiny]
+        let whisperService = MockWhisperService()
+        whisperService.loadedModelName = nil
+        whisperService.isModelLoaded = false
+        whisperService.loadDelayNanoseconds = 300_000_000
+        let (appState, mocks) = AppState.makeTestState(modelManager: modelManager, whisperService: whisperService)
+        let originalModel = appState.selectedModelSize
+        defer { appState.selectedModelSize = originalModel }
+        appState.selectedModelSize = ModelSize.tiny.rawValue
+        let spoken = [Float](repeating: 0.2, count: 1_600)
+        // What the microphone records after the key came up is not kept,
+        // beyond the buffer the tap was still filling at the release.
+        let after = [Float](repeating: 0.3, count: 8_000)
+        mocks.audioEngine.stopRecordingResult = spoken + after
+
+        let start = Task { await appState.startRecording() }
+        await waitUntil { mocks.audioEngine.isCurrentlyRecording }
+        XCTAssertTrue(mocks.audioEngine.isCurrentlyRecording, "The microphone opens while the model loads")
+        XCTAssertEqual(appState.dictationPhase, .loadingModel)
+        mocks.audioEngine.onAudioSamples?(spoken, 0)
+        await appState.stopRecordingAndTranscribe()
+        await start.value
+        await waitUntil { mocks.textInjector.injectCallCount == 1 }
+
+        XCTAssertEqual(mocks.textInjector.injectCallCount, 1)
+        let transcribed = mocks.whisperService.lastTranscribedAudioData ?? []
+        XCTAssertEqual(Array(transcribed.prefix(spoken.count)), spoken)
+        XCTAssertLessThanOrEqual(
+            transcribed.count, spoken.count + Int(CapturedSampleCounter.maxInFlightSeconds * 16_000)
+        )
+        XCTAssertFalse(appState.isRecording)
+        XCTAssertFalse(mocks.audioEngine.isCurrentlyRecording)
+    }
+
+    func testEscapeWhileTheModelLoadsClosesTheMicrophoneAtOnce() async {
+        let modelManager = MockModelManager()
+        modelManager.downloadedModels = [.tiny]
+        let whisperService = MockWhisperService()
+        whisperService.loadedModelName = nil
+        whisperService.isModelLoaded = false
+        whisperService.loadDelayNanoseconds = 1_000_000_000
+        let (appState, mocks) = AppState.makeTestState(modelManager: modelManager, whisperService: whisperService)
+        let originalModel = appState.selectedModelSize
+        defer { appState.selectedModelSize = originalModel }
+        appState.selectedModelSize = ModelSize.tiny.rawValue
+
+        let start = Task { await appState.startRecording() }
+        await waitUntil { mocks.audioEngine.isCurrentlyRecording }
+        XCTAssertTrue(mocks.audioEngine.isCurrentlyRecording)
+        // The status is `.processing` with nothing transcribing yet; Escape
+        // and the menu's Cancel must still be offered.
+        XCTAssertTrue(mocks.hotKeyManager.isCancelKeyArmed, "Escape must be claimed during the load")
+        XCTAssertTrue(appState.canCancelDictation)
+
+        // What Escape calls.
+        await appState.cancelDictation()
+        await waitUntil { !mocks.audioEngine.isCurrentlyRecording }
+
+        XCTAssertFalse(mocks.audioEngine.isCurrentlyRecording, "Escape must not leave the microphone on until the load ends")
+        XCTAssertFalse(mocks.whisperService.isModelLoaded, "Closed while the model was still loading")
+        await start.value
+        XCTAssertEqual(mocks.textInjector.injectCallCount, 0)
+        XCTAssertFalse(appState.isRecording)
+    }
+
+    func testTheRecordingLimitEndsADictationStillWaitingForTheModel() async {
+        let modelManager = MockModelManager()
+        modelManager.downloadedModels = [.tiny]
+        let whisperService = MockWhisperService()
+        whisperService.loadedModelName = nil
+        whisperService.isModelLoaded = false
+        whisperService.loadDelayNanoseconds = 300_000_000
+        let (appState, mocks) = AppState.makeTestState(modelManager: modelManager, whisperService: whisperService)
+        let originalModel = appState.selectedModelSize
+        defer { appState.selectedModelSize = originalModel }
+        appState.selectedModelSize = ModelSize.tiny.rawValue
+        let spoken = [Float](repeating: 0.2, count: 1_600)
+        mocks.audioEngine.stopRecordingResult = spoken
+
+        let start = Task { await appState.startRecording() }
+        await waitUntil { mocks.audioEngine.isCurrentlyRecording }
+        mocks.audioEngine.onAudioSamples?(spoken, 0)
+        // The engine's one-shot limit fires while the key is still held and
+        // the model is still loading.
+        mocks.audioEngine.onMaxDurationReached?()
+        await start.value
+        await waitUntil { mocks.textInjector.injectCallCount == 1 }
+
+        XCTAssertEqual(mocks.textInjector.injectCallCount, 1, "The limit ends the dictation, which is transcribed once the model is ready")
+        XCTAssertFalse(appState.isRecording)
+        XCTAssertFalse(mocks.audioEngine.isCurrentlyRecording)
     }
 
     func testHoldingTheHotkeyThroughTheModelLoadStillRecords() async {

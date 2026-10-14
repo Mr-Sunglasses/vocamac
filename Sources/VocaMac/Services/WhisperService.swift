@@ -32,6 +32,8 @@ enum WhisperError: LocalizedError {
 
 // MARK: - WhisperService
 
+/// Unchecked: the loaded model and its bookkeeping are only touched under
+/// `stateLock`; WhisperKit itself is used from one decode at a time per call.
 final class WhisperService: @unchecked Sendable {
 
     // MARK: - Properties
@@ -41,6 +43,12 @@ final class WhisperService: @unchecked Sendable {
     private let stateLock = NSLock()
     private var loadedKit: WhisperKit?
     private var loadedName: String?
+    /// Bumped whenever the model is dropped, so a load that started before
+    /// cannot install its model afterwards.
+    private var loadGeneration = 0
+    /// Decodes running, by the generation of the model they hold. A decode the
+    /// router gave up on keeps its model alive until it returns.
+    private var decodesInFlight: [Int: Int] = [:]
 
     /// The WhisperKit instance (initialized when a model is loaded)
     private var whisperKit: WhisperKit? {
@@ -49,6 +57,45 @@ final class WhisperService: @unchecked Sendable {
 
     /// Whether a model is currently loaded and ready
     var isModelLoaded: Bool { whisperKit != nil }
+
+    /// The loaded model, counted as in use until `endUse`.
+    private func beginUse() -> (kit: WhisperKit, generation: Int)? {
+        stateLock.withLock {
+            guard let kit = loadedKit else { return nil }
+            decodesInFlight[loadGeneration, default: 0] += 1
+            return (kit, loadGeneration)
+        }
+    }
+
+    private func endUse(_ generation: Int) {
+        stateLock.withLock {
+            let remaining = (decodesInFlight[generation] ?? 1) - 1
+            decodesInFlight[generation] = remaining > 0 ? remaining : nil
+        }
+    }
+
+    /// Decodes still holding a model that has since been dropped.
+    private var retiredDecodes: Int {
+        stateLock.withLock { decodesInFlight.filter { $0.key != loadGeneration }.values.reduce(0, +) }
+    }
+
+    /// How long a load waits for decodes on a dropped model to return.
+    static let retiredDecodeWaitSeconds: TimeInterval = 10
+
+    /// Wait, briefly, for decodes still holding a dropped model, so it is
+    /// freed before the next one loads and two are never resident together.
+    /// A decode stuck in CoreML may never return; the load then goes ahead.
+    private func waitForRetiredDecodes() async {
+        guard retiredDecodes > 0 else { return }
+        VocaLogger.info(.whisperService, "Waiting for a decode on the previous model to finish before loading")
+        let deadline = Date().addingTimeInterval(Self.retiredDecodeWaitSeconds)
+        while retiredDecodes > 0, Date() < deadline, !Task.isCancelled {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        if retiredDecodes > 0 {
+            VocaLogger.warning(.whisperService, "A decode on the previous model is still running; loading anyway")
+        }
+    }
 
     /// The name/variant of the currently loaded model
     var loadedModelName: String? {
@@ -80,6 +127,8 @@ final class WhisperService: @unchecked Sendable {
     ) async throws {
         // Unload any existing model
         unloadModel()
+        await waitForRetiredDecodes()
+        let generation = stateLock.withLock { loadGeneration }
 
         let displayName = modelName ?? "auto-detect"
         VocaLogger.info(.whisperService, "Loading model: \(displayName)...")
@@ -135,15 +184,19 @@ final class WhisperService: @unchecked Sendable {
 
             onPhaseChange?("Loading model…")
             let kit = try await WhisperKit(config)
-            // A load the router gave up on (`Deadline`) may still finish
-            // later; it must not replace whatever was loaded since.
-            try Task.checkCancellation()
 
             onPhaseChange?("Compiling neural engine…")
-            stateLock.withLock {
+            // A load the router gave up on (`Deadline`), or one the model was
+            // dropped under since, may still finish later; it must not
+            // replace whatever was loaded since. Checked and installed under
+            // the lock, so an unload cannot slip between the two.
+            let installed = stateLock.withLock { () -> Bool in
+                guard loadGeneration == generation, !Task.isCancelled else { return false }
                 loadedKit = kit
                 loadedName = modelName ?? kit.modelVariant.description
+                return true
             }
+            guard installed else { throw CancellationError() }
 
             let elapsed = CFAbsoluteTimeGetCurrent() - startTime
             VocaLogger.info(.whisperService, "Model loaded in \(String(format: "%.2f", elapsed))s")
@@ -161,7 +214,9 @@ final class WhisperService: @unchecked Sendable {
     /// the compiled programs and pages the weights in, so without this the
     /// user's first dictation pays for it. The result is discarded.
     func warmUp() async {
-        guard let kit = whisperKit else { return }
+        guard let use = beginUse() else { return }
+        defer { endUse(use.generation) }
+        let kit = use.kit
         let start = CFAbsoluteTimeGetCurrent()
         let options = DecodingOptions(
             language: modelSizeFromName(loadedModelName ?? "tiny").pinnedLanguage ?? "en",
@@ -190,6 +245,7 @@ final class WhisperService: @unchecked Sendable {
     /// Unload the current model and free memory
     func unloadModel() {
         let didUnload = stateLock.withLock {
+            loadGeneration &+= 1
             guard loadedKit != nil else { return false }
             loadedKit = nil
             loadedName = nil
@@ -227,9 +283,11 @@ final class WhisperService: @unchecked Sendable {
         endsAtSpeech: Bool = false,
         expectedLanguages: [String] = []
     ) async throws -> VocaTranscription {
-        guard let kit = whisperKit else {
+        guard let use = beginUse() else {
             throw WhisperError.modelNotLoaded
         }
+        defer { endUse(use.generation) }
+        let kit = use.kit
 
         guard !audioData.isEmpty else {
             throw WhisperError.emptyAudio
@@ -237,7 +295,11 @@ final class WhisperService: @unchecked Sendable {
 
         let modelUsed = modelSizeFromName(loadedModelName ?? "tiny")
         // A fine-tune trained on one decoder language ignores the setting.
+        // Someone who speaks only one language gets it directly: detection
+        // could only agree with it or be overruled by `correctedLanguage`,
+        // and it costs a pass, or a second decode when it is wrong.
         let language = modelUsed.pinnedLanguage ?? language
+            ?? (translate ? nil : Self.onlySpokenLanguage(expectedLanguages))
 
         let audioLengthSeconds = Double(audioData.count) / 16000.0
         VocaLogger.info(.whisperService, "Transcribing \(String(format: "%.1f", audioLengthSeconds))s of audio...")
@@ -937,6 +999,11 @@ final class WhisperService: @unchecked Sendable {
     /// The language to decode in instead of `detected`, or nil to keep it:
     /// the user's first language when they named some and `detected` is
     /// none of them.
+    /// The language to decode in when the user speaks exactly one.
+    static func onlySpokenLanguage(_ expected: [String]) -> String? {
+        expected.count == 1 ? expected.first : nil
+    }
+
     static func correctedLanguage(detected: String?, expected: [String]) -> String? {
         guard let detected, let first = expected.first, !expected.contains(detected) else { return nil }
         return first

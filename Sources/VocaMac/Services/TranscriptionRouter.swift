@@ -319,16 +319,26 @@ extension TranscriptionRouter: SpeechTranscribing {
         try Task.checkCancellation()
         activeEngine = engine
         if skipSilenceProvider() {
+            // Waited for, so the first dictation after a load is trimmed like
+            // every other; until the detector is ready a recording is decoded
+            // whole, silence and all.
             await voiceActivity.prepare()
+            await voiceActivity.waitUntilLoaded(timeout: Self.voiceActivityLoadWaitSeconds)
         }
         // The first prediction after a load is the slow one; take it now
         // rather than on the user's first dictation.
         switch engine {
         case .whisperKit: await whisper.warmUp()
         case .parakeet: await parakeet.warmUp()
-        case .appleSpeech, .sherpaOnnx, .customEndpoint: break
+        case .sherpaOnnx: await sherpa.warmUp()
+        case .appleSpeech, .customEndpoint: break
         }
     }
+
+    /// Longest a model load waits for the silence detector. Loading it from
+    /// the cache takes a fraction of a second; the first time it also
+    /// downloads (~2 MB), which is not worth holding a dictation for.
+    static let voiceActivityLoadWaitSeconds: TimeInterval = 5
 
     /// The transcription language the user selected, or nil for auto-detect.
     private var languagePreference: String? {

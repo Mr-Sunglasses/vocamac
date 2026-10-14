@@ -179,6 +179,9 @@ protocol CursorOverlayManaging: AnyObject {
     /// Whether partial words will arrive for this recording, so the live
     /// panel doesn't promise words an engine never sends.
     func setLiveWordsAvailable(_ available: Bool)
+    /// Say the speech model is loading: the first dictation after a cold
+    /// start records while it loads. `show` resets it.
+    func setLoadingSpeechModel(_ loading: Bool)
     /// Show a short failure message near the caret, then hide. Shown
     /// whatever the overlay style, Off included: a failure the user can't
     /// see looks like the hotkey did nothing.
@@ -198,6 +201,7 @@ protocol CursorOverlayManaging: AnyObject {
 extension CursorOverlayManaging {
     func setCommandSession(_ session: CommandModeSession?) {}
     func setLiveWordsAvailable(_ available: Bool) {}
+    func setLoadingSpeechModel(_ loading: Bool) {}
     func transitionToCleaningUp() {}
     func setControlActions(stop: @escaping @MainActor () -> Void, cancel: @escaping @MainActor () -> Void) {}
     func setEscapeHintVisible(_ visible: Bool) {}

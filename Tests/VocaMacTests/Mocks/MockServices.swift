@@ -513,7 +513,7 @@ final class MockModelManager: ModelManaging {
             return "openai_whisper-medium"
         case .vocaHinglish:
             return "vocahq_voca-hinglish_820MB"
-        case .parakeetUltra, .parakeetV3, .parakeetV2, .parakeetTdtCtc110m, .appleSpeech,
+        case .parakeetUltra, .parakeetV3, .parakeetV2, .parakeetUnified, .parakeetTdtCtc110m, .appleSpeech,
              .moonshineTiny, .moonshineBase, .senseVoiceSmall, .gigaamV3, .canary180mFlash,
              .qwen3Asr06B, .customEndpoint:
             return size.rawValue
@@ -970,6 +970,7 @@ extension AppState {
         // The model recommendation reads both; a leaked value changes which
         // model onboarding prepares.
         UserDefaults.standard.removeObject(forKey: PreferenceKey.spokenLanguages)
+        UserDefaults.standard.removeObject(forKey: PreferenceKey.selectedLanguage)
         UserDefaults.standard.removeObject(forKey: PreferenceKey.modelRecommendationPriority)
         UserDefaults.standard.removeObject(forKey: PreferenceKey.appendTrailingSpace)
         UserDefaults.standard.removeObject(forKey: PreferenceKey.autoCapitalize)
@@ -1065,6 +1066,9 @@ extension AppState {
         // Command Mode's automatic engine choice must not depend on whether
         // the machine running the tests has Apple Intelligence turned on.
         appState.appleIntelligenceAvailable = { false }
+        // Early-capture boundaries otherwise count the real time between a
+        // mock delivery and the release.
+        appState.captureClock = { 1_000 }
         return (appState, mocks)
     }
 }

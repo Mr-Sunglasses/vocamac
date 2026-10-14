@@ -251,8 +251,7 @@ enum AccessibilityTextReader {
         let ownPID = ProcessInfo.processInfo.processIdentifier
 
         var candidates: [(AXUIElement, pid_t)] = []
-        let systemWide = AXUIElementCreateSystemWide()
-        AXUIElementSetMessagingTimeout(systemWide, selectionTimeout)
+        let systemWide = AccessibilityTimeout.systemWideElement()
         if let focused = copyElement(systemWide, kAXFocusedUIElementAttribute) {
             var owner: pid_t = 0
             if AXUIElementGetPid(focused, &owner) == .success, owner != ownPID {
@@ -301,8 +300,7 @@ enum AccessibilityTextReader {
         guard AXIsProcessTrusted(), location >= 0, !expected.isEmpty else { return false }
         let ownPID = ProcessInfo.processInfo.processIdentifier
         var candidates: [AXUIElement] = []
-        let systemWide = AXUIElementCreateSystemWide()
-        AXUIElementSetMessagingTimeout(systemWide, selectionTimeout)
+        let systemWide = AccessibilityTimeout.systemWideElement()
         if let focused = copyElement(systemWide, kAXFocusedUIElementAttribute) {
             var owner: pid_t = 0
             if AXUIElementGetPid(focused, &owner) == .success, owner != ownPID { candidates.append(focused) }

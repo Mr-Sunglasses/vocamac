@@ -201,4 +201,19 @@ final class WhisperLanguageGuardTests: XCTestCase {
         XCTAssertNil(WhisperService.correctedLanguage(detected: "hi", expected: []))
         XCTAssertNil(WhisperService.correctedLanguage(detected: nil, expected: ["en"]))
     }
+
+    /// One spoken language is decoded directly: whatever detection said, the
+    /// guard above would have ended in that language anyway.
+    func testASingleSpokenLanguageSkipsDetection() {
+        XCTAssertEqual(WhisperService.onlySpokenLanguage(["de"]), "de")
+        for detected in ["de", "en", "hi"] {
+            let final = WhisperService.correctedLanguage(detected: detected, expected: ["de"]) ?? detected
+            XCTAssertEqual(final, WhisperService.onlySpokenLanguage(["de"]))
+        }
+    }
+
+    func testSeveralOrNoSpokenLanguagesStillDetect() {
+        XCTAssertNil(WhisperService.onlySpokenLanguage(["en", "hi"]))
+        XCTAssertNil(WhisperService.onlySpokenLanguage([]))
+    }
 }
