@@ -121,6 +121,7 @@ final class TextInjector: @unchecked Sendable {
     /// `clearContents()`. Returning `false` forces the failure that is
     /// otherwise reachable only when another process owns the board mid-write.
     private let clipboardWriteOverride: ((String, NSPasteboard) -> Bool)?
+    private let prePasteWaitOverride: (@MainActor (NSPasteboard) async -> Void)?
     var onFailure: ((String) -> Void)?
 
     /// Clipboard fallback injections must run one at a time. Otherwise a
@@ -142,7 +143,8 @@ final class TextInjector: @unchecked Sendable {
         pasteActionOverride: (() -> Void)? = nil,
         accessibilityWorkerOverride: (@Sendable (String) -> Bool)? = nil,
         frontmostPIDProvider: @escaping () -> pid_t? = { NSWorkspace.shared.frontmostApplication?.processIdentifier },
-        clipboardWriteOverride: ((String, NSPasteboard) -> Bool)? = nil
+        clipboardWriteOverride: ((String, NSPasteboard) -> Bool)? = nil,
+        prePasteWaitOverride: (@MainActor (NSPasteboard) async -> Void)? = nil
     ) {
         self.pasteboard = pasteboard
         self.accessibilityTrustedOverride = accessibilityTrustedOverride
@@ -151,6 +153,7 @@ final class TextInjector: @unchecked Sendable {
         self.accessibilityWorkerOverride = accessibilityWorkerOverride
         self.frontmostPIDProvider = frontmostPIDProvider
         self.clipboardWriteOverride = clipboardWriteOverride
+        self.prePasteWaitOverride = prePasteWaitOverride
     }
 
     // MARK: - Public API
@@ -463,7 +466,11 @@ final class TextInjector: @unchecked Sendable {
                     return
                 }
                 var expectedChangeCount = pasteboard.changeCount
-                try await Task.sleep(nanoseconds: UInt64(prePasteDelay * 1_000_000_000))
+                if let prePasteWaitOverride {
+                    await prePasteWaitOverride(pasteboard)
+                } else {
+                    try await Task.sleep(nanoseconds: UInt64(prePasteDelay * 1_000_000_000))
+                }
                 if pasteboard.changeCount != expectedChangeCount {
                     // The snapshot is reassigned first, so a failure here puts
                     // back the clipboard that replaced the original, not the

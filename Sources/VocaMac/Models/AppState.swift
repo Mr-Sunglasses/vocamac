@@ -1362,7 +1362,17 @@ final class AppState: ObservableObject {
         // fails or the key-up event is lost entirely.
         audioEngine.onMaxDurationReached = { [weak self] in
             Task { @MainActor in
-                guard let self = self, self.isRecording else { return }
+                guard let self = self else { return }
+                // A microphone opened early (model loading, or a queued
+                // dictation) is not `isRecording` yet, but its clock started
+                // when it opened and the engine fires only once. End it as a
+                // key release would; it's transcribed once it can start.
+                if !self.isRecording, let early = self.earlyCapture, early.releasedAtSampleCount == nil {
+                    VocaLogger.info(.appState, "Max recording duration (\(self.maxRecordingDuration)s) reached before the dictation could start — ending it")
+                    await self.stopRecordingAndTranscribe()
+                    return
+                }
+                guard self.isRecording else { return }
                 VocaLogger.info(.appState, "Max recording duration (\(self.maxRecordingDuration)s) reached — auto-stopping")
                 await self.stopRecordingAndTranscribe()
             }
@@ -2668,7 +2678,7 @@ final class AppState: ObservableObject {
                 // The microphone opened while the model loads; keep what it
                 // heard until now and transcribe it once the model is ready.
                 if let early = earlyCapture, early.releasedAtSampleCount == nil {
-                    early.releasedAtSampleCount = early.counter.count
+                    early.releasedAtSampleCount = early.counter.releaseBoundary(at: ProcessInfo.processInfo.systemUptime)
                     if soundEffectsEnabled { soundManager.playStopSound() }
                     cursorOverlay.transitionToProcessing()
                 }
@@ -2677,7 +2687,7 @@ final class AppState: ObservableObject {
             if queuedRecordingStart != nil, let early = earlyCapture, early.releasedAtSampleCount == nil {
                 // The microphone opened early, so what was said is kept and
                 // transcribed once the previous dictation is delivered.
-                early.releasedAtSampleCount = early.counter.count
+                early.releasedAtSampleCount = early.counter.releaseBoundary(at: ProcessInfo.processInfo.systemUptime)
                 if soundEffectsEnabled { soundManager.playStopSound() }
                 VocaLogger.info(.appState, "Queued dictation ended before it could start — transcribing it next")
                 return
@@ -3134,6 +3144,10 @@ final class AppState: ObservableObject {
                 cursorOverlay.hide()
             }
             queuedRecordingStart = nil
+            // A microphone opened early (model loading, or a queued
+            // dictation) closes now, not when the load finishes, which can
+            // take minutes with playback muted all the while.
+            discardEarlyCapture()
             return
         }
 
@@ -6166,11 +6180,42 @@ private final class EarlyCapture {
 
 /// Counts samples from the audio tap's thread for the main actor.
 final class CapturedSampleCounter: Sendable {
-    private let total = OSAllocatedUnfairLock(initialState: 0)
+    private struct State {
+        var count = 0
+        /// Uptime of the last delivery.
+        var lastDelivery: TimeInterval?
+    }
 
-    var count: Int { total.withLock { $0 } }
+    /// The tap hands over a buffer at a time (about 85 ms at 48 kHz). Time
+    /// past the last delivery is counted up to this much, so a stall in the
+    /// tap can't stretch a release boundary into later speech.
+    static let maxInFlightSeconds: TimeInterval = 0.25
 
-    func record(_ end: Int) {
-        total.withLock { $0 = max($0, end) }
+    private let state = OSAllocatedUnfairLock(initialState: State())
+    private let sampleRate: Double
+
+    init(sampleRate: Double = 16_000) {
+        self.sampleRate = sampleRate
+    }
+
+    var count: Int { state.withLock { $0.count } }
+
+    func record(_ end: Int, at uptime: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+        state.withLock {
+            $0.count = max($0.count, end)
+            $0.lastDelivery = uptime
+        }
+    }
+
+    /// Samples captured up to `uptime`, including the buffer the tap is
+    /// still filling: the delivered count alone cuts off the last syllable.
+    /// A release before the first buffer stays at zero. That is under one
+    /// buffer of audio, too short for a word.
+    func releaseBoundary(at uptime: TimeInterval) -> Int {
+        state.withLock { state in
+            guard let lastDelivery = state.lastDelivery else { return state.count }
+            let pending = min(max(uptime - lastDelivery, 0), Self.maxInFlightSeconds)
+            return state.count + Int(pending * sampleRate)
+        }
     }
 }

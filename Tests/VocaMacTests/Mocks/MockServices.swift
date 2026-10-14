@@ -970,6 +970,7 @@ extension AppState {
         // The model recommendation reads both; a leaked value changes which
         // model onboarding prepares.
         UserDefaults.standard.removeObject(forKey: PreferenceKey.spokenLanguages)
+        UserDefaults.standard.removeObject(forKey: PreferenceKey.selectedLanguage)
         UserDefaults.standard.removeObject(forKey: PreferenceKey.modelRecommendationPriority)
         UserDefaults.standard.removeObject(forKey: PreferenceKey.appendTrailingSpace)
         UserDefaults.standard.removeObject(forKey: PreferenceKey.autoCapitalize)

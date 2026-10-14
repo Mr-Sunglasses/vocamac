@@ -346,14 +346,15 @@ extension ClipboardPreservationTests {
             frontmostPIDProvider: { 123 },
             clipboardWriteOverride: { text, pasteboard in
                 guard writes.next() == 1 else { return false }
-                // The board was just cleared for us; land the transcript, then
-                // let another app replace it during the pre-paste delay.
+                // The board was just cleared for us; land the transcript.
                 pasteboard.setString(text, forType: .string)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) {
-                    pasteboard.clearContents()
-                    pasteboard.setString("replacement", forType: .string)
-                }
                 return true
+            },
+            prePasteWaitOverride: { pasteboard in
+                // Another app replaces the transcript during the pre-paste
+                // wait. Done in the wait itself, not on a timer that races it.
+                pasteboard.clearContents()
+                pasteboard.setString("replacement", forType: .string)
             }
         )
         var failures = 0
