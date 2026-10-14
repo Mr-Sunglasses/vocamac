@@ -1066,6 +1066,9 @@ extension AppState {
         // Command Mode's automatic engine choice must not depend on whether
         // the machine running the tests has Apple Intelligence turned on.
         appState.appleIntelligenceAvailable = { false }
+        // Early-capture boundaries otherwise count the real time between a
+        // mock delivery and the release.
+        appState.captureClock = { 1_000 }
         return (appState, mocks)
     }
 }

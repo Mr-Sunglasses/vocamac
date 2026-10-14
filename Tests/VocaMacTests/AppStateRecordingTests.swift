@@ -298,8 +298,13 @@ final class AppStateRecordingTests: XCTestCase {
         let start = Task { await appState.startRecording() }
         await waitUntil { mocks.audioEngine.isCurrentlyRecording }
         XCTAssertTrue(mocks.audioEngine.isCurrentlyRecording)
+        // The status is `.processing` with nothing transcribing yet; Escape
+        // and the menu's Cancel must still be offered.
+        XCTAssertTrue(mocks.hotKeyManager.isCancelKeyArmed, "Escape must be claimed during the load")
+        XCTAssertTrue(appState.canCancelDictation)
 
-        await appState.cancelRecording()
+        // What Escape calls.
+        await appState.cancelDictation()
         await waitUntil { !mocks.audioEngine.isCurrentlyRecording }
 
         XCTAssertFalse(mocks.audioEngine.isCurrentlyRecording, "Escape must not leave the microphone on until the load ends")

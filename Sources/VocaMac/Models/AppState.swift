@@ -638,7 +638,11 @@ final class AppState: ObservableObject {
     /// stop arriving then is remembered here and applied once the model is
     /// ready. Published so the menu can say the model is loading rather than
     /// transcribing (`dictationPhase`).
-    @Published private(set) var isLoadingModelForRecording = false
+    @Published private(set) var isLoadingModelForRecording = false {
+        // The status is `.processing` during the load, with no transcription
+        // yet: without this, Escape isn't claimed and can't cancel it.
+        didSet { if oldValue != isLoadingModelForRecording { refreshCancelKeyArming() } }
+    }
     private var pendingStopDuringModelLoad: PendingStopKind?
 
     /// A dictation started while the previous one was still being transcribed
@@ -657,6 +661,10 @@ final class AppState: ObservableObject {
     /// lost everything said in the meantime — and all of it when the key came
     /// up first. The queued recording adopts this capture when it starts.
     private var earlyCapture: EarlyCapture?
+
+    /// Clock for early-capture release boundaries. Tests fix it, so a boundary
+    /// doesn't depend on how long the test machine took between two calls.
+    var captureClock: @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
 
     /// The speech model load in progress, if any.
     private var inFlightModelLoad: Task<Void, Error>?
@@ -2678,7 +2686,7 @@ final class AppState: ObservableObject {
                 // The microphone opened while the model loads; keep what it
                 // heard until now and transcribe it once the model is ready.
                 if let early = earlyCapture, early.releasedAtSampleCount == nil {
-                    early.releasedAtSampleCount = early.counter.releaseBoundary(at: ProcessInfo.processInfo.systemUptime)
+                    early.releasedAtSampleCount = early.counter.releaseBoundary()
                     if soundEffectsEnabled { soundManager.playStopSound() }
                     cursorOverlay.transitionToProcessing()
                 }
@@ -2687,7 +2695,7 @@ final class AppState: ObservableObject {
             if queuedRecordingStart != nil, let early = earlyCapture, early.releasedAtSampleCount == nil {
                 // The microphone opened early, so what was said is kept and
                 // transcribed once the previous dictation is delivered.
-                early.releasedAtSampleCount = early.counter.releaseBoundary(at: ProcessInfo.processInfo.systemUptime)
+                early.releasedAtSampleCount = early.counter.releaseBoundary()
                 if soundEffectsEnabled { soundManager.playStopSound() }
                 VocaLogger.info(.appState, "Queued dictation ended before it could start — transcribing it next")
                 return
@@ -3299,12 +3307,13 @@ final class AppState: ObservableObject {
     /// touching the dictation flags: the previous dictation still owns them.
     private func beginEarlyCapture() {
         guard earlyCapture == nil else { return }
-        let counter = CapturedSampleCounter()
+        let counter = CapturedSampleCounter(clock: captureClock)
         audioEngine.onAudioSamples = { samples, offset in counter.record(offset + samples.count) }
         let start = Task { @MainActor [weak self] () -> Bool in
             guard let self else { return false }
             let started = await self.startConfiguredAudioEngine()
             guard started, self.earlyCapture?.counter === counter else { return started }
+            counter.markLive()
             // Recording while the model loads: the overlay can say so now.
             if self.isLoadingModelForRecording, self.earlyCapture?.releasedAtSampleCount == nil {
                 self.cursorOverlay.transitionToRecording()
@@ -5829,7 +5838,7 @@ extension AppState {
 
     /// Something the menu's Cancel can stop: a recording, or a dictation
     /// still being transcribed or cleaned up.
-    var canCancelDictation: Bool { isCapturingAudio || isTranscribing }
+    var canCancelDictation: Bool { isCapturingAudio || isTranscribing || isLoadingModelForRecording }
 
     fileprivate func refreshCancelKeyArming(status: AppStatus? = nil) {
         guard let monitor = hotKeyManager as? HotKeyShortcutMonitoring else { return }
@@ -5837,7 +5846,8 @@ extension AppState {
         // A result on screen is closed with Escape whatever the dictation
         // setting says: it is the only key the panel has.
         monitor.setCancelKeyArmed(
-            (escapeCancelsDictation && (current == .recording || isTranscribing)) || commandReview != nil
+            (escapeCancelsDictation && (current == .recording || isTranscribing || isLoadingModelForRecording))
+                || commandReview != nil
         )
     }
 
@@ -6184,38 +6194,65 @@ final class CapturedSampleCounter: Sendable {
         var count = 0
         /// Uptime of the last delivery.
         var lastDelivery: TimeInterval?
+        /// Uptime the microphone went live.
+        var liveSince: TimeInterval?
     }
 
-    /// The tap hands over a buffer at a time (about 85 ms at 48 kHz). Time
-    /// past the last delivery is counted up to this much, so a stall in the
-    /// tap can't stretch a release boundary into later speech.
-    static let maxInFlightSeconds: TimeInterval = 0.25
+    /// The tap hands over 4096 frames at a time: about 85 ms at 48 kHz, but
+    /// 512 ms from an 8 kHz Bluetooth headset. Time past the last delivery
+    /// is counted up to this much, so a stalled tap can't stretch a release
+    /// boundary into later speech.
+    static let maxInFlightSeconds: TimeInterval = 0.6
+
+    /// A release before the first delivery that is shorter than this is a tap
+    /// of the key, not a word.
+    static let minimumUndeliveredSeconds: TimeInterval = 0.1
 
     private let state = OSAllocatedUnfairLock(initialState: State())
     private let sampleRate: Double
+    private let clock: @Sendable () -> TimeInterval
 
-    init(sampleRate: Double = 16_000) {
+    init(
+        sampleRate: Double = 16_000,
+        clock: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
+    ) {
         self.sampleRate = sampleRate
+        self.clock = clock
     }
 
     var count: Int { state.withLock { $0.count } }
 
-    func record(_ end: Int, at uptime: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+    func record(_ end: Int) { record(end, at: clock()) }
+
+    func record(_ end: Int, at uptime: TimeInterval) {
         state.withLock {
             $0.count = max($0.count, end)
             $0.lastDelivery = uptime
         }
     }
 
+    /// The microphone went live: from here on audio is being captured, even
+    /// before its first buffer arrives.
+    func markLive() { markLive(at: clock()) }
+
+    func markLive(at uptime: TimeInterval) {
+        state.withLock { if $0.liveSince == nil { $0.liveSince = uptime } }
+    }
+
     /// Samples captured up to `uptime`, including the buffer the tap is
-    /// still filling: the delivered count alone cuts off the last syllable.
-    /// A release before the first buffer stays at zero. That is under one
-    /// buffer of audio, too short for a word.
+    /// still filling: the delivered count alone cuts off the last syllable,
+    /// and a short word on a slow headset can end before the first buffer.
+    func releaseBoundary() -> Int { releaseBoundary(at: clock()) }
+
     func releaseBoundary(at uptime: TimeInterval) -> Int {
         state.withLock { state in
-            guard let lastDelivery = state.lastDelivery else { return state.count }
-            let pending = min(max(uptime - lastDelivery, 0), Self.maxInFlightSeconds)
-            return state.count + Int(pending * sampleRate)
+            if let lastDelivery = state.lastDelivery {
+                let pending = min(max(uptime - lastDelivery, 0), Self.maxInFlightSeconds)
+                return state.count + Int((pending * sampleRate).rounded())
+            }
+            guard let liveSince = state.liveSince else { return state.count }
+            let elapsed = min(max(uptime - liveSince, 0), Self.maxInFlightSeconds)
+            return elapsed < Self.minimumUndeliveredSeconds ? 0 : Int((elapsed * sampleRate).rounded())
         }
     }
 }
