@@ -9,10 +9,17 @@ final class CapturedSampleCounterTests: XCTestCase {
         XCTAssertEqual(counter.releaseBoundary(at: 10), 0)
     }
 
-    func testATapOfTheKeyBeforeTheFirstBufferKeepsNothing() {
+    func testAQuickReleaseBeforeTheFirstBufferKeepsWhatWasCaptured() {
+        // No minimum: like any recording, silence trimming judges it.
         let counter = CapturedSampleCounter()
         counter.markLive(at: 10)
-        XCTAssertEqual(counter.releaseBoundary(at: 10.05), 0)
+        XCTAssertEqual(counter.releaseBoundary(at: 10.05), 800)
+    }
+
+    func testAReleaseAsTheMicrophoneGoesLiveKeepsNothing() {
+        let counter = CapturedSampleCounter()
+        counter.markLive(at: 10)
+        XCTAssertEqual(counter.releaseBoundary(at: 10), 0)
     }
 
     func testAShortWordBeforeASlowFirstBufferIsKept() {

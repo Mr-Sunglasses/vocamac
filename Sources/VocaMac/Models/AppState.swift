@@ -6204,10 +6204,6 @@ final class CapturedSampleCounter: Sendable {
     /// boundary into later speech.
     static let maxInFlightSeconds: TimeInterval = 0.6
 
-    /// A release before the first delivery that is shorter than this is a tap
-    /// of the key, not a word.
-    static let minimumUndeliveredSeconds: TimeInterval = 0.1
-
     private let state = OSAllocatedUnfairLock(initialState: State())
     private let sampleRate: Double
     private let clock: @Sendable () -> TimeInterval
@@ -6242,6 +6238,9 @@ final class CapturedSampleCounter: Sendable {
     /// Samples captured up to `uptime`, including the buffer the tap is
     /// still filling: the delivered count alone cuts off the last syllable,
     /// and a short word on a slow headset can end before the first buffer.
+    /// No minimum length: like any recording, a short one is left to the
+    /// silence trimming. (The live time is stamped on the main actor, so it
+    /// can run late. A minimum would then drop real words.)
     func releaseBoundary() -> Int { releaseBoundary(at: clock()) }
 
     func releaseBoundary(at uptime: TimeInterval) -> Int {
@@ -6252,7 +6251,7 @@ final class CapturedSampleCounter: Sendable {
             }
             guard let liveSince = state.liveSince else { return state.count }
             let elapsed = min(max(uptime - liveSince, 0), Self.maxInFlightSeconds)
-            return elapsed < Self.minimumUndeliveredSeconds ? 0 : Int((elapsed * sampleRate).rounded())
+            return Int((elapsed * sampleRate).rounded())
         }
     }
 }
