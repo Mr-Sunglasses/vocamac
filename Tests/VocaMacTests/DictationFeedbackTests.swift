@@ -128,18 +128,21 @@ final class MenuBarStatusTests: XCTestCase {
 
 final class DictationAnnouncementTests: XCTestCase {
 
-    func testStartAndStopAreAnnounced() {
-        XCTAssertEqual(DictationAnnouncement.message(from: .idle, to: .recording, isCommandMode: false), "Recording")
-        XCTAssertEqual(DictationAnnouncement.message(from: .error, to: .recording, isCommandMode: false), "Recording")
+    func testStartIsAnnouncedOnlyOnceTheMicrophoneIsLive() {
+        // The status turns to `.recording` while a Bluetooth input may still
+        // be connecting, so that change says nothing.
+        XCTAssertNil(DictationAnnouncement.message(from: .idle, to: .recording, isCommandMode: false))
+        XCTAssertNil(DictationAnnouncement.message(from: .error, to: .recording, isCommandMode: false))
+        XCTAssertEqual(DictationAnnouncement.recordingStarted(isCommandMode: false), "Recording")
+        XCTAssertEqual(DictationAnnouncement.recordingStarted(isCommandMode: true), "Command Mode listening")
+    }
+
+    func testStopIsAnnounced() {
         XCTAssertEqual(
             DictationAnnouncement.message(from: .recording, to: .processing, isCommandMode: false),
             "Recording stopped, transcribing"
         )
         XCTAssertEqual(DictationAnnouncement.message(from: .recording, to: .idle, isCommandMode: false), "Recording stopped")
-        XCTAssertEqual(
-            DictationAnnouncement.message(from: .idle, to: .recording, isCommandMode: true),
-            "Command Mode listening"
-        )
     }
 
     func testDeliveryAndUnchangedStatusesStayQuiet() {
@@ -314,6 +317,24 @@ final class AppStateDictationFeedbackTests: XCTestCase {
         appState.appStatus = .idle
         XCTAssertFalse(appState.isCleaningUp)
         XCTAssertEqual(appState.processingStatusText, "Transcribing…")
+    }
+
+    func testASettingsCleanupRunLeavesTheDictationStageAlone() async {
+        // A cleanup try or preview can run while a dictation is still
+        // transcribing; it must not move that dictation to "Cleaning up…".
+        let cleanup = MockTranscriptCleanup()
+        cleanup.cleanHandler = { _ in "Hello." }
+        let (appState, mocks) = AppState.makeTestState(transcriptCleanup: cleanup)
+        appState.transcriptCleanupEnabled = true
+        appState.appStatus = .processing
+
+        _ = await appState.tryCleanup("so um hello", prompt: TranscriptCleanup.defaultPrompt)
+        _ = await appState.previewWritingProfile("so um hello")
+
+        XCTAssertEqual(cleanup.previewCallCount, 2, "Both runs reached the model")
+        XCTAssertFalse(appState.isCleaningUp)
+        XCTAssertEqual(appState.processingStatusText, "Transcribing…")
+        XCTAssertEqual(mocks.cursorOverlay.cleaningUpCallCount, 0)
     }
 
     func testTheOverlayCancelButtonCancelsTheRecording() async throws {

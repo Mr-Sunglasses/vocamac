@@ -132,11 +132,16 @@ enum MenuBarAccessibility {
 /// What VoiceOver says as a dictation moves along, so someone who can't see
 /// the overlay knows the microphone is on and when it went off.
 enum DictationAnnouncement {
+    /// What VoiceOver hears once the microphone is live. The status turns to
+    /// `.recording` earlier, while the input is still connecting, so the
+    /// status change itself isn't announced.
+    static func recordingStarted(isCommandMode: Bool) -> String {
+        isCommandMode ? "Command Mode listening" : "Recording"
+    }
+
     static func message(from oldStatus: AppStatus, to newStatus: AppStatus, isCommandMode: Bool) -> String? {
         guard oldStatus != newStatus else { return nil }
         switch (oldStatus, newStatus) {
-        case (_, .recording):
-            return isCommandMode ? "Command Mode listening" : "Recording"
         case (.recording, .processing):
             return isCommandMode ? "Editing selection" : "Recording stopped, transcribing"
         case (.recording, .idle):

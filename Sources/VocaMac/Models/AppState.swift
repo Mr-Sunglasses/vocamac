@@ -776,7 +776,16 @@ final class AppState: ObservableObject {
         )
     }
 
+    /// Pipeline for Settings previews, cleanup tries and History retries.
+    /// These can run while a dictation is processing, so they leave its stage
+    /// alone.
     private var outputPipeline: DictationOutputPipeline {
+        DictationOutputPipeline(cleaner: activeCleanupService, snippets: snippetExpander)
+    }
+
+    /// Pipeline for the dictation itself: reaching the cleanup model moves the
+    /// overlay, menu and footer to "Cleaning up…".
+    private var dictationOutputPipeline: DictationOutputPipeline {
         DictationOutputPipeline(
             cleaner: activeCleanupService, snippets: snippetExpander,
             onModelCleanup: { [weak self] in self?.dictationReachedCleanup() }
@@ -2378,6 +2387,9 @@ final class AppState: ObservableObject {
         }
 
         cursorOverlay.transitionToRecording()
+        // Announced now, not when the status changed: until the microphone is
+        // live (seconds on Bluetooth) anything said is lost.
+        DictationAnnouncement.post(DictationAnnouncement.recordingStarted(isCommandMode: commandModeSession != nil))
 
         // Spotify Connect plays through another device, outside the Mac's
         // mixer, so muting cannot reach it — only a transport pause can. Ask
@@ -2544,7 +2556,7 @@ final class AppState: ObservableObject {
     ) -> CleanupSpeculator {
         var cachedProfile: WritingProfile?
         var cachedTerms: [String]?
-        return CleanupSpeculator(pipeline: outputPipeline) { [weak self] language in
+        return CleanupSpeculator(pipeline: dictationOutputPipeline) { [weak self] language in
             guard let self else { return nil }
             if cachedProfile == nil {
                 let documentURL = await Self.awaitDocumentURL(documentURLTask)
@@ -2830,7 +2842,7 @@ final class AppState: ObservableObject {
                 let spoken = laysOutParagraphs
                     ? await Self.paragraphsAtPauses(result, audio: audioData)
                     : result.text
-                let output = await outputPipeline.process(
+                let output = await dictationOutputPipeline.process(
                     spoken, profile: profile, snippetList: snippets,
                     cleanupEnabled: transcriptCleanupEnabled, rewritingEnabled: writingRewriteEnabled,
                     model: selectedCleanupModelKind, customPrompt: effectiveCleanupPrompt,
