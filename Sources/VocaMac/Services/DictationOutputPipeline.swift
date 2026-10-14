@@ -56,6 +56,9 @@ struct CleanupRequest: Equatable {
 struct DictationOutputPipeline {
     let cleaner: TranscriptCleaning
     let snippets: SnippetExpanding
+    /// Called once the model is about to be asked, so the overlay and menu
+    /// can say "Cleaning up" rather than "Transcribing".
+    var onModelCleanup: (@MainActor () -> Void)?
 
     func process(
         _ original: String,
@@ -133,6 +136,7 @@ struct DictationOutputPipeline {
         case .model(let value):
             plan = value
         }
+        onModelCleanup?()
 
         let masked = prepared.masked
         let slices = Self.splittingParagraphs(pieces.count >= 2

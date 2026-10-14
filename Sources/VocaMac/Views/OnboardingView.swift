@@ -132,6 +132,9 @@ struct OnboardingView: View {
                     .frame(width: introExpanded ? geometry.size.width : Self.sceneWidth)
                     .frame(maxHeight: .infinity)
                     .clipped()
+                if !introDone {
+                    introSkipControl
+                }
             }
         }
         .ignoresSafeArea()
@@ -324,10 +327,34 @@ struct OnboardingView: View {
         }
     }
 
+    /// The whole window during the opening: a click or Return skips
+    /// it. VoiceOver reads it as a "Skip intro" button.
+    private var introSkipControl: some View {
+        Button(action: skipIntro) {
+            Color.clear
+                .contentShape(Rectangle())
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .buttonStyle(.plain)
+        .keyboardShortcut(.defaultAction)
+        .accessibilityLabel("Skip intro")
+        .help("Click or press Return to skip")
+    }
+
     // MARK: - Navigation
+
+    /// Go straight to the first step.
+    private func skipIntro() {
+        guard !introDone else { return }
+        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.35)) {
+            introExpanded = false
+            introDone = true
+        }
+    }
 
     /// Holds the name over the full scene for a moment, then opens the
     /// window onto the first step. Under Reduce Motion it starts there.
+    /// A click or Return skips it (`skipIntro`).
     private func playIntro() {
         guard !introDone else { return }
         guard !reduceMotion else {
@@ -337,6 +364,7 @@ struct OnboardingView: View {
         }
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(1.6))
+            guard !introDone else { return }
             withAnimation(.timingCurve(0.75, 0, 0.2, 1, duration: 1.3)) {
                 introExpanded = false
             }
@@ -1155,9 +1183,10 @@ struct CompleteStep: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(permissionsReady ? "Your voice has a new home." : "Finish permissions to start.")
                         .font(VocaDesign.display(22))
-                    Text("Find the waveform in your menu bar.")
+                    Text("Find \(Image(systemName: "mic.fill")) in your menu bar.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
+                        .accessibilityLabel("Find the microphone icon in your menu bar.")
                 }
                 Spacer(minLength: 0)
             }
@@ -1220,9 +1249,15 @@ struct CompleteStep: View {
                     Image(systemName: "wand.and.stars")
                         .font(.caption)
                         .foregroundStyle(VocaDesign.accent)
-                    Text("Want “um” and “uh” removed automatically? Settings → Smart Cleanup.")
+                        .accessibilityHidden(true)
+                    Text("Want punctuation tidied and repeated words removed automatically?")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                    Button("Open Smart Cleanup") {
+                        SettingsWindowManager.shared.open(appState: appState, page: .cleanup)
+                    }
+                    .buttonStyle(.vocaLink)
+                    .font(.caption)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }

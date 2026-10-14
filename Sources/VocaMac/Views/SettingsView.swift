@@ -443,7 +443,7 @@ struct SettingsSidebarFooter: View {
             guard appState.isDictationReady else { return appState.dictationReadinessTitle }
             return appState.cleanupReadinessLabel.map { "Dictation ready · \($0)" } ?? "Dictation ready"
         case .recording: return "Recording…"
-        case .processing: return "Transcribing…"
+        case .processing: return appState.processingStatusText
         case .error: return appState.errorMessage ?? "Error"
         }
     }
@@ -565,15 +565,60 @@ struct DictationSettingsPage: View {
                     isOn: $appState.processWhileSpeaking
                 )
                 .settingsTarget("process-while-speaking")
-                .help("Cleans each sentence up too when Smart Cleanup is on. Your Mac works while you talk, "
-                    + "which uses more battery, and that work is wasted if you cancel. Not used for dictations "
-                    + "started in Low Power Mode or while your Mac runs hot. Command Mode and previews are unaffected.")
+                .help("Cleans each sentence up too when Smart Cleanup is on. The work done while you talk "
+                    + "is wasted if you cancel. Command Mode and previews are unaffected.")
                 Text("Uses more battery while you talk. Skipped in Low Power Mode and when your Mac runs hot.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+
+            VocaSettingsGroup(
+                "Recording Overlay",
+                subtitle: "What appears on screen while you dictate."
+            ) {
+                Picker("Style", selection: $appState.overlayStyle) {
+                    ForEach(OverlayStyle.allCases) { style in
+                        Text(style.displayName).tag(style)
+                    }
+                }
+                .pickerStyle(.radioGroup)
+                .onChange(of: appState.overlayStyle) {
+                    appState.showCursorIndicator = appState.overlayStyle != .off
+                }
+
+                Text(appState.overlayStyle.description)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Divider()
+
+                Picker("Position", selection: $appState.overlayPosition) {
+                    ForEach(OverlayPosition.allCases) { position in
+                        Text(position.displayName).tag(position)
+                    }
+                }
+                .pickerStyle(.radioGroup)
+                .disabled(appState.overlayStyle == .off)
+
+                if appState.overlayStyle == .off {
+                    Text("Choose a style above to place the overlay.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Button {
+                    appState.overlayPreview.start(style: appState.overlayStyle, position: appState.overlayPosition)
+                } label: {
+                    Label("Preview Overlay", systemImage: "play.circle")
+                }
+                .disabled(appState.overlayStyle == .off || appState.appStatus != .idle)
+                .help("Shows the overlay for a few seconds with sample words.")
+            }
+            .settingsTarget("cursor-overlay")
         }
+        .onDisappear { appState.overlayPreview.stop() }
     }
 }
 
@@ -710,51 +755,6 @@ struct ApplicationSettingsPage: View {
                 .settingsTarget("clipboard")
             }
 
-            VocaSettingsGroup(
-                "Recording Overlay",
-                subtitle: "What appears on screen while you dictate."
-            ) {
-                Picker("Style", selection: $appState.overlayStyle) {
-                    ForEach(OverlayStyle.allCases) { style in
-                        Text(style.displayName).tag(style)
-                    }
-                }
-                .pickerStyle(.radioGroup)
-                .onChange(of: appState.overlayStyle) {
-                    appState.showCursorIndicator = appState.overlayStyle != .off
-                }
-
-                Text(appState.overlayStyle.description)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                Divider()
-
-                Picker("Position", selection: $appState.overlayPosition) {
-                    ForEach(OverlayPosition.allCases) { position in
-                        Text(position.displayName).tag(position)
-                    }
-                }
-                .pickerStyle(.radioGroup)
-                .disabled(appState.overlayStyle == .off)
-
-                if appState.overlayStyle == .off {
-                    Text("Choose a style above to place the overlay.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                Button {
-                    appState.overlayPreview.start(style: appState.overlayStyle, position: appState.overlayPosition)
-                } label: {
-                    Label("Preview Overlay", systemImage: "play.circle")
-                }
-                .disabled(appState.overlayStyle == .off || appState.appStatus != .idle)
-                .help("Shows the overlay for a few seconds with sample words.")
-            }
-            .settingsTarget("cursor-overlay")
-
             VocaSettingsGroup("Settings Backup") {
                 HStack {
                     Button("Export Settings…", action: exportSettings)
@@ -771,7 +771,6 @@ struct ApplicationSettingsPage: View {
             }
             .settingsTarget("settings-backup")
         }
-        .onDisappear { appState.overlayPreview.stop() }
     }
 
     private func exportSettings() {
@@ -1298,13 +1297,6 @@ struct ModelSettingsTab: View {
     /// For You rows listed before the rest wait behind "Show more".
     private static let forYouShown = 5
 
-    private var spokenLanguagesBinding: Binding<[String]> {
-        Binding(
-            get: { appState.spokenLanguages },
-            set: { appState.spokenLanguages = $0 }
-        )
-    }
-
     private var recommendedModel: ModelSize? {
         appState.speechModelRecommendation?.model
     }
@@ -1361,7 +1353,7 @@ struct ModelSettingsTab: View {
                 }
 
                 ModelPickerHeader(
-                    languages: spokenLanguagesBinding,
+                    languages: spoken,
                     // A model mid-load is where dictation is heading, so it
                     // wins over the one it replaces.
                     current: appState.availableModels.first(where: \.isLoading)
@@ -1370,9 +1362,9 @@ struct ModelSettingsTab: View {
                     onShowSuggestions: {
                         scope = .forYou
                         modelSearch = ""
-                    }
+                    },
+                    onEditLanguages: { appState.requestSettingsPage(.language) }
                 )
-                .settingsTarget("spoken-languages")
 
                 VStack(alignment: .leading, spacing: 10) {
                     // Search moves under the tabs when the window is narrow.
@@ -1999,18 +1991,10 @@ struct AudioSettingsTab: View {
             .settingsTarget("silence")
 
             VocaSettingsGroup("Sounds") {
-                SettingsToggleRow(
-                    title: "Play start and stop sounds",
-                    detail: "A short tone when the microphone opens and closes.",
-                    isOn: $appState.soundEffectsEnabled
-                )
-                .settingsTarget("sound-effects")
-
-                Divider()
-
-                SettingsRow(title: "Dictation tone") {
+                // One control: a tone, or Off.
+                SettingsRow(title: "Sound", detail: "A short tone when the microphone opens and closes.") {
                     HStack(spacing: 6) {
-                        Picker("Dictation tone", selection: $appState.dictationTone) {
+                        Picker("Sound", selection: $appState.soundCue) {
                             ForEach(DictationTone.allCases) { tone in
                                 Text(tone.displayName).tag(tone)
                             }
@@ -2025,11 +2009,12 @@ struct AudioSettingsTab: View {
                             Image(systemName: "play.fill")
                         }
                         .buttonStyle(.borderless)
-                        .disabled(appState.dictationTone == .off)
+                        .disabled(appState.soundCue == .off)
                         .help("Preview")
-                        .accessibilityLabel("Preview tone")
+                        .accessibilityLabel("Preview sound")
                     }
                 }
+                .settingsTarget("sound-effects")
 
                 Divider()
 
@@ -2469,6 +2454,8 @@ private struct SettingsSidebarRow: View {
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
         .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: isSelected)
+        .help(page.summary ?? "")
+        .accessibilityHint(page.summary ?? "")
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
     }
 }

@@ -20,7 +20,8 @@ enum OverlayLayout {
         case .off:
             return .zero
         case .minimal:
-            return CGSize(width: 108, height: 44)
+            // Wide enough for the waveform and the Stop button beside it.
+            return CGSize(width: 128, height: 44)
         case .live:
             return CGSize(width: 340, height: 104)
         }
@@ -113,6 +114,24 @@ enum OverlayPlacement {
     }
 }
 
+/// Whether the overlay takes clicks. It does while a dictation is under way,
+/// so its Stop and Cancel buttons work; otherwise clicks pass through to the
+/// app underneath.
+enum OverlayInteraction {
+    static func acceptsClicks(in phase: IndicatorPhase) -> Bool {
+        switch phase {
+        case .connecting, .recording, .processing: return true
+        case .idle, .failure: return false
+        }
+    }
+
+    /// How long a failure message stays up: long enough to read, longer for
+    /// longer messages, but never parked on screen.
+    static func failureDisplayDuration(for message: String) -> TimeInterval {
+        min(max(2.5 + Double(message.count) * 0.06, 4), 8)
+    }
+}
+
 /// Seconds left before the recording limit, once inside the warning window.
 enum RecordingCountdown {
     static let warningWindow: TimeInterval = 10
@@ -137,7 +156,7 @@ final class CursorOverlayManager {
     private var overlayPanel: NSPanel?
 
     /// Hosting view for the SwiftUI overlay content.
-    private var hostingView: NSHostingView<HandyOverlayView>?
+    private var hostingView: OverlayHostingView?
 
     /// The SwiftUI view model driving the overlay.
     private let viewModel = MicIndicatorViewModel()
@@ -154,8 +173,6 @@ final class CursorOverlayManager {
 
     /// Dismisses a failure message; replaced by any later show or failure.
     private var failureDismissal: DispatchWorkItem?
-
-    static let failureDisplayDuration: TimeInterval = 2.5
 
     /// Maximum recording length, so the overlay can count down its last seconds.
     /// Nil shows no countdown.
@@ -189,10 +206,12 @@ final class CursorOverlayManager {
         viewModel.commandSession = nil
         viewModel.liveWordsAvailable = false
         viewModel.isLoadingSpeechModel = false
+        viewModel.isCleaningUp = false
         viewModel.isActive = true
         recordingStartedAt = nil
 
         let panel = preparedPanel()
+        updateMouseHandling(panel)
         updatePanelLayout(panel)
         panel.orderFrontRegardless()
         startTimers()
@@ -215,8 +234,26 @@ final class CursorOverlayManager {
     func transitionToProcessing() {
         guard isShowingRecordingSession, let overlayPanel else { return }
         viewModel.phase = .processing
+        updateMouseHandling(overlayPanel)
         updatePanelLayout(overlayPanel)
         VocaLogger.debug(.cursorOverlay, "Overlay transitioned to processing")
+    }
+
+    /// The transcript is with the cleanup model. Only a dictation already
+    /// processing moves on; a Settings preview of cleanup changes nothing.
+    func transitionToCleaningUp() {
+        guard viewModel.isActive, viewModel.phase == .processing, !viewModel.isCleaningUp else { return }
+        viewModel.isCleaningUp = true
+        VocaLogger.debug(.cursorOverlay, "Overlay transitioned to cleaning up")
+    }
+
+    func setControlActions(stop: @escaping @MainActor () -> Void, cancel: @escaping @MainActor () -> Void) {
+        viewModel.onStop = stop
+        viewModel.onCancel = cancel
+    }
+
+    func setEscapeHintVisible(_ visible: Bool) {
+        if viewModel.showsEscapeHint != visible { viewModel.showsEscapeHint = visible }
     }
 
     /// Shows a short failure message for a few seconds, then hides. It appears
@@ -237,6 +274,7 @@ final class CursorOverlayManager {
         viewModel.audioLevel = 0
         viewModel.commandSession = nil
         viewModel.isActive = true
+        updateMouseHandling(panel)
 
         let size = overlaySize
         panel.setContentSize(size)
@@ -259,7 +297,10 @@ final class CursorOverlayManager {
             }
         }
         failureDismissal = dismissal
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.failureDisplayDuration, execute: dismissal)
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + OverlayInteraction.failureDisplayDuration(for: trimmed),
+            execute: dismissal
+        )
         VocaLogger.debug(.cursorOverlay, "Overlay showing failure")
     }
 
@@ -284,6 +325,8 @@ final class CursorOverlayManager {
         viewModel.audioLevel = 0
         viewModel.waveformTick = 0
         viewModel.elapsedSeconds = 0
+        viewModel.isCleaningUp = false
+        if let overlayPanel { updateMouseHandling(overlayPanel) }
 
         // The panel is kept and reused: rebuilding an NSPanel and hosting view
         // on the hotkey path costs main-thread time on every dictation.
@@ -329,7 +372,7 @@ final class CursorOverlayManager {
         if let overlayPanel { return overlayPanel }
 
         let size = overlaySize
-        let hosting = NSHostingView(rootView: HandyOverlayView(viewModel: viewModel))
+        let hosting = OverlayHostingView(rootView: HandyOverlayView(viewModel: viewModel))
         hosting.frame = NSRect(origin: .zero, size: size)
         // Follow the system appearance so SwiftUI colorScheme stays in sync.
         hosting.appearance = nil
@@ -346,7 +389,9 @@ final class CursorOverlayManager {
         panel.level = .statusBar
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.appearance = nil
-        // Overlay is display-only; clicks pass through so the target app keeps focus.
+        // Clicks pass through until a dictation is under way; then only the
+        // overlay's own buttons take them. A borderless non-activating panel
+        // never becomes key, so the target app keeps focus either way.
         panel.ignoresMouseEvents = true
         panel.hidesOnDeactivate = false
         panel.isMovableByWindowBackground = false
@@ -356,6 +401,18 @@ final class CursorOverlayManager {
         overlayPanel = panel
         hostingView = hosting
         return panel
+    }
+
+    private func updateMouseHandling(_ panel: NSPanel) {
+        let ignores = !OverlayInteraction.acceptsClicks(in: viewModel.phase)
+        if panel.ignoresMouseEvents != ignores { panel.ignoresMouseEvents = ignores }
+    }
+
+    /// While the pointer is over the panel the user is reaching for a
+    /// button, so the panel holds still instead of following the caret or
+    /// the mouse away from it.
+    private func isPointerOver(_ panel: NSPanel) -> Bool {
+        panel.isVisible && panel.frame.contains(NSEvent.mouseLocation)
     }
 
     private func cancelFailureDismissal() {
@@ -406,7 +463,8 @@ final class CursorOverlayManager {
         repositionTimer?.invalidate()
         repositionTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
-                guard let self, self.isShowingRecordingSession, let panel = self.overlayPanel else { return }
+                guard let self, self.isShowingRecordingSession, let panel = self.overlayPanel,
+                      !self.isPointerOver(panel) else { return }
                 self.positionPanel(panel, size: self.overlaySize)
             }
         }
@@ -459,6 +517,7 @@ final class CursorOverlayManager {
                 guard self.positionGeneration == generation,
                       self.overlayPanel === panel,
                       self.viewModel.position == .nearCursor,
+                      !self.isPointerOver(panel),
                       NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { return }
                 if panel.frame.origin != origin { panel.setFrameOrigin(origin) }
             }
@@ -500,6 +559,13 @@ final class MicIndicatorViewModel: ObservableObject {
     @Published var isLoadingSpeechModel = false
     @Published var failureMessage: String = ""
     @Published var recordingLimit: TimeInterval?
+    /// Processing has moved from transcription to Smart Cleanup.
+    @Published var isCleaningUp = false
+    /// Escape cancels (Settings → Dictation), so the overlay can say so.
+    @Published var showsEscapeHint = true
+    /// The overlay's Stop and Cancel buttons. Set once by AppState.
+    var onStop: (@MainActor () -> Void)?
+    var onCancel: (@MainActor () -> Void)?
 
     var isCommandMode: Bool { commandSession != nil }
 
@@ -622,7 +688,7 @@ struct HandyOverlayView: View {
             case .edit?: return "Editing Selection"
             case .compose?: return "Writing"
             case .answer?: return "Answering"
-            case nil: return "Transcribing"
+            case nil: return viewModel.isCleaningUp ? "Cleaning Up" : "Transcribing"
             }
         case .failure: return "Didn’t work"
         }
@@ -650,7 +716,9 @@ struct HandyOverlayView: View {
             }
         case .failure: return viewModel.failureMessage
         case .idle, .processing:
-            guard let session = viewModel.commandSession else { return "Transcribing…" }
+            guard let session = viewModel.commandSession else {
+                return viewModel.isCleaningUp ? "Cleaning up…" : "Transcribing…"
+            }
             guard session.phase == .rewriting else { return "Transcribing instruction…" }
             switch session.kind {
             case .edit: return "Rewriting with \(session.engineName)…"
@@ -929,6 +997,22 @@ struct HandyOverlayView: View {
             }
 
             Spacer(minLength: 0)
+
+            if viewModel.phase == .processing, viewModel.showsEscapeHint {
+                Text("Esc to cancel")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(secondaryText)
+                    .lineLimit(1)
+                    .fixedSize()
+                    // The Cancel button beside it says the same to VoiceOver.
+                    .accessibilityHidden(true)
+            }
+            if viewModel.phase != .failure, viewModel.phase != .idle {
+                overlayButton(.cancel)
+            }
+            if viewModel.phase == .recording {
+                overlayButton(.stop)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .frame(height: 28)
@@ -949,16 +1033,51 @@ struct HandyOverlayView: View {
                     recordingIndicatorIcon
                 }
                 waveform
+                overlayButton(.stop)
             } else {
                 ProgressView()
                     .controlSize(.small)
                     .tint(accentColor)
                     .accessibilityLabel(statusTitle)
                     .frame(maxWidth: .infinity)
+                if viewModel.phase == .connecting || viewModel.phase == .processing {
+                    overlayButton(.cancel)
+                }
             }
         }
         .padding(.horizontal, 10)
         .frame(height: 44)
+    }
+
+    private enum OverlayControl {
+        case stop, cancel
+    }
+
+    /// A small round button. Stop ends the recording and transcribes it;
+    /// Cancel throws the dictation away, as Escape does.
+    private func overlayButton(_ control: OverlayControl) -> some View {
+        let isStop = control == .stop
+        let label: String
+        switch (control, viewModel.isCommandMode) {
+        case (.stop, false): label = "Stop recording"
+        case (.stop, true): label = "Finish instruction"
+        case (.cancel, false): label = "Cancel dictation"
+        case (.cancel, true): label = "Cancel edit"
+        }
+        let help = !isStop && viewModel.showsEscapeHint ? "\(label) (Esc)" : label
+        return Button {
+            if isStop { viewModel.onStop?() } else { viewModel.onCancel?() }
+        } label: {
+            Image(systemName: isStop ? "stop.fill" : "xmark")
+                .font(.system(size: isStop ? 8 : 9, weight: .bold))
+                .foregroundStyle(isStop ? Color(nsColor: isDark ? VocaPalette.ink : VocaPalette.paper) : secondaryText)
+                .frame(width: 20, height: 20)
+                .background(isStop ? AnyShapeStyle(recordingColor) : AnyShapeStyle(tertiaryFill), in: Circle())
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .help(help)
+        .accessibilityLabel(label)
     }
 
     private var waveform: some View {
@@ -1010,6 +1129,14 @@ struct HandyOverlayView: View {
         let seconds = viewModel.elapsedSeconds % 60
         return "\(minutes):\(String(format: "%02d", seconds))"
     }
+}
+
+// MARK: - OverlayHostingView
+
+/// Takes the first click. The panel is never key, so without this a click on
+/// Stop would only be spent on activating the window.
+final class OverlayHostingView: NSHostingView<HandyOverlayView> {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
 // MARK: - CursorOverlayManaging Conformance

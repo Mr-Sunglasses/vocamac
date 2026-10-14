@@ -183,17 +183,28 @@ protocol CursorOverlayManaging: AnyObject {
     /// start records while it loads. `show` resets it.
     func setLoadingSpeechModel(_ loading: Bool)
     /// Show a short failure message near the caret, then hide. Shown
-    /// whatever the overlay style, so callers check that overlays are on.
+    /// whatever the overlay style, Off included: a failure the user can't
+    /// see looks like the hotkey did nothing.
     func showFailure(message: String)
     /// Maximum recording length, for the countdown in the last seconds.
     /// Nil shows no countdown.
     var recordingLimit: TimeInterval? { get set }
+    /// The transcript is with the Smart Cleanup model; say so instead of
+    /// "Transcribing". `show` resets it.
+    func transitionToCleaningUp()
+    /// What the overlay's own Stop and Cancel buttons do.
+    func setControlActions(stop: @escaping @MainActor () -> Void, cancel: @escaping @MainActor () -> Void)
+    /// Whether Escape cancels, so the overlay only offers it when it does.
+    func setEscapeHintVisible(_ visible: Bool)
 }
 
 extension CursorOverlayManaging {
     func setCommandSession(_ session: CommandModeSession?) {}
     func setLiveWordsAvailable(_ available: Bool) {}
     func setLoadingSpeechModel(_ loading: Bool) {}
+    func transitionToCleaningUp() {}
+    func setControlActions(stop: @escaping @MainActor () -> Void, cancel: @escaping @MainActor () -> Void) {}
+    func setEscapeHintVisible(_ visible: Bool) {}
 }
 
 // MARK: - ModelManaging

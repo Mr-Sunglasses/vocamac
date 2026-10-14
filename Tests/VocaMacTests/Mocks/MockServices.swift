@@ -401,9 +401,26 @@ final class MockCursorOverlay: CursorOverlayManaging {
 
     var failureMessages: [String] = []
     var recordingLimit: TimeInterval?
+    var cleaningUpCallCount = 0
+    var stopAction: (@MainActor () -> Void)?
+    var cancelAction: (@MainActor () -> Void)?
+    var escapeHintVisible: Bool?
 
     func showFailure(message: String) {
         failureMessages.append(message)
+    }
+
+    func transitionToCleaningUp() {
+        cleaningUpCallCount += 1
+    }
+
+    func setControlActions(stop: @escaping @MainActor () -> Void, cancel: @escaping @MainActor () -> Void) {
+        stopAction = stop
+        cancelAction = cancel
+    }
+
+    func setEscapeHintVisible(_ visible: Bool) {
+        escapeHintVisible = visible
     }
 }
 

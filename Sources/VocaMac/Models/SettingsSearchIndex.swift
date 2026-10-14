@@ -244,8 +244,8 @@ enum SettingsSearchIndex {
             id: "cleanup-level",
             page: .cleanup,
             title: "Cleanup Level",
-            subtitle: "None, Light, Medium, or High",
-            keywords: ["level", "none", "light", "medium", "high", "corrections"]
+            subtitle: "None, Light, Medium, Grammar, or High",
+            keywords: ["level", "none", "light", "medium", "grammar", "high", "corrections"]
         ),
         SettingsSearchEntry(
             id: "cleanup-provider",
@@ -344,10 +344,10 @@ enum SettingsSearchIndex {
         ),
         SettingsSearchEntry(
             id: "spoken-languages",
-            page: .speechModel,
+            page: .language,
             title: "Languages You Speak",
-            subtitle: "Find models for your languages",
-            keywords: ["language", "languages", "multilingual", "bilingual", "filter", "hindi", "spanish"]
+            subtitle: "Sets recognition and the models suggested for you",
+            keywords: ["language", "languages", "multilingual", "bilingual", "filter", "hindi", "spanish", "i speak"]
         ),
         SettingsSearchEntry(
             id: "language",
@@ -447,9 +447,9 @@ enum SettingsSearchIndex {
         SettingsSearchEntry(
             id: "sound-effects",
             page: .audio,
-            title: "Sound Effects",
-            subtitle: "Start and stop cues",
-            keywords: ["sound", "beep", "audio", "tone", "preview"]
+            title: "Sound",
+            subtitle: "Start and stop tone, or Off",
+            keywords: ["sound", "sounds", "beep", "chime", "audio", "cue", "tone", "dictation tone", "preview", "mute sounds"]
         ),
         SettingsSearchEntry(
             id: "other-audio",
@@ -518,10 +518,10 @@ enum SettingsSearchIndex {
         ),
         SettingsSearchEntry(
             id: "cursor-overlay",
-            page: .application,
+            page: .dictation,
             title: "Recording Overlay",
             subtitle: "Style and position near the cursor",
-            keywords: ["overlay", "cursor", "indicator", "mic", "position", "style"]
+            keywords: ["overlay", "cursor", "indicator", "mic", "position", "style", "hud", "pill", "stop", "cancel"]
         ),
         SettingsSearchEntry(
             id: "settings-backup",

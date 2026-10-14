@@ -1,48 +1,58 @@
 // LanguageSettingsPage.swift
 // VocaMac
 //
-// The language VocaMac listens for, translation, and where vocabulary lives.
-// Picking a model is the Speech Model page's job.
+// The languages the user speaks (the one language setting), the language
+// VocaMac listens for, translation, and where vocabulary lives. Picking a
+// model is the Speech Model page's job; it reads the same spoken languages.
 
 import SwiftUI
 
 struct LanguageSettingsPage: View {
     @EnvironmentObject var appState: AppState
-    @State private var languageSearch = ""
-
-    private var filteredLanguages: [TranscriptionLanguage] {
-        TranscriptionLanguage.filtered(search: languageSearch)
-    }
 
     private var activeModel: ModelSize? {
         appState.currentModel?.size ?? ModelSize(rawValue: appState.selectedModelSize)
     }
 
+    private var spokenLanguages: Binding<[String]> {
+        Binding(
+            get: { appState.spokenLanguages },
+            set: { appState.setSpokenLanguages($0) }
+        )
+    }
+
+    private var recognitionChoices: [String] {
+        LanguageSync.recognitionChoices(spoken: appState.spokenLanguages, current: appState.selectedLanguage)
+    }
+
     var body: some View {
         VocaSettingsPageContent {
-            VocaSettingsGroup("Recognition Language") {
-                TextField("Search languages", text: $languageSearch)
-                    .textFieldStyle(.voca)
+            VocaSettingsGroup(
+                "Languages You Speak",
+                subtitle: "Recognition and the Speech Model suggestions both follow this list."
+            ) {
+                SpokenLanguagesField(languages: spokenLanguages)
+                Text(spokenLanguagesCaption)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .settingsTarget("spoken-languages")
 
-                Picker("Language", selection: $appState.selectedLanguage) {
-                    ForEach(filteredLanguages) { language in
-                        Text(language.code == "auto"
-                             ? language.displayName
-                             : "\(language.displayName) (\(language.code))")
-                            .tag(language.code)
+            VocaSettingsGroup("Recognition Language") {
+                Picker("Listen for", selection: $appState.selectedLanguage) {
+                    ForEach(recognitionChoices, id: \.self) { code in
+                        Text(code == TranscriptionLanguage.auto.code
+                             ? TranscriptionLanguage.auto.displayName
+                             : SpokenLanguages.displayName(for: code))
+                            .tag(code)
                     }
                 }
 
-                if !filteredLanguages.contains(where: { $0.code == appState.selectedLanguage }),
-                   let current = TranscriptionLanguage.catalog.first(where: { $0.code == appState.selectedLanguage }) {
-                    Text("Current: \(current.displayName)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                Text("Auto-detect works well for most cases. Set a specific language for better accuracy.")
+                Text("Auto-detect works well for most cases. Pick one of your languages for better accuracy with it; add a language above to listen for it.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
 
                 if let model = appState.currentModel?.size, model.bindsLanguageAtLoadTime {
                     Text("\(model.displayName) applies the language when it loads, so changing it reloads the model.")
@@ -88,6 +98,18 @@ struct LanguageSettingsPage: View {
             Task { @MainActor in
                 await appState.languageDidChange()
             }
+        }
+    }
+
+    private var spokenLanguagesCaption: String {
+        let spoken = appState.spokenLanguages
+        switch spoken.count {
+        case 0:
+            return "Add the languages you dictate in. Until then, VocaMac works out the language each time."
+        case 1:
+            return "VocaMac listens for \(SpokenLanguages.displayName(for: spoken[0])). Add another language if you switch between them."
+        default:
+            return "VocaMac works out which of these you're speaking each time, unless you pick one below."
         }
     }
 

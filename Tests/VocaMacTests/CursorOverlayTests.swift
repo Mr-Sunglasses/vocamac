@@ -40,8 +40,8 @@ final class OverlaySettingsTests: XCTestCase {
 final class OverlayLayoutTests: XCTestCase {
 
     func testMinimalOverlayUsesCompactStableDimensions() {
-        XCTAssertEqual(OverlayLayout.contentSize(for: .minimal), CGSize(width: 108, height: 44))
-        XCTAssertEqual(OverlayLayout.size(for: .minimal), CGSize(width: 112, height: 48))
+        XCTAssertEqual(OverlayLayout.contentSize(for: .minimal), CGSize(width: 128, height: 44))
+        XCTAssertEqual(OverlayLayout.size(for: .minimal), CGSize(width: 132, height: 48))
     }
 
     func testLiveOverlayIsShorterThanTheOriginalPanel() {
