@@ -11,6 +11,19 @@ enum CleanupLevel: String, CaseIterable, Codable, Identifiable {
 
     var id: String { rawValue }
 
+    /// Pickers list the levels from least to most change. Grammar is
+    /// Medium plus grammar repairs, so it sits between Medium and High.
+    /// `allCases` keeps the stored order.
+    static let displayOrder: [CleanupLevel] = [.none, .light, .medium, .grammar, .high]
+
+    /// What still happens to a dictation at this level with Smart Cleanup
+    /// off: the rule-based steps run without the model.
+    var withoutSmartCleanup: String {
+        removesHesitations
+            ? "Smart Cleanup is off: no model runs. “Um”, “uh”, and spoken corrections of days, numbers, and times are still handled at this level, and Formatting settings still apply."
+            : "Smart Cleanup is off: no model runs. Your words are kept as spoken; Formatting settings still apply."
+    }
+
     var displayName: String {
         switch self {
         case .none: return "None"

@@ -591,55 +591,105 @@ struct MenuBarView: View {
 
                 // Stop/recovery button — visible during recording so the user
                 // can unstick the app if the hotkey isn't responding
-                Button {
-                    Task { @MainActor in
-                        await appState.stopRecordingAndTranscribe()
+                HStack {
+                    Button {
+                        Task { @MainActor in
+                            await appState.stopRecordingAndTranscribe()
+                        }
+                    } label: {
+                        if appState.commandModeSession != nil {
+                            Label("Finish Instruction", systemImage: "checkmark.circle.fill")
+                                .font(.callout)
+                                .foregroundStyle(VocaDesign.command)
+                        } else {
+                            Label("Stop Recording", systemImage: "stop.circle.fill")
+                                .font(.callout)
+                                .foregroundStyle(VocaDesign.clay)
+                        }
                     }
-                } label: {
-                    if appState.commandModeSession != nil {
-                        Label("Finish Instruction", systemImage: "checkmark.circle.fill")
-                            .font(.callout)
-                            .foregroundStyle(VocaDesign.command)
-                    } else {
-                        Label("Stop Recording", systemImage: "stop.circle.fill")
-                            .font(.callout)
-                            .foregroundStyle(VocaDesign.clay)
-                    }
+                    .buttonStyle(.plain)
+                    Spacer()
+                    cancelDictationButton
                 }
-                .buttonStyle(.plain)
             }
 
             // Processing indicator
             if appState.appStatus == .processing {
-                if appState.commandModeSession != nil {
-                    HStack {
-                        ProgressView().controlSize(.small).tint(VocaDesign.command)
-                        Spacer()
-                        Button("Cancel Edit") {
-                            Task { @MainActor in await appState.cancelDictation() }
-                        }
-                        .controlSize(.small)
-                        .help("Leave the selection unchanged (Esc)")
-                    }
-                } else {
+                HStack {
                     ProgressView()
                         .controlSize(.small)
-                        .frame(maxWidth: .infinity, alignment: .center)
+                        .tint(appState.commandModeSession == nil ? nil : VocaDesign.command)
+                    Spacer()
+                    if appState.canCancelDictation {
+                        cancelDictationButton
+                    }
                 }
             }
 
-            // Force recovery button — visible in error state
-            if appState.appStatus == .error {
+            // The last error stays, with its fix, until dismissed.
+            if let notice = appState.errorNotice,
+               appState.appStatus == .idle || appState.appStatus == .error {
+                errorNoticeCard(notice)
+            } else if appState.appStatus == .error {
                 Button {
-                    appState.forceRecovery()
+                    appState.dismissErrorNotice()
                 } label: {
-                    Label("Reset to Idle", systemImage: "arrow.counterclockwise.circle")
+                    Label("Dismiss", systemImage: "xmark.circle")
                         .font(.callout)
                         .foregroundStyle(VocaDesign.warning)
                 }
                 .buttonStyle(.plain)
             }
         }
+    }
+
+    /// Throws the dictation away, as Escape does. Offered for every
+    /// dictation, not only Command Mode edits.
+    private var cancelDictationButton: some View {
+        let isEdit = appState.commandModeSession != nil
+        return Button(isEdit ? "Cancel Edit" : "Cancel") {
+            Task { @MainActor in await appState.cancelDictation() }
+        }
+        .controlSize(.small)
+        .help(isEdit
+              ? "Leave the selection unchanged" + (appState.escapeCancelsDictation ? " (Esc)" : "")
+              : "Discard this dictation" + (appState.escapeCancelsDictation ? " (Esc)" : ""))
+    }
+
+    private func errorNoticeCard(_ notice: DictationErrorNotice) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(VocaDesign.warning)
+                    .accessibilityHidden(true)
+                Text(notice.message)
+                    .font(.caption)
+                    .foregroundStyle(.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+            }
+            HStack(spacing: 8) {
+                if let action = notice.action {
+                    Button {
+                        appState.performErrorFix(action) { page in
+                            settingsManager.open(appState: appState, page: page)
+                        }
+                    } label: {
+                        Label(action.title, systemImage: action.systemImage)
+                    }
+                    .buttonStyle(VocaPrimaryButtonStyle())
+                    .controlSize(.small)
+                }
+                Button("Dismiss") { appState.dismissErrorNotice() }
+                    .controlSize(.small)
+                Spacer(minLength: 0)
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(VocaDesign.warning.opacity(0.1), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Error")
     }
 
     // MARK: - Microphone
@@ -1254,9 +1304,11 @@ struct MenuBarView: View {
         }
         switch appState.appStatus {
         case .idle:       return appState.dictationReadinessTitle
-        case .recording:  return "Recording..."
-        case .processing: return "Transcribing..."
-        case .error:      return appState.errorMessage ?? "Error"
+        case .recording:  return "Recording…"
+        case .processing: return appState.processingStatusText
+        case .error:
+            // The card below shows the whole message once.
+            return appState.errorNotice == nil ? appState.errorMessage ?? "Error" : "Something went wrong"
         }
     }
 

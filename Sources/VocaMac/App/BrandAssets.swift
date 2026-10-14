@@ -37,8 +37,16 @@ enum MenuBarIconStyle: Equatable {
     case brandMarkTinted
     /// SF Symbol for processing, error and Command Mode.
     case systemSymbol(name: String)
+    /// The idle mic, dimmed, while dictation can't start yet. A badge marks
+    /// something the user has to fix (a permission or a speech model); none
+    /// means a model is still on its way. Template, so it follows the menu bar.
+    case notReadyTemplate(badged: Bool)
 
-    static func style(for status: AppStatus, isCommandMode: Bool = false) -> MenuBarIconStyle {
+    static func style(
+        for status: AppStatus,
+        isCommandMode: Bool = false,
+        readiness: MenuBarReadiness = .ready
+    ) -> MenuBarIconStyle {
         // A wand while Command Mode listens or rewrites, so the menu bar says
         // an edit of the selection is under way rather than a dictation.
         if isCommandMode, status == .recording || status == .processing {
@@ -46,7 +54,11 @@ enum MenuBarIconStyle: Equatable {
         }
         switch status {
         case .idle:
-            return .systemSymbolTemplate(name: "mic.fill")
+            switch readiness {
+            case .ready: return .systemSymbolTemplate(name: "mic.fill")
+            case .preparing: return .notReadyTemplate(badged: false)
+            case .blocked: return .notReadyTemplate(badged: true)
+            }
         case .recording:
             return .brandMarkTinted
         case .processing:

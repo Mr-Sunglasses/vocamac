@@ -15,7 +15,7 @@ enum OverlayStyle: String, CaseIterable, Codable, Identifiable {
 
     /// Show the larger Handy-inspired status panel.
     ///
-    /// Shows partial words while Whisper or Parakeet is decoding.
+    /// Shows partial words when the engine sends them.
     case live
 
     var id: String { rawValue }
@@ -31,11 +31,11 @@ enum OverlayStyle: String, CaseIterable, Codable, Identifiable {
     var description: String {
         switch self {
         case .off:
-            return "Do not show recording status on screen."
+            return "Nothing on screen while you dictate. If a dictation fails, a short message still appears."
         case .minimal:
-            return "Show a compact waveform while recording and a spinner while transcribing."
+            return "A compact waveform while recording and a spinner while working, with buttons to stop or cancel."
         case .live:
-            return "Show a larger waveform and live words while Whisper, Parakeet or an ONNX model is listening."
+            return "A larger panel with your words as you speak, when the speech model can show them, and buttons to stop or cancel."
         }
     }
 }

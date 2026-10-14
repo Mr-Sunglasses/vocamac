@@ -251,7 +251,11 @@ final class AppState: ObservableObject {
     // MARK: - Published State
 
     /// Current application status
-    @Published var appStatus: AppStatus = .idle
+    @Published var appStatus: AppStatus = .idle {
+        didSet {
+            if oldValue != appStatus { handleAppStatusChange(from: oldValue) }
+        }
+    }
 
     /// Whether the app is actively recording audio
     private var recordingGeneration = UUID()
@@ -339,6 +343,13 @@ final class AppState: ObservableObject {
 
     /// Error message to display, if any
     @Published var errorMessage: String?
+
+    /// The last error, kept in the menu with its fix until dismissed or the
+    /// next dictation starts. `errorMessage` clears itself after a few seconds.
+    @Published var errorNotice: DictationErrorNotice?
+
+    /// Processing has moved on from transcription to Smart Cleanup.
+    @Published var isCleaningUp = false
 
     /// Currently loaded/active whisper model info
     @Published var currentModel: WhisperModelInfo?
@@ -766,7 +777,10 @@ final class AppState: ObservableObject {
     }
 
     private var outputPipeline: DictationOutputPipeline {
-        DictationOutputPipeline(cleaner: activeCleanupService, snippets: snippetExpander)
+        DictationOutputPipeline(
+            cleaner: activeCleanupService, snippets: snippetExpander,
+            onModelCleanup: { [weak self] in self?.dictationReachedCleanup() }
+        )
     }
 
     private var activeCleanupService: TranscriptCleaning {
@@ -1131,6 +1145,9 @@ final class AppState: ObservableObject {
         }
 
         VocaLogger.info(.appState, "Initializing... id=\(ObjectIdentifier(self))")
+        if !skipSystemIntegration {
+            SettingsConsistency.normalize(defaults: .standard)
+        }
         loadSnippets()
         loadDictionary()
         if !skipSystemIntegration {
@@ -1260,6 +1277,7 @@ final class AppState: ObservableObject {
     // MARK: - Setup
 
     private func setupServices() {
+        configureOverlayControls()
         textInjector.onFailure = { [weak self] message in
             Task { @MainActor in
                 guard let self, !self.isRecording else { return }
@@ -3582,12 +3600,12 @@ final class AppState: ObservableObject {
 
     /// Say near the caret why a dictation produced nothing. The menu bar
     /// popover is closed while dictating, so an error only shown there goes
-    /// unseen. Returns false when overlays are off; the caller then relies on
-    /// its temporary error instead.
+    /// unseen. Shown with the overlay style Off too: a failure nobody sees
+    /// looks like the hotkey did nothing. Always returns true.
     @discardableResult
     private func showOverlayFailure(_ message: String) -> Bool {
-        guard showCursorIndicator, overlayStyle != .off else { return false }
         cursorOverlay.showFailure(message: message)
+        DictationAnnouncement.post(message)
         return true
     }
 
@@ -3685,6 +3703,9 @@ final class AppState: ObservableObject {
 
     private func showTemporaryError(_ message: String, duration: TimeInterval = 5.0) {
         errorMessage = message
+        // Set here as well as on the status change, for an error that
+        // follows another before the first one cleared.
+        errorNotice = DictationErrorNotice(message: message)
         appStatus = .error
 
         DispatchQueue.main.asyncAfter(deadline: .now() + duration) { [weak self] in
@@ -5681,6 +5702,10 @@ extension AppState {
         VocaLogger.info(.appState, "Pasting the last dictation again (\(text.count) chars)")
         textInjector.inject(text: text, preserveClipboard: preserveClipboard)
     }
+
+    /// Something the menu's Cancel can stop: a recording, or a dictation
+    /// still being transcribed or cleaned up.
+    var canCancelDictation: Bool { isCapturingAudio || isTranscribing }
 
     fileprivate func refreshCancelKeyArming(status: AppStatus? = nil) {
         guard let monitor = hotKeyManager as? HotKeyShortcutMonitoring else { return }
