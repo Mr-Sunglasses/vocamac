@@ -116,11 +116,7 @@ extension AppState {
     /// Onboarding asks only which languages the user speaks. One language
     /// pins recognition to it; several, or none, leave detection on.
     func setOnboardingSpokenLanguages(_ languages: [String]) {
-        spokenLanguages = languages
-        let automatic = TranscriptionLanguage.auto.code
-        let only = languages.count == 1 ? languages[0] : automatic
-        let recognized = TranscriptionLanguage.catalog.contains { $0.code == only } ? only : automatic
-        if selectedLanguage != recognized { selectedLanguage = recognized }
+        setSpokenLanguages(languages)
     }
 
     // MARK: - Processing Location

@@ -16,6 +16,7 @@ struct CleanupSettingsPage: View {
     @State private var tryItRunning = false
     @State private var isPromptExpanded = false
     @State private var isInferenceExpanded = false
+    @State private var isSpeedExpanded = false
     @State private var apiKeyDraft = ""
     @State private var endpointNotice: String?
 
@@ -57,7 +58,7 @@ struct CleanupSettingsPage: View {
 
             VocaSettingsGroup("Cleanup Level") {
                 Picker("Cleanup level", selection: $appState.transcriptCleanupLevel) {
-                    ForEach(CleanupLevel.allCases) { level in
+                    ForEach(CleanupLevel.displayOrder) { level in
                         Text(level.displayName).tag(level)
                     }
                 }
@@ -71,13 +72,12 @@ struct CleanupSettingsPage: View {
                         .padding(.top, 6)
                 }
                 .disclosureGroupStyle(VocaDisclosureGroupStyle())
-                Divider()
-                SettingsToggleRow(
-                    title: "Skip the model when there's nothing to clean",
-                    detail: "A dictation that is already punctuated, with no filler or repeated words, is typed straight away instead of waiting for the model to hand it back unchanged.",
-                    isOn: $appState.skipCleanDictations
-                )
-                .settingsTarget("cleanup-skip-clean")
+                if !appState.transcriptCleanupEnabled {
+                    Label(appState.transcriptCleanupLevel.withoutSmartCleanup, systemImage: "info.circle")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             .settingsTarget("cleanup-level")
 
@@ -188,6 +188,22 @@ struct CleanupSettingsPage: View {
             // card would draw a card inside a card.
             VStack(alignment: .leading, spacing: 8) {
                 VocaSectionHeader(title: "Advanced")
+                VocaDisclosureCard(
+                    title: "Speed",
+                    subtitle: "Type a dictation that's already clean without waiting for the model.",
+                    systemImage: "hare",
+                    badge: appState.skipCleanDictations ? "On" : "Off",
+                    isExpanded: $isSpeedExpanded
+                ) {
+                    SettingsToggleRow(
+                        title: "Skip the model when there's nothing to clean",
+                        detail: "A dictation that is already punctuated, with no filler or repeated words, is typed straight away instead of waiting for the model to hand it back unchanged.",
+                        isOn: $appState.skipCleanDictations
+                    )
+                }
+                .revealSettingsTargets(["cleanup-skip-clean"], expanded: $isSpeedExpanded)
+                .settingsTarget("cleanup-skip-clean")
+
                 VocaDisclosureCard(
                     title: "Cleanup prompt",
                     subtitle: "The only thing the model sees besides your transcript.",

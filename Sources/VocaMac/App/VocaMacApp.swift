@@ -331,7 +331,12 @@ struct VocaMacApp: App {
             )
                 .environmentObject(appState)
         } label: {
-            MenuBarIcon(appStatus: appState.appStatus, isCommandMode: appState.commandModeSession != nil)
+            MenuBarIcon(
+                appStatus: appState.appStatus,
+                isCommandMode: appState.commandModeSession != nil,
+                readiness: MenuBarReadiness(appState.dictationReadiness),
+                accessibilityLabel: appState.menuBarAccessibilityLabel
+            )
                 .onAppear {
                     // Trigger startup from the SwiftUI lifecycle so it only runs
                     // on the AppState instance that SwiftUI actually retains.
@@ -551,23 +556,37 @@ struct VocaMacApp: App {
 /// are applied via `NSImage` + `sourceAtop` with `isTemplate = false`.
 ///
 /// States:
-///   • idle       → SF Symbol mic.fill (template, adapts to menu bar)
+///   • idle       → SF Symbol mic.fill (template, adapts to menu bar);
+///                  dimmed, with a badge when a permission or model is missing
+///                  (still template)
 ///   • recording  → Voca mark in brand green (mic hot)
 ///   • processing → yellow ellipsis (non-template, colored)
 ///   • error      → orange warning (non-template, colored)
 struct MenuBarIcon: View {
     let appStatus: AppStatus
     var isCommandMode = false
+    var readiness: MenuBarReadiness = .ready
+    /// Says what the app is doing or needs ("VocaMac, recording").
+    var accessibilityLabel = "VocaMac"
 
     var body: some View {
         Image(nsImage: makeMenuBarIcon())
-            .accessibilityLabel("VocaMac")
+            .accessibilityLabel(accessibilityLabel)
     }
 
     private func makeMenuBarIcon() -> NSImage {
-        switch MenuBarIconStyle.style(for: appStatus, isCommandMode: isCommandMode) {
+        let image = makeStatusImage()
+        // The status item reads the image's description too.
+        image.accessibilityDescription = accessibilityLabel
+        return image
+    }
+
+    private func makeStatusImage() -> NSImage {
+        switch MenuBarIconStyle.style(for: appStatus, isCommandMode: isCommandMode, readiness: readiness) {
         case .systemSymbolTemplate(let name):
             return fallbackSymbol(named: name, tint: nil)
+        case .notReadyTemplate(let badged):
+            return notReadySymbol(badged: badged)
         case .brandMarkTinted:
             if let mark = sizedMark() {
                 return tintedImage(base: mark, color: BrandAssets.brandColor)
@@ -625,6 +644,32 @@ struct MenuBarIcon: View {
         }
 
         return tintedImage(base: baseImage, color: tint)
+    }
+
+    /// The mic at reduced opacity, with a solid dot in its corner when the
+    /// user has something to fix. A template image renders by alpha alone, so
+    /// both stay legible on light and dark menu bars.
+    private func notReadySymbol(badged: Bool) -> NSImage {
+        let config = NSImage.SymbolConfiguration(pointSize: Self.symbolPointSize, weight: .regular)
+        guard let mic = NSImage(systemSymbolName: "mic.fill", accessibilityDescription: nil)?
+            .withSymbolConfiguration(config) else {
+            return fallbackSymbol(named: "mic", tint: nil)
+        }
+        let image = NSImage(size: mic.size, flipped: false) { rect in
+            mic.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 0.4)
+            guard badged else { return true }
+            let diameter = max(5, rect.width * 0.42)
+            let dot = NSRect(x: rect.maxX - diameter, y: rect.minY, width: diameter, height: diameter)
+            // A clear ring keeps the dot apart from the mic under it.
+            NSGraphicsContext.current?.compositingOperation = .clear
+            NSBezierPath(ovalIn: dot.insetBy(dx: -1.5, dy: -1.5)).fill()
+            NSGraphicsContext.current?.compositingOperation = .sourceOver
+            NSColor.black.setFill()
+            NSBezierPath(ovalIn: dot).fill()
+            return true
+        }
+        image.isTemplate = true
+        return image
     }
 
     private func tintedImage(base: NSImage, color: NSColor) -> NSImage {

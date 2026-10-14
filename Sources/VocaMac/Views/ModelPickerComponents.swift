@@ -11,16 +11,29 @@ import SwiftUI
 
 /// The top of the picker: what the user speaks, and what dictation uses now.
 /// One card, so the catalog below reads as the only list of choices.
+///
+/// The spoken languages are set on the Language page, the one place for
+/// them; this row shows them and links there.
 struct ModelPickerHeader: View {
-    @Binding var languages: [String]
+    let languages: [String]
     let current: WhisperModelInfo?
     let systemLanguages: Set<String>?
     let onShowSuggestions: () -> Void
+    let onEditLanguages: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             ModelPickerHeaderRow(title: "I speak") {
-                SpokenLanguagesField(languages: $languages)
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(languages.isEmpty ? "No languages yet" : SpokenLanguages.list(languages))
+                        .font(.callout.weight(.medium))
+                        .foregroundStyle(languages.isEmpty ? .secondary : .primary)
+                    Button(languages.isEmpty ? "Add Languages…" : "Change…", action: onEditLanguages)
+                        .buttonStyle(.vocaLink)
+                        .font(.caption)
+                        .help("Set the languages you speak in Settings → Language")
+                        .accessibilityLabel(languages.isEmpty ? "Add languages you speak" : "Change languages you speak")
+                }
             }
             Divider()
             ModelPickerHeaderRow(title: "Prefer") {

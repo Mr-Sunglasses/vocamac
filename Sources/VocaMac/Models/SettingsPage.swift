@@ -97,6 +97,21 @@ enum SettingsPage: String, CaseIterable, Identifiable, Hashable {
         }
     }
 
+    /// One line on what the page is for, shown as the sidebar row's tooltip
+    /// and read by VoiceOver. Pages whose names sound alike say how they
+    /// differ: Formatting applies everywhere, Writing Styles per app.
+    var summary: String? {
+        switch self {
+        case .formatting: return "Rules for typed text in every app: capitals, spacing, numbers, emoji."
+        case .writingStyles: return "How dictation is written in each app: email, chat, notes, code, and tone."
+        case .cleanup: return "Optional on-device model that tidies each dictation."
+        case .commandMode: return "Edit selected text by saying what to change."
+        case .language: return "The languages you speak and the one VocaMac listens for."
+        case .speechModel: return "The model that turns speech into text."
+        default: return nil
+        }
+    }
+
     var systemImage: String {
         switch self {
         case .dictation: return "mic"

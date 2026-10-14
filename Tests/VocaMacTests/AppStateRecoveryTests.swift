@@ -462,7 +462,7 @@ final class AppStateRecoveryTests: XCTestCase {
         XCTAssertEqual(appState.appStatus, .idle)
     }
 
-    func testNothingHeardFallsBackToTheMenuBarWhenOverlaysAreOff() async {
+    func testNothingHeardIsShownEvenWhenOverlaysAreOff() async {
         let (appState, mocks) = AppState.makeTestState()
         mocks.audioEngine.stopRecordingResult = speech
         mocks.whisperService.mockTranscriptionResult = VocaTranscription(
@@ -474,9 +474,11 @@ final class AppStateRecoveryTests: XCTestCase {
             await appState.stopRecordingAndTranscribe()
         }
 
-        XCTAssertTrue(mocks.cursorOverlay.failureMessages.isEmpty, "An Off overlay must stay off")
-        XCTAssertEqual(appState.appStatus, .error)
-        XCTAssertNotNil(appState.errorMessage)
+        // A failure nobody sees looks like the hotkey did nothing, so the
+        // message appears whatever the overlay style.
+        XCTAssertEqual(mocks.cursorOverlay.failureMessages, ["Didn't catch that."])
+        XCTAssertEqual(mocks.cursorOverlay.showCallCount, 0, "An Off overlay shows no recording session")
+        XCTAssertEqual(appState.appStatus, .idle)
     }
 
     func testFailedTranscriptionIsSaidInTheOverlay() async {

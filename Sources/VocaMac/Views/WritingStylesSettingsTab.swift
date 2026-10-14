@@ -141,6 +141,7 @@ struct WritingStylesSettingsTab: View {
                     .menuIndicator(.hidden)
                     .fixedSize()
                     .help("Import, export, or remove your app list")
+                    .accessibilityLabel("App list options")
                 }
 
                 if let suggestionNotice {
@@ -151,7 +152,6 @@ struct WritingStylesSettingsTab: View {
             }
             .settingsTarget("app-style-rules", aliases: ["app-cleanup-prompt", "spoken-symbols", "writing-style-rule-transfer"])
             .disabled(!appState.writingStyleEnabled)
-            .opacity(appState.writingStyleEnabled ? 1 : 0.45)
 
             VocaSettingsGroup(
                 "Tone",
@@ -187,11 +187,9 @@ struct WritingStylesSettingsTab: View {
             }
             .settingsTarget("writing-wording")
             .disabled(!appState.writingStyleEnabled)
-            .opacity(appState.writingStyleEnabled ? 1 : 0.45)
 
             WebsiteRulesSettings()
                 .disabled(!appState.writingStyleEnabled)
-                .opacity(appState.writingStyleEnabled ? 1 : 0.45)
 
         }
         .toggleStyle(.switch)
@@ -545,6 +543,7 @@ private struct AppStyleBindingRow: View {
             .menuIndicator(.hidden)
             .fixedSize()
             .help("More options for \(binding.displayName)")
+            .accessibilityLabel("More options for \(binding.displayName)")
         }
         .confirmationDialog(
             "Switch \(binding.displayName) to \(pendingStyle?.displayName ?? "")?",
@@ -809,7 +808,7 @@ struct WritingStyleRuleEditor: View {
         }
         Picker("Cleanup level", selection: $cleanupLevel) {
             Text("Same as Cleanup page").tag(Optional<CleanupLevel>.none)
-            ForEach(CleanupLevel.allCases) { level in
+            ForEach(CleanupLevel.displayOrder) { level in
                 Text(level.displayName).tag(Optional(level))
             }
         }

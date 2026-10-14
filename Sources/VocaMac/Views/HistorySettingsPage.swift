@@ -30,7 +30,31 @@ struct HistorySettingsPage: View {
                     .vocaCard()
             }
 
-            // One collapsed row, so the page opens on the dictations.
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    VocaSectionHeader(title: "Dictations", systemImage: nil, subtitle: nil)
+                    Spacer()
+                    TextField("Search dictations", text: $query)
+                        .textFieldStyle(.voca)
+                        .frame(maxWidth: 240)
+                }
+                if entries.isEmpty {
+                    Text(emptyListMessage)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .vocaCard()
+                } else {
+                    LazyVStack(alignment: .leading, spacing: 10) {
+                        ForEach(entries) { entry in
+                            HistoryEntryRow(entry: entry, player: player)
+                                .vocaCard()
+                        }
+                    }
+                }
+            }
+            .settingsTarget("history")
+
+            // Below the list, collapsed: the page is for finding a dictation.
             VocaDisclosureCard(
                 title: "Storage",
                 subtitle: storageSubtitle,
@@ -79,30 +103,6 @@ struct HistorySettingsPage: View {
             }
             .settingsTarget("history-retention")
             .revealSettingsTargets(["history-retention", "history-excluded-apps"], expanded: $showsStorage)
-
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    VocaSectionHeader(title: "Dictations", systemImage: nil, subtitle: nil)
-                    Spacer()
-                    TextField("Search dictations", text: $query)
-                        .textFieldStyle(.voca)
-                        .frame(maxWidth: 240)
-                }
-                if entries.isEmpty {
-                    Text(query.isEmpty ? "Your dictations will appear here." : "No dictations match “\(query)”.")
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .vocaCard()
-                } else {
-                    LazyVStack(alignment: .leading, spacing: 10) {
-                        ForEach(entries) { entry in
-                            HistoryEntryRow(entry: entry, player: player)
-                                .vocaCard()
-                        }
-                    }
-                }
-            }
-            .settingsTarget("history")
         }
         .confirmationDialog(
             "Delete all dictation history?",
@@ -169,6 +169,13 @@ struct HistorySettingsPage: View {
             }
         }
         Button("Add App…") { showingExcludedAppPicker = true }
+    }
+
+    private var emptyListMessage: String {
+        if !query.isEmpty { return "No dictations match “\(query)”." }
+        return appState.historyEnabled
+            ? "Your dictations will appear here."
+            : "History is off. Turn it on under Storage below."
     }
 
     /// How much is kept, and for how long.

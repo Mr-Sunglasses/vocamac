@@ -130,7 +130,7 @@ private struct WebsiteRuleEditor: View {
                         }
                         Picker("Cleanup level", selection: $draft.cleanupLevel) {
                             Text("Same as Cleanup page").tag(Optional<CleanupLevel>.none)
-                            ForEach(CleanupLevel.allCases) { Text($0.displayName).tag(Optional($0)) }
+                            ForEach(CleanupLevel.displayOrder) { Text($0.displayName).tag(Optional($0)) }
                         }
                         .disabled(draft.cleanup != .inherit)
                         VStack(alignment: .leading, spacing: 4) {

@@ -460,6 +460,7 @@ private struct AIModelLibraryRow: View {
                     .buttonStyle(.borderless)
                     .foregroundStyle(.secondary)
                     .help("Delete download")
+                    .accessibilityLabel("Delete \(descriptor.displayName) download")
                 }
             }
         }
