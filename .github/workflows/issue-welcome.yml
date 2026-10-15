@@ -15,4 +15,4 @@ permissions:
 
 jobs:
   welcome:
-    uses: VocaHQ/.github/.github/workflows/issue-welcome.yml@main
+    uses: VocaHQ/.github/.github/workflows/issue-welcome.yml@16b59fe0bc7cb17e55ada05d274628234b29529c # main

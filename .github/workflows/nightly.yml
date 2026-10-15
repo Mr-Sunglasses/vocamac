@@ -373,11 +373,21 @@ jobs:
       # Signed SLSA provenance, so a download can be traced to this workflow
       # run and commit: `gh attestation verify <file> -R VocaHQ/vocamac`.
       - name: Attest build provenance
+        id: attest
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: |
             VocaMac-nightly-*.dmg
             VocaMac-nightly-*.zip
+
+      # Attach the attestation to the release as well (see release.yml).
+      - name: Save attestation bundle
+        env:
+          BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}
+        run: |
+          set -euo pipefail
+          cp "$BUNDLE_PATH" VocaMac-nightly-arm64.sigstore.json
+          jq -c '.dsseEnvelope' "$BUNDLE_PATH" > VocaMac-nightly-arm64.intoto.jsonl
 
       # ── Cleanup ─────────────────────────────────────────────────────────────
       - name: Delete temporary keychain
@@ -480,6 +490,8 @@ jobs:
             --target main \
             VocaMac-nightly-*.dmg \
             VocaMac-nightly-*.zip \
+            VocaMac-nightly-arm64.sigstore.json \
+            VocaMac-nightly-arm64.intoto.jsonl \
             checksums.txt
 
           echo "✅ Nightly release created!"
