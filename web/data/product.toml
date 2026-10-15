@@ -3,21 +3,21 @@
 # Status and OS floor follow VocaHQ/vocahq PRODUCT.md:
 # Available now, macOS 14+ Apple Silicon, Homebrew or DMG, AGPL-3.0.
 # Available now was verified against VocaHQ/vocahq PRODUCT.md.
-# Version/artifact figures were verified against the tagged v1.1.0 release.
+# Version/artifact figures were verified against the tagged v1.2.0 release.
 # Re-verify this file before publishing a website change.
 #
-# Verified: 2026-10-04 against v1.1.0 and its tagged release assets.
+# Verified: 2026-10-15 against v1.2.0 and its tagged release assets.
 
 [stable]
-version = "1.1.0"
-tag = "v1.1.0"
+version = "1.2.0"
+tag = "v1.2.0"
 status = "Available now"
-released = "2026-10-04"
-releaseURL = "https://github.com/VocaHQ/vocamac/releases/tag/v1.1.0"
+released = "2026-10-15"
+releaseURL = "https://github.com/VocaHQ/vocamac/releases/tag/v1.2.0"
 releasesURL = "https://github.com/VocaHQ/vocamac/releases"
 latestURL = "https://github.com/VocaHQ/vocamac/releases/latest"
-dmg = "VocaMac-1.1.0-arm64.dmg"
-dmgURL = "https://github.com/VocaHQ/vocamac/releases/download/v1.1.0/VocaMac-1.1.0-arm64.dmg"
+dmg = "VocaMac-1.2.0-arm64.dmg"
+dmgURL = "https://github.com/VocaHQ/vocamac/releases/download/v1.2.0/VocaMac-1.2.0-arm64.dmg"
 dmgSize = "111 MB"
 
 [requirements]
@@ -28,7 +28,7 @@ archNote = "Apple Silicon only. There is no supported Intel build."
 signing = "Developer ID signed and notarized by Apple"
 permissions = ["Microphone", "Accessibility", "Input Monitoring"]
 
-# Languages that can actually be pinned in Settings in v1.1.0, verified against
+# Languages that can actually be pinned in Settings in v1.2.0, verified against
 # TranscriptionLanguage.selectable in TranscriptionLanguage.swift.
 # The Whisper model is trained on ~99 languages, but only these are selectable,
 # so the site must not claim "99+ languages".
@@ -44,7 +44,7 @@ runtime = "CoreML"
 modelRepo = "argmaxinc/whisperkit-coreml"
 modelRepoURL = "https://huggingface.co/argmaxinc/whisperkit-coreml"
 
-# The WhisperKit model picker shown in Settings in v1.1.0 (ModelSize.standardCatalog).
+# The WhisperKit model picker shown in Settings in v1.2.0 (ModelSize.standardCatalog).
 # size/ram are the values the app itself reports (fileSizeDescription and the
 # loaded ramRequiredGB from ModelRAMFit, #311).
 [[models]]
@@ -119,14 +119,28 @@ ram = "1.5 GB"
 quality = "Best for Hindi"
 note = "Writes Hindi speech in Roman script (Hinglish). Fine-tuned from Oriserve's Whisper Hindi2Hinglish Apex."
 
-# Additional engines and models in v1.1.0. Sizes and notes follow the shipped
+# Additional engines and models in v1.2.0. Sizes and notes follow the shipped
 # catalogs in WhisperModel.swift and SherpaModelCatalog.swift.
+[[releaseModels]]
+id = "parakeet-ultra"
+name = "Parakeet Ultra"
+engine = "Parakeet"
+size = "632 MB"
+note = "Parakeet v3 post-trained for accuracy, at the same speed. 25 European languages."
+
 [[releaseModels]]
 id = "parakeet-v3"
 name = "Parakeet v3"
 engine = "Parakeet"
 size = "483 MB"
 note = "Fastest engine. 25 European languages + Japanese, auto-detected."
+
+[[releaseModels]]
+id = "parakeet-unified"
+name = "Parakeet Unified"
+engine = "Parakeet"
+size = "614 MB"
+note = "English only. NVIDIA's newest Parakeet: punctuation, capitals, and numbers as digits."
 
 [[releaseModels]]
 id = "parakeet-v2"
