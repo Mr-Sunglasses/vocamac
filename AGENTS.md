@@ -214,7 +214,7 @@ Keep dependencies minimal. Do not bump FluidAudio across a minor without checkin
 
 ### GitHub Actions
 
-- Pin every third-party action to a full commit SHA with the version in a trailing comment: `uses: actions/checkout@<sha> # v7.0.1`. Dependabot bumps both. Reusable workflows from `VocaHQ/*` may track `main`.
+- Pin every third-party action to a full commit SHA with the version in a trailing comment: `uses: actions/checkout@<sha> # v7.0.1`. Dependabot bumps both. Pin reusable workflows from `VocaHQ/*` to a commit SHA too (`# main` comment); Scorecard counts a bare `@main` as unpinned.
 - Start new workflows at `permissions: {}` (or `contents: read`) and grant write scopes on the job that needs them.
 - Pass `${{ … }}` values into `run:` scripts through `env:`, never inline.
 - Check out with `persist-credentials: false` unless a later step pushes with that token.
