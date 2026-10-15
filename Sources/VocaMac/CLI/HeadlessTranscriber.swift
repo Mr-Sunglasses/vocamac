@@ -104,7 +104,7 @@ final class HeadlessTranscriber: @unchecked Sendable {
         let transcriber = prepared.transcriber
 
         do {
-            // Only model and language follow app prefs (see README); translate
+            // Only model and language follow app prefs (see docs/CLI.md); translate
             // and custom vocabulary are intentionally always off headlessly.
             let result = try await transcriber.transcribe(
                 audioData: loadedAudio.samples,

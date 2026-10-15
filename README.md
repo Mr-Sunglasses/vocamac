@@ -4,185 +4,38 @@
 
 <h1 align="center">VocaMac</h1>
 
-<p align="center"><strong>Your voice, your Mac, your privacy. Open-source dictation, on-device by default.</strong></p>
-
-<div align="center">
-  
-[![Build & Test](https://github.com/VocaHQ/vocamac/actions/workflows/ci.yml/badge.svg)](https://github.com/VocaHQ/vocamac/actions/workflows/ci.yml)
-[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/VocaHQ/vocamac/badge)](https://scorecard.dev/viewer/?uri=github.com/VocaHQ/vocamac)
-[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
-[![Platform: macOS](https://img.shields.io/badge/Platform-macOS%2014%2B-lightgrey.svg)](https://github.com/VocaHQ/vocamac)
-[![Swift 5.9+](https://img.shields.io/badge/Swift-5.9%2B-orange.svg)](https://swift.org)
-[![Release](https://img.shields.io/github/v/release/VocaHQ/vocamac?label=Release)](https://github.com/VocaHQ/vocamac/releases)
-[![Nightly](https://img.shields.io/badge/Nightly-download-blueviolet)](https://github.com/VocaHQ/vocamac/releases/tag/nightly)
-
-[![Speech engines](https://img.shields.io/badge/Speech%20engines-Whisper%20%7C%20Parakeet%20%7C%20Apple%20Speech%20%7C%20ONNX%20%7C%20Custom-6C5CE7.svg)](#-models)
-[![Apple Silicon](https://img.shields.io/badge/Apple%20Silicon-Optimized-black.svg?logo=apple&logoColor=white)](https://github.com/VocaHQ/vocamac)
-[![Privacy](https://img.shields.io/badge/Privacy-on--device%20for%20local%20engines-brightgreen.svg)](https://github.com/VocaHQ/vocamac)
-
-[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/VocaHQ/vocamac/pulls)
-[![GitHub Issues](https://img.shields.io/github/issues/VocaHQ/vocamac)](https://github.com/VocaHQ/vocamac/issues)
-[![GitHub Stars](https://img.shields.io/github/stars/VocaHQ/vocamac?style=social)](https://github.com/VocaHQ/vocamac/stargazers)
-[![Follow on X](https://img.shields.io/badge/Follow%20%40vocahq-000000?style=flat&logo=x&logoColor=white)](https://x.com/vocahq)
-[![Discord](https://img.shields.io/discord/1538633755877580810?logo=discord&logoColor=white&label=Discord)](https://discord.gg/t6muquAJbm)
-[![VocaHQ](https://img.shields.io/badge/VocaHQ-vocahq.com-1a7f4e)](https://vocahq.com)
-
-</div>
-
-<p align="center">Speak. It types. Open-source, on-device voice-to-text for macOS. Choose from local Whisper, Parakeet, Apple Speech, and specialized ONNX models. After a local model is downloaded, dictation audio stays on your Mac. An optional Custom Endpoint uploads recordings only when you deliberately select it. The Tiny Whisper model ships bundled; larger models need a one-time download. No required cloud speech account, no subscriptions, and no required Voca account. Hold a hotkey, speak, and your words appear wherever your cursor is.</p>
-
----
-
-## ✨ Features
-
-- **🔒 Local Speech** - Local engines process audio on your machine. The Tiny model ships bundled and works offline. An optional Custom Endpoint uploads recordings only when you select it. Optional remote cleanup sends text only when you explicitly configure it.
-- **✍️ Per-App and Website Writing Styles** - Choose output format, cleanup level, and optional cleanup instructions per app or browser domain, with exact rules for paths, identifiers, spacing, and markup. Optional Formal and Casual wording reuse the selected cleanup provider in one pass. Code and Terminal never let the model reword: it can only point out filler, which VocaMac removes from your own words; Raw bypasses cleanup, snippets, and formatting.
-- **🔒 On-device** - After a local model is downloaded, audio processing stays on your Mac. The Tiny Whisper model ships bundled so you can dictate immediately; larger models need a one-time download. No required Voca account. Custom Endpoint is the opt-in exception: it sends audio to the server you configure.
-- **⌨️ System-Wide Text Injection** - Transcribed text is typed wherever your cursor is: browsers, Slack, VS Code, spreadsheets, terminals - everywhere.
-- **🎯 Push-to-Talk** - Hold a hotkey (default: Right Option) to record. Release to transcribe.
-- **👆 Double-Tap Toggle** - Double-tap the hotkey to start/stop recording.
-- **🕘 Dictation History** - Search, copy, replay, and retry past dictations. Audio is saved before transcription, so a crash or failed decode never loses what you said. Press ⌃⌘V to paste your last dictation again. History is local, with 1-day to forever retention, and can be turned off.
-- **⌨️ More Ways to Dictate** - Press Escape to cancel. A separate hands-free shortcut starts and stops dictation without holding a key. A middle or side mouse button works like the hotkey. Sessions can run up to 20 minutes.
-- **🪄 Command Mode** - Select text in any app — including Electron apps like Discord and Slack — press a configurable shortcut (or hold it), and speak an instruction such as “make this shorter” or “translate to Spanish.” Edits run on Apple Intelligence (macOS 26), a local model (Qwen 2.5 1.5B, Ministral 3 3B, Qwen 3 4B, or Qwen 2.5 7B), or your cleanup endpoint, whether or not Smart Cleanup is on. A local Command Mode model can also run Smart Cleanup, so one model stays loaded for both. Escape cancels, the original stays in the menu bar to copy back, and the selection is left untouched if the result or the replacement fails validation. Exact edits (“uppercase”, “sort these lines”, “make it a bulleted list”) are done by rule, instantly and without a model. With nothing selected, say what to write and it is typed at the cursor; text you can't edit, such as a web page, gets an answer in a floating panel instead. “Shorter still” carries on from the last edit and “undo that” takes it back. Save the instructions you use most with a name and their own shortcut, or run them from the Shortcuts app. Optionally review a diff before an edit replaces your text, and turn on voice actions to open an app or a page, search the web, add a reminder, or run a Shortcut you have allowed.
-- **📖 Personal Dictionary** - Vocabulary and replacements work with every speech engine (“voca mac” → VocaMac, “get hub” → GitHub). VocaMac suggests words you corrected after dictating, and can spell names and code identifiers the way they appear on screen. All of this happens on your Mac.
-- **😊 Spoken Emoji and Numbers (optional)** - Say “party emoji” to type 🎉 (or “three fire emojis” for 🔥🔥🔥), and “twenty three”, “seven thirty pm” or “my number is nine eight seven…” to type 23, 7:30 pm and 987…. An optional extra writes “50%”, “$5.50” and “June 22”. All off by default, and they survive Smart Cleanup unchanged.
-- **🧠 Engine and Model Choice** - Choose the speech engine and model that fit your language, speed, and memory needs. VocaMac recommends compatible local options for your Apple Silicon Mac. Custom Endpoint is opt-in.
-- **⚡ Native Apple Acceleration** - CoreML + Metal + Neural Engine acceleration on Apple Silicon. No manual setup.
-- **📊 Live Visual Feedback** - Menu bar and overlay show audio level and partial words while Whisper or Parakeet is decoding; only the complete recording produces the final transcript.
-- **✨ Transcript Cleanup (optional)** - Say “let's do it tomorrow, oh, no, Wednesday” and VocaMac types “let's do it Wednesday” — spoken corrections of days, months, numbers, and times are resolved in English, Spanish, French, German, Portuguese, Italian, and Hinglish, and “um”/“uh” disappear, even without a model. Choose None, Light, Medium, or High cleanup and run it with a local GGUF model by default; Settings recommends one for your Mac's memory. The model reads its instructions while you are still speaking, and a dictation that is already clean is typed without waiting for it. Ollama, LM Studio, and OpenAI-compatible endpoints are opt-in; only the cleanup prompt and transcript are sent when one is selected, and API keys stay in Keychain.
-- **🧰 Local Workflow Tools** - Drag and drop audio or video for transcription, dictate into a floating scratchpad, capture up to 20 minutes of system audio with a private Core Audio tap, automate with App Intents or `vocamac://` links, and export or import non-secret settings.
-- **🔄 Auto-Updates** - Built-in update checker queries GitHub Releases on launch and lets you download and install the latest version in one click from within the app.
-- **⚙️ Configurable** - Choose hotkey presets or record a custom activation key reserved by VocaMac while it runs, models, languages, silence detection thresholds, and more.
-
----
-
-## 📸 Screenshots
+<p align="center"><strong>Hold a key, speak, and your words appear wherever you type.</strong><br>
+Open-source dictation for macOS. Your voice is transcribed on your Mac.</p>
 
 <p align="center">
-  <img src="docs/screenshots/popover-panel.png" alt="VocaMac Popover" width="400">
-  <br>
-  <em>Menu bar popover with status, model, microphone, style, and last dictation</em>
+  <a href="https://github.com/VocaHQ/vocamac/releases/latest"><img src="https://img.shields.io/github/v/release/VocaHQ/vocamac?label=Release" alt="Latest release"></a>
+  <a href="https://github.com/VocaHQ/vocamac/actions/workflows/ci.yml"><img src="https://github.com/VocaHQ/vocamac/actions/workflows/ci.yml/badge.svg" alt="Build & Test"></a>
+  <a href="https://scorecard.dev/viewer/?uri=github.com/VocaHQ/vocamac"><img src="https://api.scorecard.dev/projects/github.com/VocaHQ/vocamac/badge" alt="OpenSSF Scorecard"></a>
+  <a href="https://www.gnu.org/licenses/agpl-3.0"><img src="https://img.shields.io/badge/License-AGPL--3.0-blue.svg" alt="License: AGPL-3.0"></a>
+  <a href="https://discord.gg/t6muquAJbm"><img src="https://img.shields.io/discord/1538633755877580810?logo=discord&logoColor=white&label=Discord" alt="Discord"></a>
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/menu-bar-idle.png" alt="Menu Bar - Idle" width="250">
-  &nbsp;&nbsp;
-  <img src="docs/screenshots/menu-bar-recording.png" alt="Menu Bar - Recording" width="250">
-  <br>
-  <em>Menu bar icon: idle (left) and recording (right)</em>
+  <a href="https://github.com/VocaHQ/vocamac/releases/latest"><strong>Download</strong></a> ·
+  <a href="https://vocamac.com">Website</a> ·
+  <a href="docs/MODELS.md">Models</a> ·
+  <a href="https://discord.gg/t6muquAJbm">Discord</a>
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/settings-general.png" alt="Settings - General" width="400">
-  &nbsp;&nbsp;
-  <img src="docs/screenshots/settings-models.png" alt="Settings - Models" width="400">
-  <br>
-  <em>Settings: Dictation (left) and Speech Model (right)</em>
+  <img src="docs/screenshots/popover-panel.png" alt="The VocaMac menu: status, microphone, writing style and the last dictation" width="360">
 </p>
 
-<p align="center">
-  <img src="docs/screenshots/settings-snippets.png" alt="Settings - Snippets" width="400">
-  &nbsp;&nbsp;
-  <img src="docs/screenshots/settings-audio.png" alt="Settings - Audio" width="400">
-  <br>
-  <em>Settings: Snippets (left) and Audio (right)</em>
-</p>
+## Why VocaMac
 
-<p align="center">
-  <img src="docs/screenshots/settings-performance.png" alt="Settings - Performance" width="400">
-  &nbsp;&nbsp;
-  <img src="docs/screenshots/settings-application.png" alt="Settings - Application" width="400">
-  <br>
-  <em>Settings: Performance (left) and Application (right)</em>
-</p>
+- **Private.** Speech is recognized on your Mac. No account, no subscription, no cloud speech service.
+- **Works everywhere.** Text is typed at your cursor in any app: Mail, Slack, VS Code, the terminal, your browser.
+- **Fast and accurate.** Native Apple Silicon engines (Parakeet, Whisper, Apple Speech) on the Neural Engine and GPU.
+- **Free and open source** under AGPL-3.0.
 
-<p align="center">
-  <img src="docs/screenshots/settings-stats.png" alt="Settings - Stats" width="400">
-  &nbsp;&nbsp;
-  <img src="docs/screenshots/settings-advanced.png" alt="Settings - Permissions & Logs" width="400">
-  <br>
-  <em>Settings: Stats (left) and Permissions & Logs (right)</em>
-</p>
+## Install
 
-<p align="center">
-  <img src="docs/screenshots/settings-cleanup.png" alt="Settings - Cleanup" width="400">
-  &nbsp;&nbsp;
-  <img src="docs/screenshots/settings-about.png" alt="Settings - About" width="400">
-  <br>
-  <em>Settings: Cleanup (left) and About (right)</em>
-</p>
-
-<p align="center">
-  <img src="docs/screenshots/settings-writing-styles.png" alt="Settings - Writing Styles" width="400">
-  &nbsp;&nbsp;
-  <img src="docs/screenshots/settings-dictionary.png" alt="Settings - Dictionary" width="400">
-  <br>
-  <em>Settings: Writing Styles (left) and Dictionary (right)</em>
-</p>
-
-<p align="center">
-  <img src="docs/screenshots/settings-history.png" alt="Settings - History" width="400">
-  &nbsp;&nbsp;
-  <img src="docs/screenshots/update-ux.png" alt="In-app update window with release notes" width="400">
-  <br>
-  <em>Settings: History (left) and the in-app update window (right)</em>
-</p>
-
-<p align="center">
-  <img src="docs/screenshots/cursor-indicator.png" alt="Floating mic indicator during recording" width="400">
-  <br>
-  <em>Floating mic indicator during recording</em>
-</p>
-
----
-
-## 🧠 How the engines work
-
-VocaMac runs four on-device speech engines (Whisper, Parakeet, Apple Speech, and specialized ONNX models) plus an optional Custom Endpoint that sends audio to a Whisper-compatible server you host. Choose among them in **Settings → Speech Model**. The [Models](#-models) section explains the full catalogue.
-
-### Why the Whisper engine uses WhisperKit
-
-The Whisper path uses [WhisperKit](https://github.com/argmaxinc/argmax-oss-swift) instead of raw whisper.cpp because:
-
-| | WhisperKit | whisper.cpp |
-|---|-----------|-------------|
-| **Language** | Pure Swift (native) | C++ (requires bridging) |
-| **Apple Silicon** | CoreML + Neural Engine | Metal only |
-| **SPM Integration** | One-line dependency | Complex vendoring |
-| **Model Format** | CoreML (optimized per device) | GGML (generic) |
-| **Streaming** | First-class async/await | Manual threading |
-| **Quality** | Same OpenAI Whisper models | Same OpenAI Whisper models |
-| **Maintenance** | Argmax Inc. (commercial) | Community |
-
-Same accuracy, dramatically better Apple platform integration.
-
----
-
-## 📋 Requirements
-
-- **macOS 14 (Sonoma)** or later
-- **Apple Silicon Mac** (M1/M2/M3/M4) — **Intel Macs are not supported.** VocaMac is built for `arm64` only.
-- **Xcode 15+** or Swift 5.9+ (only for building from source)
-
-### Permissions
-
-VocaMac requires three macOS permissions:
-
-| Permission | Why |
-|---|---|
-| **Microphone** | Capture your voice for transcription |
-| **Accessibility** | Global hotkeys and text injection into apps |
-| **Input Monitoring** | Detect hotkey presses system-wide |
-
-> **Note:** After granting Input Monitoring, a restart of VocaMac is required for it to take effect.
->
-> **Managed Macs:** IT can pre-approve Accessibility and Input Monitoring with an MDM profile — see [Enterprise & Managed Devices](#-enterprise--managed-devices).
-
----
-
-## 🚀 Quick Start
-
-### Option 1: Install via Homebrew (Recommended)
+Needs an Apple Silicon Mac on macOS 14 Sonoma or later.
 
 ```bash
 brew tap vocahq/vocamac
@@ -190,568 +43,119 @@ brew trust vocahq/vocamac
 brew install --cask vocamac
 ```
 
-> **Still have the old tap?** If you previously used `jatinkrmalik/vocamac`, untap it first or Homebrew will error with `Cask vocamac exists in multiple taps`:
-> ```bash
-> brew untap jatinkrmalik/vocamac
-> brew tap vocahq/vocamac && brew trust vocahq/vocamac && brew install --cask vocamac
-> ```
+Or download the DMG from the [latest release](https://github.com/VocaHQ/vocamac/releases/latest) and drag VocaMac to Applications. The app is signed and notarized by Apple.
 
-Homebrew installs VocaMac to `/Applications/VocaMac.app`. Launch it from Spotlight or your Applications folder. Updates are a single command away:
+[Nightly builds, building from source, and uninstalling →](docs/INSTALL.md)
 
-```bash
-brew upgrade --cask vocamac
-```
+## Get started
 
-> **Why Homebrew?** Terminal-based install. One-command updates. Permissions persist across upgrades. No manual DMG downloads. See [`docs/HOMEBREW.md`](docs/HOMEBREW.md) for the full Homebrew guide.
+1. Open VocaMac. It lives in the menu bar, not the Dock.
+2. Allow the three permissions it asks for:
 
-### Option 2: Download DMG
+   | Permission | Why |
+   |---|---|
+   | Microphone | To hear you |
+   | Accessibility | To type the text into other apps |
+   | Input Monitoring | To notice the shortcut in any app (VocaMac asks to reopen once after you allow it) |
 
-1. **Download** the latest `VocaMac-x.x.x-arm64.dmg` from the [Releases page](https://github.com/VocaHQ/vocamac/releases)
-2. **Open** the DMG and drag VocaMac to Applications
-3. **Open** VocaMac from Applications
-4. **Grant permissions**: Microphone, Accessibility, and Input Monitoring when prompted
+3. Hold **Right Option**, speak, and let go. Your words appear at the cursor.
 
-> VocaMac is **Developer ID signed and notarized** by Apple — macOS will open it without any security warnings.
+You can also double-tap the key to start and stop, use a separate hands-free shortcut or a mouse button, and press **Escape** to cancel. Change the shortcut in **Settings → Dictation**.
 
-### Option 3: Build from Source
+The Tiny Whisper model is built in, so you can dictate right away. VocaMac suggests a better model for your Mac, which downloads once.
 
-```bash
-git clone https://github.com/VocaHQ/vocamac.git
-cd vocamac
-make install
-```
+## Features
 
-This builds VocaMac, installs it to `/Applications`, and launches it. Permissions are granted directly to VocaMac, just like the DMG method.
+**Dictation**
+- Type into any app, with live words in a small overlay while you speak.
+- Paragraph breaks at long pauses between sentences, and spoken emoji and numbers ("party emoji" → 🎉, "seven thirty pm" → 7:30 pm).
+- Personal dictionary for names and jargon ("get hub" → GitHub), plus snippets that expand short phrases.
+- History of past dictations to search, replay, and paste again (⌃⌘V). You can keep chosen apps out of it, or turn it off.
 
-### Option 4: Launch/Build Helper Commands (For Developers)
+**Writing**
+- Writing styles per app or website: email, chat, notes, code, terminal.
+- Smart Cleanup removes "um", false starts, and spoken corrections ("Tuesday, no, Wednesday" → "Wednesday") with a small on-device model.
+- Command Mode: select text and say what to change ("make this shorter", "translate to Spanish").
 
-```bash
-git clone https://github.com/VocaHQ/vocamac.git
-cd vocamac
-make install-cli
-```
+**And more**
+- Transcribe audio and video files, or record system audio.
+- A [command-line transcriber](docs/CLI.md) for scripts.
+- Automation with the Shortcuts app and `vocamac://` links.
+- Installs its own updates and keeps your permissions.
 
-This installs two development helpers to `~/.local/bin`:
+See every feature on [vocamac.com](https://vocamac.com).
 
-- `vocamac`: Launch VocaMac in background. With arguments (`vocamac --list-models --json`), it runs the headless CLI described below instead and leaves a running app alone
-- `vocamac-build`: Rebuild from source after pulling updates
+## Privacy
 
-Because the launcher runs a development binary from Terminal, macOS may assign its GUI permissions to the terminal app rather than the installed VocaMac app.
+Local speech engines process audio on your Mac. After a model is downloaded, dictation works offline, and nothing about what you say leaves the computer.
 
-### Headless File Transcription CLI
+Two features can send data elsewhere, and both are off until you set them up:
 
-The installed app binary can transcribe an existing audio file without opening the GUI, recording the microphone, injecting text, or disturbing an already-running VocaMac instance:
+- **Custom Endpoint** uploads each recording to a speech server that *you* host.
+- **Remote cleanup** (Ollama, LM Studio, or an OpenAI-compatible endpoint) sends text to clean up or edit, never audio. API keys stay in your Keychain.
 
-```bash
-/Applications/VocaMac.app/Contents/MacOS/VocaMac \
-  --transcribe-file /path/to/audio.wav \
-  --json
-```
+## Speech models
 
-By default, the command follows the model and language currently selected in the VocaMac app. `auto` language selection is passed to the engine as automatic detection. You can override either choice for one request without changing the saved app preferences:
-
-```bash
-/Applications/VocaMac.app/Contents/MacOS/VocaMac \
-  --transcribe-file /path/to/audio.wav \
-  --model parakeet-tdt-0.6b-v2 \
-  --language en \
-  --json
-```
-
-The model must already be downloaded in VocaMac. Headless mode never downloads a missing model automatically. Input is validated and converted with AVFoundation to mono, 16 kHz, Float32 PCM; files are limited to 500 MB and 30 minutes.
-
-Only the selected model and language follow your app preferences. Translate-to-English and WhisperKit custom vocabulary are always off in headless mode, even if enabled in the app.
-
-Successful transcription writes exactly one JSON object to stdout:
-
-```json
-{
-  "audio_length_seconds": 4.3,
-  "detected_language": "en",
-  "duration_seconds": 0.72,
-  "engine": "parakeet",
-  "model": "parakeet-tdt-0.6b-v2",
-  "text": "Transcribed text"
-}
-```
-
-`engine` is one of `whisperkit`, `parakeet`, `apple_speech`, or `sherpa_onnx`. Operational messages continue to VocaMac's unified and file logs, keeping stdout safe for JSON consumers such as VocaPhone.
-
-List every known model and its current state with:
-
-```bash
-/Applications/VocaMac.app/Contents/MacOS/VocaMac --list-models --json
-```
-
-The response is a `models` array whose entries have this schema:
-
-```json
-{
-  "id": "parakeet-tdt-0.6b-v2",
-  "name": "Parakeet v2 (English)",
-  "engine": "parakeet",
-  "selected": true,
-  "downloaded": true,
-  "supported": true,
-  "system_managed": false
-}
-```
-
-Failures exit nonzero and write a JSON error to stderr, for example:
-
-```json
-{"error":"model_not_downloaded","message":"Model is not downloaded: small"}
-```
-
-Stable error categories are `invalid_arguments`, `invalid_audio`, `model_not_found`, `model_not_downloaded`, `model_unsupported`, and `transcription_failed`. Use `--help` for command syntax; it exits without launching the GUI.
-
-To check how "Process while speaking" would handle a recording, add `--pieces`. The file is decoded whole and then piece by piece, cut at pauses the way a live dictation is, and the response reports both texts, a word difference rate between them, and the projected wait after stop. Add `--cleanup <cleanup-model-id>` (for example `ministral3_3b_q4_k_m`) to clean both with a downloaded cleanup model, and `--pause-seconds` or `--min-piece-seconds` to try other cut thresholds:
-
-```bash
-/Applications/VocaMac.app/Contents/MacOS/VocaMac \
-  --transcribe-file /path/to/audio.wav \
-  --pieces --cleanup ministral3_3b_q4_k_m \
-  --json
-```
-
-One-shot CLI mode loads the selected model in a separate process for each request. This preserves isolation from the running menu bar app, but the first request has the normal model-loading cost.
-
-### First Launch
-
-1. **VocaMac appears in your menu bar** (microphone icon, no Dock icon)
-2. **Grant permissions**: Microphone, Accessibility, and Input Monitoring (see [Permissions](#permissions) above)
-3. **First model download**: WhisperKit automatically downloads the recommended model for your device (~40–500 MB depending on hardware)
-4. **Start dictating**: Hold the **Right Option** key, speak, and release. Your words appear at the cursor!
-
----
-
-## 🌙 Nightly Builds
-
-Nightly builds are automated builds from the latest `main` branch, published every day at midnight UTC when there are new commits. They let you try the latest features, fixes, and improvements before they land in a stable release.
-
-**Why use a nightly build?**
-
-- **Early access** — Test new features days or weeks before the next stable release
-- **Help improve VocaMac** — Your feedback on nightly builds catches bugs before they reach everyone
-- **Fully signed & notarized** — Nightly builds are Developer ID signed and notarized by Apple, just like stable releases. No Gatekeeper warnings, no right-click workarounds
-
-**How to install:**
-
-**Via Homebrew (recommended):**
-```bash
-brew tap vocahq/vocamac
-brew trust vocahq/vocamac
-brew install --cask vocamac-nightly
-```
-
-**Or via DMG:**
-1. Download the latest `VocaMac-nightly-*.dmg` from the [Nightly Release](https://github.com/VocaHQ/vocamac/releases/tag/nightly)
-2. Open the DMG and drag VocaMac to Applications
-3. Grant permissions when prompted (same as a stable release)
-
-**How to identify your build:**
-
-Nightly builds embed the date and commit SHA in the version string. Open **Settings → About** to see something like:
-
-```
-Version 0.5.0-nightly.20260414+abc1234 (Nightly)
-```
-
-This helps us pinpoint the exact code you're running if you report an issue.
-
-**Cadence & stability:**
-
-| | Stable Release | Nightly Build |
+| Engine | Best for | Runs on |
 |---|---|---|
-| **Frequency** | When ready (manual tag) | Daily at midnight UTC |
-| **Source** | Tagged commit | Latest `main` branch |
-| **Signed & notarized** | ✅ Yes | ✅ Yes |
-| **Stability** | Production-ready | May contain incomplete features or bugs |
-| **Best for** | Daily use | Testing & early feedback |
+| **Parakeet** (recommended) | Fastest dictation, in English or 25 European languages | Neural Engine |
+| **Whisper** | The most languages, and translation to English | Neural Engine and GPU |
+| **Apple Speech** | Built into macOS 26 and later; language packs may download on first use | On device, managed by macOS |
+| **Specialized** (Moonshine, SenseVoice, GigaAM, Canary, Qwen3 ASR) | Low-memory Macs, and Chinese, Japanese, Korean, or Russian | CPU |
 
-> ⚠️ **Nightly builds may be unstable.** If you encounter issues, please [open a bug report](https://github.com/VocaHQ/vocamac/issues/new) — your feedback helps us ship better stable releases!
+Sizes, languages, and the full list are in [docs/MODELS.md](docs/MODELS.md).
 
----
+## Screenshots
 
-## 🎮 Usage
+<details>
+<summary>Show screenshots</summary>
+<br>
 
-### Push-to-Talk (Default)
-
-| Action | What Happens |
-|--------|-------------|
-| **Hold Right Option** | Recording starts (menu bar icon turns green) |
-| **Speak** | Audio is captured locally |
-| **Release Right Option** | Recording stops → transcription → text injected at cursor |
-
-### Double-Tap Toggle
-
-| Action | What Happens |
-|--------|-------------|
-| **Double-tap Right Option** | Recording starts |
-| **Speak** | Audio is captured |
-| **Double-tap Right Option again** | Recording stops → transcription → text injection |
-
-Switch between modes in **Settings → Dictation**.
-
----
-
-## 🧠 Models
-
-VocaMac runs four on-device speech engines plus an optional Custom Endpoint, and picks among them in **Settings → Speech Model**, where models are grouped by engine. Local engines run on this Mac. Custom Endpoint uploads each recording to the server you configure.
-
-### Parakeet — fastest, recommended for dictation
-
-NVIDIA Parakeet TDT models running as CoreML on the Apple Neural Engine (via [FluidAudio](https://github.com/FluidInference/FluidAudio)).
-
-| Model | Size | Speed | Languages |
-|-------|------|-------|-----------|
-| **Parakeet Ultra** | ~632 MB | ⚡⚡⚡⚡⚡ | Parakeet v3 post-trained by moondream: more accurate at the same speed, same 25 European languages |
-| **Parakeet v3** | ~483 MB | ⚡⚡⚡⚡⚡ | 25 European languages + Japanese, auto-detected |
-| **Parakeet Unified** | ~614 MB | ⚡⚡⚡⚡⚡ | English only, NVIDIA's newest Parakeet: punctuation, capitals, and numbers written as digits |
-| **Parakeet v2** | ~464 MB | ⚡⚡⚡⚡⚡ | English only, highest recall |
-| **Parakeet 110M** | ~227 MB | ⚡⚡⚡⚡⚡ | English only, smaller download and faster first load |
-
-### Whisper — widest language coverage
-
-OpenAI Whisper models via WhisperKit's CoreML format. The only engine that supports **translation to English**. Dictionary vocabulary is a recognition hint for Whisper, Apple Speech, and (with the optional vocabulary boost download) Parakeet; every engine gets the spelling fixes after transcription. The app auto-detects your hardware and recommends a variant.
-
-| Model | Parameters | Size | Speed | Quality | Best For |
-|-------|-----------|------|-------|---------|----------|
-| **Tiny** | 39M | ~0.4 GB | ⚡⚡⚡⚡⚡ | Good | Quick notes, older Macs |
-| **Base** | 74M | ~0.8 GB | ⚡⚡⚡⚡ | Better | Daily use on 8GB Macs |
-| **Small** | 244M | ~1.5 GB | ⚡⚡⚡ | Great | 16GB+ Apple Silicon |
-| **Medium** | 769M | ~2.5 GB | ⚡⚡ | Excellent | 24GB+ for high accuracy |
-| **Large v3** | 1550M | ~4.8 GB | ⚡ | Best | Maximum accuracy |
-| **Voca Hinglish** | 809M | ~0.8 GB | ⚡⚡⚡ | Best for Hindi | Hindi speech written in Roman script ([Oriserve's Hindi2Hinglish Apex](https://huggingface.co/Oriserve/Whisper-Hindi2Hinglish-Apex) fine-tune of Large v3 Turbo, 8-bit compressed and [hosted by VocaHQ](https://huggingface.co/VocaHQ/whisperkit-coreml)) |
-
-Voca Hinglish always decodes as English, which is how it was trained to write romanized Hindi, so it ignores the language setting.
-
-### Apple Speech — managed by macOS (macOS 26+)
-
-Apple's on-device SpeechAnalyzer engine. Assets are managed by macOS (language packs may download on first use) and are not stored in VocaMac's model folder. Covers roughly 30 locales.
-
-### Specialized (ONNX) — niche needs
-
-Community models via [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx). These run on the **CPU**, so on Apple Silicon prefer Parakeet unless you need one of these specifically.
-
-| Model | Size | Best For |
-|-------|------|----------|
-| **Moonshine v2 Tiny** | ~60 MB | Very low-RAM Macs, English |
-| **Moonshine v2 Base** | ~190 MB | Low-RAM Macs, English |
-| **SenseVoice** | ~240 MB | Chinese, Japanese, Korean, Cantonese, English |
-| **GigaAM v3** | ~270 MB | Russian, with punctuation |
-| **Canary 180M Flash** | ~320 MB | English, Spanish, German, French |
-| **Qwen3 ASR 0.6B** | ~973 MB | Accurate transcription across 30 languages and Chinese dialects |
-
-Recordings longer than a model's single-pass limit are split at natural pauses and decoded segment by segment, since these models — unlike Whisper and Parakeet — do not chunk internally.
-
-### Custom Endpoint (optional, remote)
-
-Select Custom Endpoint to upload each recording as a WAV file to a Whisper-compatible server you host (OpenAI audio API or whisper.cpp). This is opt-in and off by default. It is distinct from VocaGateway.
-
-Models download automatically on first use and are cached locally — Whisper and Parakeet from [HuggingFace](https://huggingface.co/argmaxinc/whisperkit-coreml), the specialized models from sherpa-onnx's model releases.
-
-> **Note:** SenseVoice and Canary fix their language when the model loads, so changing the transcription language reloads the active model. Whisper and Parakeet take the language per transcription.
-
----
-
-## ⚙️ Configuration
-
-Open Settings from the menu bar popover or with **⌘,**
-
-### General
-- **Activation mode** - Push-to-Talk or Double-Tap Toggle
-- **Hotkey** - Choose from common presets or record a custom activation key directly from your keyboard. The selected key is consumed by VocaMac while the app is running.
-- **Language** - Auto-detect or specify (English, Spanish, French, German, Chinese, Japanese, and more)
-- **Launch at login**
-
-### Audio
-- **Max recording duration** - 30s, 60s, 120s, or 300s
-- **Silence detection** - Auto-stop recording after configurable silence
-- **Sound effects** - Toggle audio feedback for recording start/stop
-- **Input device** - Select which microphone to use
-
-### Models
-- View system info and WhisperKit's hardware recommendation
-- Download, load, and switch between models
-- See which models are supported on your device
-
----
-
-## 🏗️ Architecture
-
-VocaMac is built with a clean, modular architecture using native Swift and SwiftUI:
-
-```
-VocaMacMain (pre-SwiftUI dispatcher)
-├── CLIEntrypoint
-│   ├── AudioFileLoader       - Existing-file validation and 16 kHz mono conversion
-│   ├── ModelManager          - Saved model resolution and local-asset checks
-│   └── TranscriptionRouter   - Whisper, Parakeet, Apple Speech, and sherpa-onnx
-└── VocaMacApp (SwiftUI MenuBarExtra)
-    ├── AppState              - Central observable state
-    ├── HotKeyManager         - CGEventTap global hotkey listener
-    ├── AudioEngine           - AVAudioEngine mic capture (16 kHz, mono, Float32)
-    ├── SoundManager          - Audio feedback (start/stop recording cues)
-    ├── TextInjector          - Clipboard + Cmd+V text injection
-    ├── MenuBarView           - Status popover UI
-    └── SettingsView          - Configuration tabs (General, Models, Audio, Debug, About)
-```
-
-For detailed documentation, see:
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) - Technical Architecture
-- [`docs/DATA_MODEL.md`](docs/DATA_MODEL.md) - Data Model & Entity Relationships
-
----
-
-## 🔧 Development
-
-### Prerequisites
-
-- **Xcode 15+** or Swift 5.9+ toolchain
-- **macOS 14+**
-
-### Project Structure
-
-```
-VocaMac/
-├── Package.swift                   # SPM config (WhisperKit, FluidAudio, sherpa-onnx)
-├── Sources/
-│   └── VocaMac/
-│       ├── App/
-│       │   └── VocaMacApp.swift    # SwiftUI MenuBarExtra app
-│       ├── CLI/
-│       │   ├── CLIEntrypoint.swift # Process dispatcher and headless execution
-│       │   ├── HeadlessTranscriber.swift # Model resolution and router orchestration
-│       │   └── AudioFileLoader.swift # File validation and PCM conversion
-│       ├── Views/
-│       │   ├── MenuBarView.swift   # Menu bar popover
-│       │   └── SettingsView.swift  # Settings window (5 tabs)
-│       ├── Services/
-│       │   ├── AudioEngine.swift   # AVAudioEngine mic capture
-│       │   ├── HotKeyManager.swift # CGEventTap global hotkeys
-│       │   ├── WhisperService.swift# WhisperKit transcription wrapper
-│       │   ├── ModelManager.swift  # Model download & management
-│       │   ├── SoundManager.swift  # Audio feedback for recording
-│       │   ├── TextInjector.swift  # Clipboard-based text injection
-│       │   └── SystemInfo.swift    # Hardware detection
-│       ├── Models/
-│       │   ├── AppState.swift      # Central observable state
-│       │   ├── TranscriptionResult.swift  # VocaTranscription type
-│       │   └── WhisperModel.swift  # ModelSize enum, WhisperModelInfo
-│       └── Resources/
-├── Tests/
-│   └── VocaMacTests/
-├── Makefile                        # make build, install, test, clean
-├── scripts/
-│   ├── build.sh                    # Build .app bundle (dev)
-│   ├── install.sh                  # Install app or development helpers
-│   └── uninstall.sh                # Full uninstall & cleanup
-├── web/                            # Marketing website (vocamac.com)
-├── docs/
-│   ├── ARCHITECTURE.md             # Technical Architecture
-│   └── DATA_MODEL.md               # Data Model & Entity Relationships
-├── LICENSE                         # AGPL-3.0 License
-└── .gitignore
-```
-
-### Build Commands
-
-```bash
-make install        # Build + install to /Applications (recommended)
-make install-cli    # Install CLI commands to ~/.local/bin
-make build          # Build .app bundle in repo root (dev iteration)
-make test           # Run tests
-make run            # Launch the locally built .app
-make clean          # Remove build artifacts
-make help           # Show all commands
-```
-
-### Uninstall
-
-To completely remove VocaMac and all its data (downloaded models, preferences, caches):
-
-```bash
-./scripts/uninstall.sh
-```
-
-Use `--keep-build` to preserve build artifacts:
-
-```bash
-./scripts/uninstall.sh --keep-build
-```
-
-### Troubleshooting
-
-**Reset onboarding:** To re-trigger the first-launch onboarding wizard (e.g., after an upgrade or for testing), reset the onboarding flag:
-
-```bash
-defaults delete com.vocamac.app vocamac.hasCompletedOnboarding
-```
-
-Then relaunch VocaMac. This only clears the onboarding state; all other preferences (hotkey, language, model) are preserved.
-
-**Reset all preferences:** To start completely fresh:
-
-```bash
-defaults delete com.vocamac.app
-```
-
-**Reset permissions (troubleshooting):** If permissions appear stuck or aren't being recognized after an update, you can reset them from **Settings → Debug → Reset All Permissions**, or manually via Terminal:
-
-```bash
-tccutil reset All com.vocamac.app
-```
-
-This clears all permission entries (Microphone, Accessibility, Input Monitoring) for VocaMac. On next launch, macOS will prompt you to re-grant them. With Developer ID signing, permissions normally persist across updates — this reset is only needed for troubleshooting.
-
-**"Update check failed (HTTP 403)" on a shared / corporate / VPN network:** VocaMac checks for new releases by calling GitHub's public REST API, which is rate-limited to **60 unauthenticated requests per hour, per source IP**. When several people share the same egress IP (common on office VPNs, NAT'd networks, or busy CI runners), that quota is collectively exhausted and GitHub returns `HTTP 403` to every client from that IP — including VocaMac.
-
-This is **not a bug in VocaMac** and there is nothing wrong with your install. To recover:
-
-1. Disconnect from the VPN (or switch to a different network, e.g. your phone's hotspot).
-2. Open VocaMac → **Settings → About → "Check for Updates…"** and wait for it to complete.
-3. Reconnect to the VPN.
-
-After one successful check, VocaMac caches the response's `ETag` and sends it as `If-None-Match` on every subsequent request. GitHub then replies with `304 Not Modified`, which **does not count against the rate limit**, so future checks succeed even from a rate-limited IP — until a new release ships and the ETag changes (at which point one fresh `200` response per machine is needed before `304`s resume).
-
----
-
-
-## 🌐 Cross-Platform
-
-VocaMac is the macOS member of the Voca family. Start at [vocahq.com](https://vocahq.com) for the map.
-
-| Platform | Project | Website | GitHub | Status |
-|----------|---------|---------|--------|--------|
-| Linux | **VocaLinux** | [vocalinux.com](https://vocalinux.com) | [VocaHQ/vocalinux](https://github.com/VocaHQ/vocalinux) | Available now (`v0.16.0`) |
-| macOS | **VocaMac** | [vocamac.com](https://vocamac.com) | [VocaHQ/vocamac](https://github.com/VocaHQ/vocamac) | Stable (`v1.1.0`) |
-| Windows | **VocaWin** | [vocawin.com](https://vocawin.com) | [VocaHQ/vocawin](https://github.com/VocaHQ/vocawin) | Beta — unsigned `v0.1.0-beta.1` |
-| Phone | **VocaPhone** | [vocaphone.vocahq.com](https://vocaphone.vocahq.com) | [VocaHQ/vocaphone](https://github.com/VocaHQ/vocaphone) | Android beta / iOS [TestFlight](https://testflight.apple.com/join/wd85wQ3W) |
-| Gateway | **VocaGateway** | [vocagateway.vocahq.com](https://vocagateway.vocahq.com) | [VocaHQ/vocagateway](https://github.com/VocaHQ/vocagateway) | Early, optional, not on-device |
-
-Each platform uses native technologies for the best possible integration, while sharing the same UX patterns. VocaGateway is optional self-hosted compute; do not treat that path as on-device.
-
----
-
-## 🤝 Related Projects
-
-- [WhisperKit](https://github.com/argmaxinc/argmax-oss-swift) - Swift native on-device speech recognition
-- [VocaLinux](https://github.com/VocaHQ/vocalinux) - Voice-to-text for Linux
-- [OpenAI Whisper](https://github.com/openai/whisper) - Original Whisper model
-
----
-
-## ⚠️ Known Limitations
-
-- **Larger models require a one-time download**: VocaMac ships with the Whisper Tiny model bundled — you can dictate immediately with no internet connection. Switching to a larger model (Small, Medium, Large) requires a one-time download; all subsequent launches work fully offline.
-- **macOS only**: Requires macOS 14 (Sonoma) or later.
-- **Permissions reset on rebuild (build-from-source only)**: When building from source without a Developer ID certificate, macOS resets Accessibility and Input Monitoring permissions on every rebuild due to ad-hoc signing. Release builds are Developer ID signed so permissions persist across updates.
-
-### Permissions and Code Signing
-
-Release builds of VocaMac are **Developer ID signed and notarized** by Apple. Accessibility and Input Monitoring permissions persist across updates — no manual re-granting required.
-
-**For developers building from source:** If you don't have a Developer ID certificate, `build.sh` falls back to ad-hoc signing. With ad-hoc signing, macOS resets Accessibility and Input Monitoring permissions on every rebuild because the CDHash changes. This is standard macOS security behavior — all open-source apps with Accessibility (Rectangle, Maccy, AltTab, etc.) have the same limitation when ad-hoc signed.
-
-**Workarounds for ad-hoc builds:**
-
-| Approach | How | Permissions Persist |
-|---|---|---|
-| **Run from Terminal** | Grant permissions to Terminal.app once, then run `make run` | ✅ Always |
-| **Re-grant manually** | System Settings → Privacy & Security after each rebuild | Per rebuild |
-
-> **💡 Developer tip:** Add your Terminal app (Terminal.app or iTerm2) to both Accessibility and Input Monitoring in System Settings. Then run VocaMac directly from Terminal. Permissions are inherited and never reset.
-
----
-
-## 🏢 Enterprise & Managed Devices
-
-On a managed Mac the user is usually a standard (non-admin) account, and the Accessibility pane in System Settings needs an admin unlock. IT can pre-approve VocaMac instead by pushing a **Privacy Preferences Policy Control (PPPC)** payload (`com.apple.TCC.configuration-profile-policy`) from Jamf, Kandji, Mosyle, Intune, or any other MDM.
-
-### What can be pre-approved
-
-| Permission | TCC service key | Why VocaMac needs it | Pre-approvable by MDM |
-|---|---|---|---|
-| **Accessibility** | `kTCCServiceAccessibility` | Global hotkeys and text injection | ✅ Yes |
-| **Input Monitoring** | `kTCCServiceListenEvent` | Detecting hotkey presses system-wide | ✅ Yes |
-| **Microphone** | `kTCCServiceMicrophone` | Capturing audio to transcribe | ❌ No — see below |
-
-**The microphone always needs a human click.** Apple lets a PPPC payload *deny* Camera and Microphone, never *allow* them. That prompt is the easy one, though: it's an ordinary consent dialog a standard user can accept without admin rights. The profile clears the two permissions that actually require an admin, and the user clicks "Allow" once for the microphone on first launch.
-
-Granting Accessibility also covers posting synthesized keystrokes, so a separate `kTCCServicePostEvent` entry is unnecessary (harmless if your baseline includes one).
-
-### Values for the payload
-
-| Field | Value |
+| | |
 |---|---|
-| Identifier | `com.vocamac.app` |
-| Identifier type | `bundleID` |
-| Code requirement | Read it from the signed app — see below |
-| Authorization | `Allow` |
+| ![Dictation settings](docs/screenshots/settings-general.png) | ![Speech model settings](docs/screenshots/settings-models.png) |
+| Dictation | Speech Model |
+| ![Writing styles](docs/screenshots/settings-writing-styles.png) | ![Dictionary](docs/screenshots/settings-dictionary.png) |
+| Writing Styles | Dictionary |
+| ![Smart Cleanup](docs/screenshots/settings-cleanup.png) | ![History](docs/screenshots/settings-history.png) |
+| Smart Cleanup | History |
+| ![Recording indicator](docs/screenshots/cursor-indicator.png) | ![Update window](docs/screenshots/update-ux.png) |
+| Recording indicator | In-app update |
 
-Rather than hand-writing the code requirement, read the designated requirement off a release build and paste it verbatim:
+</details>
 
-```bash
-codesign -d -r- /Applications/VocaMac.app          # designated requirement string
-codesign -dv --verbose=4 /Applications/VocaMac.app 2>&1 | grep TeamIdentifier
-```
+## Documentation
 
-It takes this shape, where `TEAMID` is VocaMac's Apple Developer team:
+| | |
+|---|---|
+| [Install](docs/INSTALL.md) | Homebrew, DMG, nightly builds, building from source, uninstalling |
+| [Speech models](docs/MODELS.md) | Every engine and model, with sizes and languages |
+| [Command-line transcription](docs/CLI.md) | Transcribe files from scripts, with JSON output |
+| [Troubleshooting](docs/TROUBLESHOOTING.md) | Resetting permissions or settings, update errors |
+| [Managed Macs](https://vocamac.com/enterprise/) | Pre-approving permissions with MDM |
+| [Architecture](docs/ARCHITECTURE.md) | How the app is built |
 
-```
-identifier "com.vocamac.app" and anchor apple generic
-  and certificate 1[field.1.2.840.113635.100.6.2.6]
-  and certificate leaf[field.1.2.840.113635.100.6.1.13]
-  and certificate leaf[subject.OU] = "TEAMID"
-```
+## The Voca family
 
-### Example payload
+VocaMac is the macOS member of [Voca](https://vocahq.com).
 
-```xml
-<key>Services</key>
-<dict>
-  <key>Accessibility</key>
-  <array>
-    <dict>
-      <key>Identifier</key><string>com.vocamac.app</string>
-      <key>IdentifierType</key><string>bundleID</string>
-      <key>CodeRequirement</key><string><!-- codesign -d -r- output --></string>
-      <key>Authorization</key><string>Allow</string>
-    </dict>
-  </array>
-  <key>ListenEvent</key>
-  <array>
-    <dict>
-      <key>Identifier</key><string>com.vocamac.app</string>
-      <key>IdentifierType</key><string>bundleID</string>
-      <key>CodeRequirement</key><string><!-- same string --></string>
-      <key>Authorization</key><string>Allow</string>
-    </dict>
-  </array>
-</dict>
-```
-
-`Authorization` is the current key; older MDM consoles emit `<key>Allowed</key><true/>`, which still works.
-
-### Two things that trip people up
-
-- **The profile must come from MDM.** macOS ignores PPPC payloads in a `.mobileconfig` a user installs by hand — the profile will appear to install successfully and grant nothing. It has to arrive through a user-approved MDM enrollment.
-- **Only release builds match.** PPPC binds to the code signature, not the file path. Release DMGs and the Homebrew cask are Developer ID signed and notarized, so they match this profile. Source and dev builds do not: Apple Development signed ones have a different designated requirement, and unsigned or ad-hoc signed ones do not match either. Deploy the notarized release or Homebrew build instead.
-
-Input Monitoring still needs VocaMac to be restarted once after the grant takes effect, exactly as in the [Permissions](#permissions) note above.
-
----
+| Platform | Project | Status |
+|---|---|---|
+| macOS | [VocaMac](https://github.com/VocaHQ/vocamac) | Stable (`v1.1.0`) |
+| Linux | [VocaLinux](https://github.com/VocaHQ/vocalinux) | Available now (`v0.16.0`) |
+| Windows | [VocaWin](https://github.com/VocaHQ/vocawin) | Beta (unsigned `v0.1.0-beta.1`) |
+| Phone | [VocaPhone](https://github.com/VocaHQ/vocaphone) | Android beta, iOS [TestFlight](https://testflight.apple.com/join/wd85wQ3W) |
+| Gateway | [VocaGateway](https://github.com/VocaHQ/vocagateway) | Early. Optional self-hosted compute, not on-device |
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md).
+Bug reports, ideas, and pull requests are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md), or say hi on [Discord](https://discord.gg/t6muquAJbm).
 
----
+VocaMac is built on [WhisperKit](https://github.com/argmaxinc/argmax-oss-swift), [FluidAudio](https://github.com/FluidInference/FluidAudio), [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx), and [LLM.swift](https://github.com/eastriverlee/LLM.swift).
 
-## 📄 License
+## License
 
-AGPL-3.0 License - see [LICENSE](LICENSE) for details.
+[AGPL-3.0](LICENSE)
 
 ## Star History
 
@@ -763,13 +167,4 @@ AGPL-3.0 License - see [LICENSE](LICENSE) for details.
  </picture>
 </a>
 
----
-
-<div align="center">
-  
-Made with ❤️ for the macOS community!
-
-Join [Discord](https://discord.gg/t6muquAJbm) to talk with us, follow
-[@vocahq](https://x.com/vocahq) on X, or email [hello@vocahq.com](mailto:hello@vocahq.com).
-
-</div>
+<p align="center">Made for the macOS community · <a href="https://x.com/vocahq">@vocahq on X</a> · <a href="mailto:hello@vocahq.com">hello@vocahq.com</a></p>
