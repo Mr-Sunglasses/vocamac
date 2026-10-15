@@ -1,6 +1,6 @@
 # VocaMac Homebrew Distribution Guide
 
-> **🍺 Homebrew is the recommended way to install VocaMac.** See the [README](../README.md#-quick-start) for the full installation options.
+> **🍺 Homebrew is the recommended way to install VocaMac.** See [Installing VocaMac](INSTALL.md) for the other ways to install.
 
 ## Overview
 
