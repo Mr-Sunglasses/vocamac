@@ -69,9 +69,36 @@ final class CalmStylesTests: XCTestCase {
     func testCardSamplesDifferWithinEachGroup() {
         let state = makeState()
         for group in CalmStyleGroup.allCases {
-            let samples = group.cardStyles.map { state.writingStylePreview(group.sampleSpeech, style: $0) }
+            let samples = group.cardStyles.map { state.writingStylePreview(group.sampleSpeech(for: $0), style: $0) }
             XCTAssertEqual(Set(samples).count, 3, "\(group): \(samples)")
         }
+    }
+
+    func testCardSamplesNeverShowSpokenCommands() {
+        let state = makeState()
+        let commands = ["new line", "new paragraph", "bullet", "bold", "italic"]
+        for group in CalmStyleGroup.allCases {
+            for style in group.cardStyles {
+                let sample = state.writingStylePreview(group.sampleSpeech(for: style), style: style).lowercased()
+                XCTAssertFalse(sample.isEmpty, "\(group) \(style)")
+                for command in commands {
+                    XCTAssertFalse(sample.contains(command), "\(group) \(style): \(sample)")
+                }
+            }
+        }
+    }
+
+    func testCardSamplesShowWhatEachStyleDoes() {
+        let state = makeState()
+        func sample(_ group: CalmStyleGroup, _ style: WritingStyle) -> String {
+            state.writingStylePreview(group.sampleSpeech(for: style), style: style)
+                .trimmingCharacters(in: .whitespaces)
+        }
+        XCTAssertEqual(sample(.messages, .slack), "Hey, are you free Thursday?\n*I can bring the slides*")
+        XCTAssertEqual(sample(.email, .email), "Hi Sam,\nThanks for the notes. I'll send the draft on Friday.")
+        XCTAssertEqual(sample(.code, .code), "the fix is in main.swift. can you review it?")
+        XCTAssertEqual(sample(.code, .plain), "The fix is in main dot swift. Can you review it?")
+        XCTAssertEqual(sample(.everythingElse, .notes), "- Oat milk\n- Lemons\n- Basil")
     }
 
     func testCatalogPlacesKnownApps() {

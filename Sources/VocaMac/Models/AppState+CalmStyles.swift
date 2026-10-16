@@ -51,13 +51,34 @@ enum CalmStyleGroup: String, CaseIterable, Identifiable, Codable, Sendable {
         }
     }
 
-    /// What the cards pretend you said; each card shows it through its style.
-    var sampleSpeech: String {
-        switch self {
-        case .messages: return "are you free thursday new line bold bring the slides"
-        case .email: return "um thanks for the notes new line i will send the draft friday"
-        case .code: return "the fix is in main dot swift new line cd src slash app"
-        case .everythingElse: return "bullet oat milk new line bullet lemons and basil"
+    /// What a card pretends you said; the card shows it through its style.
+    ///
+    /// The words are the group's, but a card only gets spoken commands
+    /// (“new line”, “bold”, “bullet”) its style turns into formatting, so
+    /// none of them shows up as text: Plain types every word as spoken, and
+    /// a command in its sample would read as a mistake.
+    func sampleSpeech(for style: WritingStyle) -> String {
+        switch (self, style) {
+        case (.messages, .chat):
+            return "hey, are you free Thursday? new line I can bring the slides"
+        case (.messages, .slack):
+            return "hey, are you free Thursday? new line bold I can bring the slides"
+        case (.messages, _):
+            return "hey, are you free Thursday? I can bring the slides"
+        case (.email, .email), (.email, .chat):
+            return "um, hi Sam, new line thanks for the notes. I'll send the draft on Friday"
+        case (.email, _):
+            return "um, hi Sam, thanks for the notes. I'll send the draft on Friday"
+        case (.code, .terminal):
+            return "cd sources slash app"
+        case (.code, _):
+            return "the fix is in main dot swift. can you review it?"
+        case (.everythingElse, .notes):
+            return "bullet oat milk new line bullet lemons new line bullet basil"
+        case (.everythingElse, .email):
+            return "um, buy oat milk, lemons and basil"
+        case (.everythingElse, _):
+            return "buy oat milk, lemons and basil"
         }
     }
 

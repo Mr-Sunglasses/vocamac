@@ -237,18 +237,7 @@ struct CalmAboutSettings: View {
     }
 
     private var speechModelLabel: String {
-        let model = appState.loadedModelDisplayName ?? "Not loaded"
-        guard let engine = activeEngine else { return model }
-        return "\(engine) · \(model)"
-    }
-
-    private var activeEngine: String? {
-        if let engine = appState.currentModel?.size.engine { return engine.displayName }
-        if let name = appState.whisperService.loadedModelName,
-           let size = appState.modelManager.modelSize(from: name) {
-            return size.engine.displayName
-        }
-        return nil
+        appState.calmLoadedSpeechModelName ?? "Not loaded"
     }
 
     /// Named only when cleanup is on and its model is on disk.
@@ -256,8 +245,7 @@ struct CalmAboutSettings: View {
         guard appState.transcriptCleanupEnabled else { return nil }
         let kind = appState.selectedCleanupModelKind
         guard appState.transcriptCleanup.isDownloaded(kind) else { return nil }
-        let descriptor = kind.descriptor
-        return "\(descriptor.displayName) · \(descriptor.sizeDescription)"
+        return "\(CalmModelText.name(kind)) · \(kind.descriptor.sizeDescription)"
     }
 }
 

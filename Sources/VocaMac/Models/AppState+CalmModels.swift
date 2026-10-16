@@ -134,15 +134,21 @@ enum CalmModelText {
         }
     }
 
+    /// Accuracy as the step the word names: 0 basic, 1 fair, 2 accurate,
+    /// 3 very accurate, 4 most accurate.
+    static func accuracyTier(_ size: ModelSize) -> Int {
+        switch size.accuracyScore {
+        case 1...: return 4
+        case 0.85...: return 3
+        case 0.7...: return 2
+        case 0.55...: return 1
+        default: return 0
+        }
+    }
+
     /// Accuracy in a word, from the catalog's accuracy score.
     static func accuracy(_ size: ModelSize) -> String {
-        switch size.accuracyScore {
-        case 1...: return "most accurate"
-        case 0.85...: return "very accurate"
-        case 0.7...: return "accurate"
-        case 0.55...: return "fair"
-        default: return "basic"
-        }
+        ["basic", "fair", "accurate", "very accurate", "most accurate"][accuracyTier(size)]
     }
 
     /// The row's one meta line: “25 European languages · Fastest · very accurate”.
@@ -284,10 +290,15 @@ struct CalmModelPick<Model: Hashable>: Hashable {
 /// How the three picks are chosen (Model chooser parts board):
 ///
 /// - Speech: Recommended = the fastest model that understands every
-///   language the user speaks · Lightest = the smallest that does · Most
-///   accurate = the most accurate that does. “Does” uses the onboarding
-///   recommendation's rules: supported on this Mac, on this Mac (not a
-///   server), and fits the memory share (or, when none fits, the lightest).
+///   language the user speaks, the more accurate first · Lightest = the
+///   smallest that does · Most accurate = the most accurate that does.
+///   “Does” uses the onboarding recommendation's rules: supported on this
+///   Mac, on this Mac (not a server), and fits the memory share (or, when
+///   none fits, the lightest). Recommended and Lightest skip “basic”
+///   models (Whisper Tiny) unless nothing better understands the languages.
+///   Models that tie prefer the one in use, then one already downloaded,
+///   then the smaller download, so English and German get Parakeet v3
+///   rather than the larger Parakeet Ultra.
 /// - Writing AI: Recommended = the model suggested for this Mac's memory
 ///   (Ministral 3 3B from 16 GB) · Lightest = Qwen 2.5 0.5B · Best quality =
 ///   Qwen 3 4B Instruct.
@@ -319,12 +330,37 @@ enum CalmModelPicks {
         let eligible = eligibleSpeechModels(
             languages: languages, models: models, systemLanguages: systemLanguages, memoryGB: memoryGB
         )
+        let decent = eligible.filter { CalmModelText.accuracyTier($0) >= fairTier }
+        let everyday = decent.isEmpty ? eligible : decent
+        let ties = SpeechTieBreak(models: models)
         let rankings: [(CalmPickSlot, [ModelSize])] = [
-            (.recommended, eligible.sorted(by: fastestFirst)),
-            (.lightest, eligible.sorted(by: lightestFirst)),
-            (.mostAccurate, eligible.sorted(by: mostAccurateFirst)),
+            (.recommended, everyday.sorted { fastestFirst($0, $1, ties) }),
+            (.lightest, everyday.sorted { lightestFirst($0, $1, ties) }),
+            (.mostAccurate, eligible.sorted { mostAccurateFirst($0, $1, ties) }),
         ]
         return fill(rankings)
+    }
+
+    /// The lowest accuracy step the everyday cards offer: “fair”.
+    private static let fairTier = 1
+
+    /// What settles a tie between equally good models: the one in use, then
+    /// one already on this Mac, then the smaller download.
+    private struct SpeechTieBreak {
+        let inUse: Set<ModelSize>
+        let downloaded: Set<ModelSize>
+
+        init(models: [WhisperModelInfo]) {
+            inUse = Set(models.filter { $0.isActive || $0.isLoading }.map(\.size))
+            downloaded = Set(models.filter(\.isDownloaded).map(\.size))
+        }
+
+        func prefers(_ lhs: ModelSize, _ rhs: ModelSize) -> Bool {
+            if inUse.contains(lhs) != inUse.contains(rhs) { return inUse.contains(lhs) }
+            if downloaded.contains(lhs) != downloaded.contains(rhs) { return downloaded.contains(lhs) }
+            if lhs.fileSizeBytes != rhs.fileSizeBytes { return lhs.fileSizeBytes < rhs.fileSizeBytes }
+            return lhs.rawValue < rhs.rawValue
+        }
     }
 
     /// The three Writing AI cards, in order.
@@ -351,26 +387,26 @@ enum CalmModelPicks {
         return picks
     }
 
-    private static func fastestFirst(_ lhs: ModelSize, _ rhs: ModelSize) -> Bool {
+    /// Fastest first; among equally fast, the higher accuracy step (the
+    /// word the card shows, so Ultra's slightly higher score doesn't beat v3).
+    private static func fastestFirst(_ lhs: ModelSize, _ rhs: ModelSize, _ ties: SpeechTieBreak) -> Bool {
         if lhs.relativeSpeed != rhs.relativeSpeed { return lhs.relativeSpeed < rhs.relativeSpeed }
-        if lhs.accuracyScore != rhs.accuracyScore { return lhs.accuracyScore > rhs.accuracyScore }
-        if lhs.fileSizeBytes != rhs.fileSizeBytes { return lhs.fileSizeBytes < rhs.fileSizeBytes }
-        return lhs.rawValue < rhs.rawValue
+        let lhsTier = CalmModelText.accuracyTier(lhs), rhsTier = CalmModelText.accuracyTier(rhs)
+        if lhsTier != rhsTier { return lhsTier > rhsTier }
+        return ties.prefers(lhs, rhs)
     }
 
-    private static func lightestFirst(_ lhs: ModelSize, _ rhs: ModelSize) -> Bool {
+    private static func lightestFirst(_ lhs: ModelSize, _ rhs: ModelSize, _ ties: SpeechTieBreak) -> Bool {
         // macOS owns Apple Speech's memory; its footprint isn't VocaMac's to promise.
         if lhs.isSystemManaged != rhs.isSystemManaged { return !lhs.isSystemManaged }
         if lhs.ramRequiredGB != rhs.ramRequiredGB { return lhs.ramRequiredGB < rhs.ramRequiredGB }
-        if lhs.fileSizeBytes != rhs.fileSizeBytes { return lhs.fileSizeBytes < rhs.fileSizeBytes }
-        return lhs.rawValue < rhs.rawValue
+        return ties.prefers(lhs, rhs)
     }
 
-    private static func mostAccurateFirst(_ lhs: ModelSize, _ rhs: ModelSize) -> Bool {
+    private static func mostAccurateFirst(_ lhs: ModelSize, _ rhs: ModelSize, _ ties: SpeechTieBreak) -> Bool {
         if lhs.accuracyScore != rhs.accuracyScore { return lhs.accuracyScore > rhs.accuracyScore }
         if lhs.relativeSpeed != rhs.relativeSpeed { return lhs.relativeSpeed < rhs.relativeSpeed }
-        if lhs.fileSizeBytes != rhs.fileSizeBytes { return lhs.fileSizeBytes < rhs.fileSizeBytes }
-        return lhs.rawValue < rhs.rawValue
+        return ties.prefers(lhs, rhs)
     }
 
     // MARK: Card copy
@@ -538,6 +574,20 @@ extension AppState {
     /// The three Writing AI cards for this Mac.
     var calmWritingPicks: [CalmModelPick<CleanupModelKind>] {
         CalmModelPicks.writing(memoryGB: calmMemoryGB)
+    }
+
+    /// The speech model the engine has loaded, whichever way it reports it.
+    var calmLoadedSpeechModel: ModelSize? {
+        if let model = currentModel { return model.size }
+        guard let name = whisperService.loadedModelName else { return nil }
+        return ModelSize(rawValue: name) ?? modelManager.modelSize(from: name)
+    }
+
+    /// The loaded speech model's name as the window writes it everywhere
+    /// (“Whisper Tiny”, “Parakeet v3”), falling back to the engine's own
+    /// identifier when the catalog doesn't know it.
+    var calmLoadedSpeechModelName: String? {
+        calmLoadedSpeechModel.map(CalmModelText.name) ?? whisperService.loadedModelName
     }
 
     /// The speech model dictation uses, or is switching to while it loads.

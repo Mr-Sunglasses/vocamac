@@ -12,7 +12,6 @@ import SwiftUI
 struct CalmModelsSettings: View {
     @EnvironmentObject private var appState: AppState
     @Environment(CalmNavigator.self) private var navigator
-    @Environment(\.settingsSearchTarget) private var searchTarget
 
     var body: some View {
         @Bindable var navigator = navigator
@@ -25,12 +24,6 @@ struct CalmModelsSettings: View {
             case .speech: CalmSpeechModelsTab()
             case .writing: CalmWritingModelsTab()
             }
-        }
-        // The server row lives in All models, so a search for it goes there.
-        .onChange(of: searchTarget, initial: true) { _, target in
-            guard target == "custom-endpoint" else { return }
-            navigator.modelsTab = .speech
-            navigator.select(.allModels)
         }
         // “Choose a model that translates” lands on All models, searched.
         .onChange(of: appState.requestedSpeechModelSearch, initial: true) { _, search in

@@ -170,7 +170,7 @@ struct CalmStylesPage: View {
             ForEach(group.cardStyles) { style in
                 CalmStyleCard(
                     style: style,
-                    sample: appState.writingStylePreview(group.sampleSpeech, style: style),
+                    sample: appState.writingStylePreview(group.sampleSpeech(for: style), style: style),
                     isSelected: style == selected
                 ) {
                     pick(style)

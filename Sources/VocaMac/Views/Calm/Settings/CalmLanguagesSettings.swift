@@ -108,7 +108,7 @@ struct CalmLanguagesSettings: View {
                     text: CalmSettingsSummary.recognitionDetail(selected: appState.selectedLanguage, spoken: spokenLanguages)
                 )
                 if let model = appState.currentModel?.size, model.bindsLanguageAtLoadTime {
-                    CalmRowDescription(text: "\(CalmSettingsSummary.modelName(model)) reloads when this changes.")
+                    CalmRowDescription(text: "\(CalmModelText.name(model)) reloads when this changes.")
                 }
             }
         } trailing: {
@@ -133,8 +133,8 @@ struct CalmLanguagesSettings: View {
             return "Type English whatever language you speak. Whisper models only."
         }
         return appState.translationEnabled
-            ? "\(CalmSettingsSummary.modelName(activeModel)) wasn’t trained to translate, so speech is typed as spoken."
-            : "\(CalmSettingsSummary.modelName(activeModel)) can’t translate. Most Whisper models can."
+            ? "\(CalmModelText.name(activeModel)) wasn’t trained to translate, so speech is typed as spoken."
+            : "\(CalmModelText.name(activeModel)) can’t translate. Most Whisper models can."
     }
 
     private var translateRow: some View {

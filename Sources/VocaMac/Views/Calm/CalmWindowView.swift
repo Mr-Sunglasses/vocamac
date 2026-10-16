@@ -280,8 +280,22 @@ private struct CalmNavItemBody: View {
 
 /// The app's one live status, in six states (Patterns board).
 enum CalmSidebarStatus: Equatable {
-    /// Ready to dictate. `paused` while auto-paused for an app.
-    case ready(verb: String, keys: [String], detail: String, paused: Bool)
+    /// A speech model downloading in the background while dictation keeps
+    /// using the current one (Model chooser behaviour 3).
+    struct Download: Equatable {
+        /// The model's name, when known.
+        var model: String?
+        var progress: Double
+
+        /// “Downloading Parakeet v3”.
+        var title: String { model.map { "Downloading \($0)" } ?? "Downloading a model" }
+        /// “42%”.
+        var percent: String { CalmSidebarStatus.percent(progress) }
+    }
+
+    /// Ready to dictate. `paused` while auto-paused for an app; `download`
+    /// while a newly picked model downloads.
+    case ready(verb: String, keys: [String], detail: String, paused: Bool, download: Download? = nil)
     /// Recording.
     case listening(keys: [String], isToggle: Bool, escapeCancels: Bool)
     /// Transcribing or cleaning up.
@@ -311,6 +325,11 @@ enum CalmSidebarStatus: Equatable {
         var errorActionTitle: String?
     }
 
+    /// A download's progress as the card writes it: “42%”.
+    static func percent(_ progress: Double) -> String {
+        "\(Int((min(max(progress, 0), 1) * 100).rounded(.down)))%"
+    }
+
     /// Picks the state to show. Activity (recording, processing, an error)
     /// wins over readiness.
     static func resolve(_ inputs: Inputs) -> CalmSidebarStatus {
@@ -337,9 +356,11 @@ enum CalmSidebarStatus: Equatable {
         case .needsAccessibility:
             return .needsAccess(message: "Accessibility is off, so VocaMac can’t type for you.")
         case .preparingModel:
+            let name = inputs.preparingModelName ?? inputs.modelName
+            let percent = inputs.downloadProgress.map { " · \(percent($0))" } ?? ""
             return .loadingModel(
                 title: inputs.isDownloading ? "Downloading model" : "Loading model",
-                detail: inputs.preparingModelName ?? inputs.modelName,
+                detail: name.map { inputs.isDownloading ? $0 + percent : $0 },
                 progress: inputs.downloadProgress
             )
         case .needsModel:
@@ -352,9 +373,12 @@ enum CalmSidebarStatus: Equatable {
             if inputs.isAutoPaused {
                 return .ready(verb: "Paused", keys: [], detail: "Auto-paused while an app you chose is open.", paused: true)
             }
+            let download = inputs.isDownloading
+                ? inputs.downloadProgress.map { Download(model: inputs.preparingModelName, progress: $0) }
+                : nil
             return .ready(
                 verb: inputs.isToggleActivation ? "Double-tap" : "Hold",
-                keys: inputs.keys, detail: model ?? "On this Mac", paused: false
+                keys: inputs.keys, detail: model ?? "On this Mac", paused: false, download: download
             )
         }
     }
@@ -373,11 +397,11 @@ struct CalmSidebarStatusCard: View {
             isAutoPaused: appState.isAutoPaused,
             isToggleActivation: appState.activationMode == .doubleTapToggle,
             keys: CalmKeyCaps.labels(for: HotKeyCombo(keyCode: appState.hotKeyCode, modifiers: appState.hotKeyModifiers)),
-            modelName: appState.loadedModelDisplayName ?? ModelSize(rawValue: appState.selectedModelSize)?.displayName,
+            modelName: appState.calmLoadedSpeechModelName ?? ModelSize(rawValue: appState.selectedModelSize).map(CalmModelText.name),
             isRemote: appState.speechProcessingIsRemote,
             escapeCancels: appState.escapeCancelsDictation,
             processingText: appState.processingStatusText,
-            preparingModelName: preparing?.size.displayName,
+            preparingModelName: preparing.map { CalmModelText.name($0.size) },
             isDownloading: preparing?.downloadProgress != nil,
             downloadProgress: preparing?.downloadProgress,
             errorMessage: appState.errorNotice?.message ?? appState.errorMessage,
@@ -431,7 +455,7 @@ struct CalmStatusCardContent: View {
     private var header: some View {
         HStack(spacing: 9) {
             switch status {
-            case .ready(let verb, _, _, let paused):
+            case .ready(let verb, _, _, let paused, _):
                 CalmStatusDot(tone: paused ? .warning : .success)
                 Text(paused ? verb : "Ready")
             case .listening:
@@ -459,9 +483,14 @@ struct CalmStatusCardContent: View {
     private var detail: some View {
         VStack(alignment: .leading, spacing: 2) {
             switch status {
-            case .ready(let verb, let keys, let detail, let paused):
+            case .ready(let verb, let keys, let detail, let paused, let download):
                 if !paused { keyedLine(verb, keys: keys, rest: "and speak.") }
                 statusText(detail)
+                if let download {
+                    CalmProgressBar(value: download.progress, title: download.title, detail: download.percent)
+                        .padding(.top, 8)
+                        .accessibilityElement(children: .combine)
+                }
             case .listening(let keys, let isToggle, let escapeCancels):
                 if isToggle {
                     keyedLine("Press", keys: keys, rest: "again to type it.")
@@ -574,7 +603,7 @@ struct CalmSettingsSheet: View {
         .frame(width: CalmMetrics.sheetSize.width, height: CalmMetrics.sheetSize.height)
         .clipShape(shape)
         .overlay(shape.strokeBorder(CalmColor.line2, lineWidth: 1))
-        .shadow(color: .black.opacity(0.28), radius: 40, y: 30)
+        .background(shape.fill(CalmColor.content).shadow(color: .black.opacity(0.28), radius: 40, y: 30))
         .onExitCommand { if !isDialogPresented { navigator.closeSettings() } }
         .accessibilityElement(children: .contain)
         .accessibilityAddTraits(.isModal)
@@ -770,9 +799,8 @@ private struct CalmSearchHintBanner: View {
             .padding(.leading, 14)
             .padding(.trailing, 6)
             .padding(.vertical, 6)
-            .background(Capsule().fill(CalmColor.content))
+            .background(Capsule().fill(CalmColor.content).shadow(color: .black.opacity(0.12), radius: 10, y: 4))
             .overlay(Capsule().strokeBorder(CalmColor.line2, lineWidth: 1))
-            .shadow(color: .black.opacity(0.12), radius: 10, y: 4)
             .padding(.bottom, 18)
             .transition(.opacity)
         }

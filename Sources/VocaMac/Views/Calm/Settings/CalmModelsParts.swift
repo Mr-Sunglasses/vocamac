@@ -106,8 +106,9 @@ struct CalmPickCard: View {
         case .downloadsWhenPicked(let size):
             ViewThatFits(in: .horizontal) {
                 footerLine { Text("\(size) ·").fixedSize(); downloadsWhenPicked }
+                // Stacked, the size needs no separator after it.
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("\(size) ·").fixedSize()
+                    Text(size).fixedSize()
                     downloadsWhenPicked
                 }
                 .font(CalmFont.note)

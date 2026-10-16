@@ -36,7 +36,32 @@ final class CalmModelPicksTests: XCTestCase {
         XCTAssertEqual(recommended.relativeSpeed, eligible.map(\.relativeSpeed).min())
         // Parakeet's English-only models are as fast but miss German.
         XCTAssertFalse([ModelSize.parakeetV2, .parakeetUnified, .parakeetTdtCtc110m].contains(recommended))
-        XCTAssertEqual(recommended.engine, .parakeet)
+        // Ultra is as fast and as “very accurate”, but the bigger download.
+        XCTAssertEqual(recommended, .parakeetV3)
+    }
+
+    func testTiedModelsPreferTheOneInUseThenOneAlreadyDownloaded() {
+        let inUse = CalmModelPicks.speech(
+            languages: ["en", "de"], models: catalog(downloaded: [.parakeetUltra], active: .parakeetUltra),
+            systemLanguages: nil, memoryGB: 16
+        )
+        XCTAssertEqual(inUse.first?.model, .parakeetUltra)
+        let downloaded = CalmModelPicks.speech(
+            languages: ["en", "de"], models: catalog(downloaded: [.parakeetUltra, .tiny], active: .tiny),
+            systemLanguages: nil, memoryGB: 16
+        )
+        XCTAssertEqual(downloaded.first?.model, .parakeetUltra)
+    }
+
+    func testEverydayCardsSkipBasicModels() {
+        // Whisper Tiny is in use and the lightest English model, but only “basic”.
+        let picks = CalmModelPicks.speech(
+            languages: ["en"], models: catalog(downloaded: [.tiny], active: .tiny), systemLanguages: nil, memoryGB: 16
+        )
+        XCTAssertFalse(picks.contains { $0.model == .tiny })
+        for pick in picks {
+            XCTAssertGreaterThanOrEqual(CalmModelText.accuracyTier(pick.model), 1, "\(pick.slot): \(pick.model)")
+        }
     }
 
     func testLightestIsTheSmallestInMemoryAndMostAccurateTheBest() {
@@ -46,7 +71,8 @@ final class CalmModelPicksTests: XCTestCase {
         )
         let lightest = picks.first { $0.slot == .lightest }?.model
         let accurate = picks.first { $0.slot == .mostAccurate }?.model
-        let localEligible = eligible.filter { !$0.isSystemManaged }
+        // The lightest model that is at least “fair”.
+        let localEligible = eligible.filter { !$0.isSystemManaged && CalmModelText.accuracyTier($0) >= 1 }
         XCTAssertEqual(lightest?.ramRequiredGB, localEligible.map(\.ramRequiredGB).min())
         XCTAssertEqual(accurate?.accuracyScore, eligible.map(\.accuracyScore).max())
     }
@@ -78,6 +104,7 @@ final class CalmModelPicksTests: XCTestCase {
         }
     }
 
+    /// Tiny still shows when nothing better understands the languages.
     func testOnlyOneEligibleModelGivesOneCard() {
         let models = catalog().filter { $0.size == .tiny || $0.size == .customEndpoint }
         let picks = CalmModelPicks.speech(languages: ["en"], models: models, systemLanguages: nil, memoryGB: 16)

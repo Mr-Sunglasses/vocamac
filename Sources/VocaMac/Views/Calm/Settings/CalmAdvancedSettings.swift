@@ -159,7 +159,7 @@ struct CalmAdvancedSettings: View {
         let isLoaded = appState.whisperService.isModelLoaded
         return CalmPanel {
             CalmRow(
-                isLoaded ? (appState.loadedModelDisplayName ?? "Speech model") : "Speech model",
+                isLoaded ? (appState.calmLoadedSpeechModelName ?? "Speech model") : "Speech model",
                 description: CalmAdvancedSummary.modelStatus(
                     isLoaded: isLoaded, unloadMessage: appState.modelUnloadStatusMessage,
                     freedMB: appState.approximateMemoryFreedMB

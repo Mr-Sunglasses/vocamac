@@ -57,15 +57,6 @@ enum CalmSettingsSummary {
         }
     }
 
-    /// A model's short name, as the design writes it: “Parakeet v3”,
-    /// “Whisper Small”, without the catalog's parenthetical.
-    static func modelName(_ size: ModelSize) -> String {
-        var name = size.displayName
-        if let paren = name.range(of: " (") { name = String(name[..<paren.lowerBound]) }
-        if size.engine == .whisperKit, size != .vocaHinglish, !name.hasPrefix("Whisper") { name = "Whisper " + name }
-        return name
-    }
-
     /// The fit notice's main line on the Languages page.
     static func fitTitle(_ fit: CalmLanguageFit) -> String {
         guard let model = fit.modelName else { return "Choose a speech model for your languages." }
@@ -80,7 +71,7 @@ enum CalmSettingsSummary {
         guard let suggestion = fit.suggestion else {
             return "No model on this Mac understands all of your languages yet."
         }
-        return "\(modelName(suggestion)) understands all of your languages."
+        return "\(CalmModelText.name(suggestion)) understands all of your languages."
     }
 
     /// The name of a “Listen for” choice.
@@ -219,7 +210,7 @@ extension AppState {
         }
         let missing = ModelPickerCatalog.fit(of: model, for: spoken, systemLanguages: appleSpeechLanguages).missing
         let suggestion = missing.isEmpty ? nil : speechModelRecommendation.map(\.model).flatMap { $0 == model ? nil : $0 }
-        return CalmLanguageFit(modelName: CalmSettingsSummary.modelName(model), spoken: spoken, missing: missing, suggestion: suggestion)
+        return CalmLanguageFit(modelName: CalmModelText.name(model), spoken: spoken, missing: missing, suggestion: suggestion)
     }
 
     /// The Languages row in General.

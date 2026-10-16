@@ -222,14 +222,20 @@ enum CalmNavigation {
         "settings-backup": .settings(.privacy),
         // Model memory status → Advanced.
         "model-status": .settings(.advanced),
-        // The AI model library and where cleanup runs → Models › Writing AI.
+        // The AI model library, where cleanup runs and what Command Mode
+        // uses (“Command Mode uses”) → Models › Writing AI.
         "cleanup-provider": .settings(.models),
         "command-mode-models": .settings(.models),
+        "command-mode-model": .settings(.models),
         "command-mode-share": .settings(.models),
+        // Your own server is a row in All models.
+        "custom-endpoint": .settings(.allModels),
     ]
 
     /// Entries that open Models on its Writing AI tab.
-    static let writingAIEntryIDs: Set<String> = ["cleanup-provider", "command-mode-models", "command-mode-share"]
+    static let writingAIEntryIDs: Set<String> = [
+        "cleanup-provider", "command-mode-models", "command-mode-model", "command-mode-share",
+    ]
 
     /// Where a search entry's control now lives.
     static func destination(for entry: SettingsSearchEntry) -> CalmDestination {
@@ -370,7 +376,14 @@ final class CalmNavigator {
             modelsTab = .speech
         }
         settingsSearchText = ""
-        navigate(to: CalmNavigation.destination(for: entry), target: entry.id)
+        let destination = CalmNavigation.destination(for: entry)
+        // A result on a sub-page goes back to that page's parent, not to
+        // whatever page the search was typed over.
+        if case .settings(let page) = destination, page.isSubPage, let parent = page.parent,
+           isSettingsPresented, settingsDestination != parent {
+            select(parent)
+        }
+        navigate(to: destination, target: entry.id)
         searchHint = entry.navigationHint
     }
 

@@ -90,6 +90,18 @@ final class CalmNavigatorTests: XCTestCase {
         XCTAssertEqual(navigator.modelsTab, .speech)
     }
 
+    func testSubPageResultGoesBackToItsParent() throws {
+        let navigator = CalmNavigator()
+        navigator.openSettings(.privacy)
+        navigator.modelsTab = .writing
+        let entry = try XCTUnwrap(SettingsSearchIndex.entries.first { $0.id == "custom-endpoint" })
+        navigator.open(entry)
+        XCTAssertEqual(navigator.settingsDestination, .allModels)
+        XCTAssertEqual(navigator.modelsTab, .speech)
+        XCTAssertEqual(navigator.backDestination, .models)
+        XCTAssertEqual(navigator.searchTarget, "custom-endpoint")
+    }
+
     func testMainPageResultClosesTheSheet() throws {
         let navigator = CalmNavigator()
         navigator.openSettings()
@@ -223,7 +235,31 @@ final class CalmSidebarStatusTests: XCTestCase {
         downloading.preparingModelName = "Whisper Small"
         XCTAssertEqual(
             CalmSidebarStatus.resolve(downloading),
-            .loadingModel(title: "Downloading model", detail: "Whisper Small", progress: 0.4)
+            .loadingModel(title: "Downloading model", detail: "Whisper Small · 40%", progress: 0.4)
+        )
+    }
+
+    func testBackgroundDownloadShowsOnTheReadyCard() {
+        // A newly picked model downloads while the current one keeps working.
+        var downloading = inputs()
+        downloading.isDownloading = true
+        downloading.downloadProgress = 0.426
+        downloading.preparingModelName = "Whisper Large v3 Latest"
+        XCTAssertEqual(
+            CalmSidebarStatus.resolve(downloading),
+            .ready(
+                verb: "Hold", keys: ["Right ⌥"], detail: "Parakeet v3 · on this Mac", paused: false,
+                download: .init(model: "Whisper Large v3 Latest", progress: 0.426)
+            )
+        )
+        XCTAssertEqual(CalmSidebarStatus.Download(model: "Parakeet v3", progress: 0.426).title, "Downloading Parakeet v3")
+        XCTAssertEqual(CalmSidebarStatus.Download(model: nil, progress: 0.426).percent, "42%")
+        // Loading a model that is already on disk isn't a download.
+        var loading = inputs()
+        loading.preparingModelName = "Whisper Small"
+        XCTAssertEqual(
+            CalmSidebarStatus.resolve(loading),
+            .ready(verb: "Hold", keys: ["Right ⌥"], detail: "Parakeet v3 · on this Mac", paused: false)
         )
     }
 
@@ -247,7 +283,7 @@ final class CalmSidebarStatusTests: XCTestCase {
     func testAutoPauseShowsPaused() {
         var paused = inputs()
         paused.isAutoPaused = true
-        guard case .ready(_, _, _, true) = CalmSidebarStatus.resolve(paused) else {
+        guard case .ready(_, _, _, true, _) = CalmSidebarStatus.resolve(paused) else {
             return XCTFail("auto-pause shows the paused ready card")
         }
     }

@@ -139,12 +139,12 @@ final class CalmSettingsSummaryTests: XCTestCase {
     }
 
     func testModelNames() {
-        XCTAssertEqual(CalmSettingsSummary.modelName(.parakeetV3), "Parakeet v3")
-        XCTAssertEqual(CalmSettingsSummary.modelName(.small), "Whisper Small")
-        XCTAssertEqual(CalmSettingsSummary.modelName(.tiny), "Whisper Tiny")
-        XCTAssertEqual(CalmSettingsSummary.modelName(.largeV3Turbo), "Whisper Large v3 Turbo")
-        XCTAssertEqual(CalmSettingsSummary.modelName(.vocaHinglish), "Voca Hinglish")
-        XCTAssertEqual(CalmSettingsSummary.modelName(.appleSpeech), "Apple Speech")
+        XCTAssertEqual(CalmModelText.name(.parakeetV3), "Parakeet v3")
+        XCTAssertEqual(CalmModelText.name(.small), "Whisper Small")
+        XCTAssertEqual(CalmModelText.name(.tiny), "Whisper Tiny")
+        XCTAssertEqual(CalmModelText.name(.largeV3Turbo), "Whisper Large v3 Turbo")
+        XCTAssertEqual(CalmModelText.name(.vocaHinglish), "Voca Hinglish")
+        XCTAssertEqual(CalmModelText.name(.appleSpeech), "Apple Speech")
     }
 
     func testAutoPauseNotice() {
