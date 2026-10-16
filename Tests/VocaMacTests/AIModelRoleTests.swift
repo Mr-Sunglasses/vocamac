@@ -182,10 +182,10 @@ final class AIModelRoleTests: XCTestCase {
         let (state, mocks) = AppState.makeTestState()
         state.currentModel = nil
         mocks.whisperService.loadedModelName = "openai_whisper-tiny"
-        XCTAssertEqual(state.loadedModelDisplayName, ModelSize.tiny.displayName)
+        XCTAssertEqual(state.loadedModelDisplayName, CalmModelText.name(.tiny))
 
         mocks.whisperService.loadedModelName = ModelSize.allCases.last?.rawValue
-        XCTAssertEqual(state.loadedModelDisplayName, ModelSize.allCases.last?.displayName)
+        XCTAssertEqual(state.loadedModelDisplayName, ModelSize.allCases.last.map(CalmModelText.name))
 
         mocks.whisperService.loadedModelName = nil
         XCTAssertNil(state.loadedModelDisplayName)

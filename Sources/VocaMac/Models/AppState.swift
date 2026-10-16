@@ -4858,10 +4858,10 @@ extension AppState {
     /// report an identifier ("openai_whisper-tiny"), which is for logs, not
     /// for people.
     var loadedModelDisplayName: String? {
-        if let model = currentModel { return model.size.displayName }
+        if let model = currentModel { return CalmModelText.name(model.size) }
         guard let name = whisperService.loadedModelName else { return nil }
         let size = ModelSize(rawValue: name) ?? modelManager.modelSize(from: name)
-        return size?.displayName ?? name
+        return size.map(CalmModelText.name) ?? name
     }
 
     /// Open Speech Model showing only models that translate.

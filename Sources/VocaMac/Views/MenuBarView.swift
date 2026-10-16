@@ -246,14 +246,14 @@ struct MenuBarView: View {
     private var modelLabel: some View {
         Group {
             if let model = appState.currentModel {
-                Text(model.size.isRemotelyHosted ? "\(model.size.displayName) · Remote" : model.size.displayName)
+                Text(model.size.isRemotelyHosted ? "\(CalmModelText.name(model.size)) · Remote" : CalmModelText.name(model.size))
             } else if appState.whisperService.isModelLoaded {
                 Text(appState.loadedModelDisplayName ?? "Model loaded")
             } else if let downloading = appState.availableModels.first(where: { $0.downloadProgress != nil }),
                       let progress = downloading.downloadProgress {
                 Text("Downloading \(Int(progress * 100))%")
             } else if let loading = appState.availableModels.first(where: { $0.isLoading }) {
-                Text("Loading \(loading.size.displayName)…")
+                Text("Loading \(CalmModelText.name(loading.size))…")
             } else if appState.isAutoPaused || appState.lastModelUnloadReason == .idleKeepAlive {
                 Text("Model unloaded")
             } else {
@@ -274,7 +274,7 @@ struct MenuBarView: View {
                let progress = downloading.downloadProgress {
                 CalmProgressBar(
                     value: progress,
-                    title: "Downloading \(downloading.size.displayName)",
+                    title: "Downloading \(CalmModelText.name(downloading.size))",
                     detail: "\(Int(progress * 100))%"
                 )
             }
