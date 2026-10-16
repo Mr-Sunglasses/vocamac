@@ -890,7 +890,7 @@ final class AppState: ObservableObject {
 
     /// Whether the current recording was started with the hands-free
     /// shortcut, so silence ends it the way it ends a double-tap recording.
-    private var isHandsFreeSession = false
+    private(set) var isHandsFreeSession = false
 
     /// True from the end of a recording until its text is delivered. Escape
     /// cancels during this window as well as while recording.
@@ -2288,6 +2288,7 @@ final class AppState: ObservableObject {
                 if showCursorIndicator && overlayStyle != .off {
                     cursorOverlay.recordingLimit = maxRecordingDuration > 0 ? TimeInterval(maxRecordingDuration) : nil
                     cursorOverlay.show(style: overlayStyle, position: overlayPosition)
+                    cursorOverlay.setStopHint(overlayStopHint)
                     cursorOverlay.setLoadingSpeechModel(true)
                 }
             }
@@ -2365,6 +2366,7 @@ final class AppState: ObservableObject {
         if showCursorIndicator && overlayStyle != .off {
             cursorOverlay.recordingLimit = maxRecordingDuration > 0 ? TimeInterval(maxRecordingDuration) : nil
             cursorOverlay.show(style: overlayStyle, position: overlayPosition)
+            cursorOverlay.setStopHint(overlayStopHint)
             cursorOverlay.setCommandSession(commandModeSession)
         }
 

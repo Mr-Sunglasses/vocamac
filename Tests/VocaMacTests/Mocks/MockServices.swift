@@ -375,6 +375,11 @@ final class MockCursorOverlay: CursorOverlayManaging {
         liveWordsAvailable = available
     }
 
+    var stopHint: OverlayStopHint?
+    func setStopHint(_ hint: OverlayStopHint?) {
+        stopHint = hint
+    }
+
     func show(style: OverlayStyle, position: OverlayPosition) {
         showCallCount += 1
         commandSession = nil

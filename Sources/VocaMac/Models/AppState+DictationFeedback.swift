@@ -113,6 +113,20 @@ extension AppState {
         )
     }
 
+    /// How the dictation being started ends, for the overlay's hint and its
+    /// Hands-free label. The hands-free shortcut (and the menu) keep
+    /// recording until pressed again, whatever the activation mode.
+    var overlayStopHint: OverlayStopHint {
+        if isHandsFreeSession {
+            return .handsFree(shortcut: shortcut(for: .handsFreeToggle).map { CalmKeyCaps.compactText(for: $0) })
+        }
+        let key = CalmKeyCaps.compactText(for: HotKeyCombo(keyCode: hotKeyCode, modifiers: hotKeyModifiers))
+        switch activationMode {
+        case .pushToTalk: return .hold(key: key)
+        case .doubleTapToggle: return .doubleTap(key: key)
+        }
+    }
+
     // MARK: - Menu Bar
 
     /// What VoiceOver reads for the menu bar icon.

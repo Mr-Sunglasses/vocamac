@@ -29,17 +29,20 @@ enum BrandAssets {
     static let brandColor = VocaPalette.teal
 }
 
-/// Which artwork the menu bar should show for a given app status.
+/// Which state the menu bar icon shows for a given app status. The case
+/// names predate the v3 icon; `MenuBarGlyphState` maps each to the five-bar
+/// mark the Overlay board draws.
 enum MenuBarIconStyle: Equatable {
-    /// SF Symbol drawn as a template so macOS follows the menu bar appearance.
+    /// Ready: the mark as a template, following the menu bar.
     case systemSymbolTemplate(name: String)
-    /// The Voca mic mark tinted with the brand color while recording (mic hot).
+    /// Listening: the mark in the accent colour (mic hot).
     case brandMarkTinted
-    /// SF Symbol for processing, error and Command Mode.
+    /// Working (`ellipsis.circle`), Command Mode (`wand.and.stars`) and
+    /// error (`exclamationmark.triangle`, drawn as Needs attention).
     case systemSymbol(name: String)
-    /// The idle mic, dimmed, while dictation can't start yet. A badge marks
-    /// something the user has to fix (a permission or a speech model); none
-    /// means a model is still on its way. Template, so it follows the menu bar.
+    /// Dictation can't start yet. A badge marks something the user has to
+    /// fix (a permission or a speech model), drawn as Needs attention; none
+    /// means a model is still on its way, drawn as Off.
     case notReadyTemplate(badged: Bool)
 
     static func style(
