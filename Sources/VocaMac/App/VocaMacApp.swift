@@ -18,7 +18,8 @@ final class VocaApplicationDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-/// Manages the settings window for menu-bar-only apps
+/// Manages VocaMac's main window (sidebar pages and the Settings sheet)
+/// for a menu-bar-only app.
 @MainActor
 final class SettingsWindowManager: ObservableObject {
     /// Shared instance. The deep-link observer in `VocaMacApp.init` reads
@@ -32,8 +33,10 @@ final class SettingsWindowManager: ObservableObject {
     private var settingsWindow: NSWindow?
     private var closeObserver: NSObjectProtocol?
 
-    /// Sidebar page to apply when Settings appears. Survives first-open timing.
-    /// Settings also honors `AppState.requestedSettingsPage`.
+    /// Page to show when the window appears, in the `SettingsPage`
+    /// vocabulary (mapped to a sidebar page or a Settings sheet page by
+    /// `CalmNavigation`). Survives first-open timing. The window also honors
+    /// `AppState.requestedSettingsPage`.
     @Published private(set) var requestedPage: SettingsPage?
 
     /// Pair-phone sheet to present when Gateway settings appears.
@@ -54,33 +57,35 @@ final class SettingsWindowManager: ObservableObject {
             return
         }
 
-        // Create the settings view
-        let settingsView = SettingsView()
+        // The v3 window: sidebar pages, with Settings as a sheet inside it.
+        let windowView = CalmWindowView()
             .environmentObject(appState)
             .environmentObject(self)
+        let defaultSize = SettingsWindowGeometry.defaultContentSize
 
         // Create a new window
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 860, height: 620),
+            contentRect: NSRect(origin: .zero, size: defaultSize),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
         )
-        window.title = "VocaMac Settings"
-        // Content runs up under a transparent title bar, so the page's scene
-        // and the sidebar's paper reach the top edge as in onboarding.
+        window.title = "VocaMac"
+        // Content runs up under a transparent title bar, so the frame-coloured
+        // sidebar reaches the top edge with the traffic lights sitting in it.
         window.styleMask.insert(.fullSizeContentView)
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
-        window.backgroundColor = VocaDesign.canvasNSColor
-        let hostingController = NSHostingController(rootView: settingsView)
+        window.backgroundColor = CalmNSColor.frame
+        let hostingController = NSHostingController(rootView: windowView)
         hostingController.sizingOptions = []
         window.contentViewController = hostingController
-        window.contentMinSize = NSSize(width: 760, height: 580)
+        // The Settings sheet (1000 × 680) must fit inside the smallest window.
+        window.contentMinSize = SettingsWindowGeometry.minimumContentSize
         // With automatic hosting sizing disabled, attaching the controller
         // can collapse the initial window to its 1-point intrinsic width.
         // Establish the default again before applying a saved frame.
-        window.setContentSize(NSSize(width: 860, height: 620))
+        window.setContentSize(defaultSize)
         window.autorecalculatesKeyViewLoop = true
         if !window.setFrameUsingName("VocaMac.Settings") { window.center() }
         restoreUsableFrame(window)
@@ -147,7 +152,7 @@ final class SettingsWindowManager: ObservableObject {
     private func restoreUsableFrame(_ window: NSWindow) {
         let screens = NSScreen.screens.map(\.visibleFrame)
         if SettingsWindowGeometry.needsReset(window.frame, screens: screens) {
-            window.setContentSize(NSSize(width: 860, height: 620))
+            window.setContentSize(SettingsWindowGeometry.defaultContentSize)
             window.center()
         }
     }
