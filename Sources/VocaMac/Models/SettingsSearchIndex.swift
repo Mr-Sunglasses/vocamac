@@ -18,9 +18,9 @@ struct SettingsSearchEntry: Hashable, Identifiable {
     var navigationHint: String? {
         switch id {
         case "app-cleanup-prompt", "spoken-symbols":
-            return "Choose an app under Your Apps, open its edit options, then expand Advanced."
+            return "Click an app under Used in, choose Customize…, then open Advanced."
         case "writing-style-rule-transfer":
-            return "Use the … menu under Your Apps to import or export your app list."
+            return "Use the ⋯ menu at the top of Styles to import or export your app list."
         case "gateway-docker":
             return "Docker fallback is available when the native gateway isn't installed."
         default: return nil

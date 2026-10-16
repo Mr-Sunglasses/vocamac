@@ -1,0 +1,486 @@
+// AppState+CalmStyles.swift
+// VocaMac
+//
+// The Styles page groups apps into four tabs (Messages, Email, Code,
+// Everything else) and lets one card pick the style for a whole group.
+// Writing styles themselves stay per app (`writingStyleBindings`) and per
+// website (`websiteStyleBindings`); this file only decides which group a
+// rule shows under, which style a group's card shows as chosen, and how
+// picking a card or adding an app changes the real rules.
+
+import AppKit
+import Foundation
+
+// MARK: - Groups
+
+/// One tab of the Styles page: a kind of app with three style cards.
+enum CalmStyleGroup: String, CaseIterable, Identifiable, Codable, Sendable {
+    case messages
+    case email
+    case code
+    case everythingElse
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .messages: return "Messages"
+        case .email: return "Email"
+        case .code: return "Code"
+        case .everythingElse: return "Everything else"
+        }
+    }
+
+    /// The three styles the group's cards offer, in card order.
+    var cardStyles: [WritingStyle] {
+        switch self {
+        case .messages: return [.plain, .chat, .slack]
+        case .email: return [.plain, .email, .chat]
+        case .code: return [.code, .terminal, .plain]
+        case .everythingElse: return [.plain, .notes, .email]
+        }
+    }
+
+    /// The style a group with no apps and no choice yet shows as picked.
+    var defaultStyle: WritingStyle {
+        switch self {
+        case .messages: return .chat
+        case .email: return .email
+        case .code: return .code
+        case .everythingElse: return .plain
+        }
+    }
+
+    /// What the cards pretend you said; each card shows it through its style.
+    var sampleSpeech: String {
+        switch self {
+        case .messages: return "are you free thursday new line bold bring the slides"
+        case .email: return "um thanks for the notes new line i will send the draft friday"
+        case .code: return "the fix is in main dot swift new line cd src slash app"
+        case .everythingElse: return "bullet oat milk new line bullet lemons and basil"
+        }
+    }
+
+    /// The group a style belongs to when nothing else says where an app goes.
+    static func family(of style: WritingStyle) -> CalmStyleGroup {
+        switch style {
+        case .chat, .slack: return .messages
+        case .email: return .email
+        case .code, .terminal: return .code
+        case .plain, .notes: return .everythingElse
+        }
+    }
+
+    /// The group VocaMac's own app catalog puts an app in, if it knows the app.
+    static func catalogGroup(bundleIdentifier: String?, processName: String?, id: String) -> CalmStyleGroup? {
+        let snapshot = RunningAppSnapshot(displayName: id, bundleIdentifier: bundleIdentifier, processName: processName)
+        func contains(_ list: [WritingStyleCatalog.Suggestion]) -> Bool {
+            list.contains { suggestion in
+                AppIdentityMatching.matches(
+                    configuredBundleIdentifier: suggestion.bundleIdentifier,
+                    configuredProcessName: suggestion.processName,
+                    configuredID: suggestion.id,
+                    snapshot: snapshot
+                )
+            }
+        }
+        if contains(WritingStyleCatalog.editors) || contains(WritingStyleCatalog.terminals) { return .code }
+        if contains(WritingStyleCatalog.chat) { return .messages }
+        if contains(WritingStyleCatalog.mail) { return .email }
+        if contains(WritingStyleCatalog.notes) { return .everythingElse }
+        return nil
+    }
+
+    /// Catalog apps that belong in this group.
+    var catalogSuggestions: [WritingStyleCatalog.Suggestion] {
+        switch self {
+        case .messages: return WritingStyleCatalog.chat
+        case .email: return WritingStyleCatalog.mail
+        case .code: return WritingStyleCatalog.editors + WritingStyleCatalog.terminals
+        case .everythingElse: return WritingStyleCatalog.notes
+        }
+    }
+}
+
+// MARK: - Card copy
+
+extension WritingStyle {
+    /// The short line under a style card's name.
+    var calmTagline: String {
+        switch self {
+        case .plain: return "Your words, with punctuation"
+        case .chat: return "Capital letters, no forced full stop"
+        case .slack: return "Chat, plus Slack bold and bullets"
+        case .email: return "Full sentences with a full stop"
+        case .code: return "Spoken file names become code"
+        case .terminal: return "Exact words, nothing added"
+        case .notes: return "Say “bullet” to start a list item"
+        }
+    }
+
+    /// Terminal output reads best in a monospaced face.
+    var calmSampleIsMonospaced: Bool { self == .terminal }
+}
+
+// MARK: - Stored group choices
+
+/// Which group each rule was put in and which style each group's card was
+/// set to. Only the Styles page reads it: dictation uses the rules alone.
+///
+/// Keys are `app:<binding id>` and `site:<website id>`. Values are stored as
+/// raw strings so one unknown value (a newer build) is skipped rather than
+/// failing the whole decode.
+struct CalmStyleGroupStore: Codable, Equatable {
+    static let defaultsKey = "vocamac.calmStyleGroups"
+
+    var assignments: [String: String] = [:]
+    var styles: [String: String] = [:]
+
+    static func appKey(_ id: String) -> String { "app:\(id)" }
+    static func websiteKey(_ id: UUID) -> String { "site:\(id.uuidString)" }
+
+    func group(forKey key: String) -> CalmStyleGroup? {
+        assignments[key].flatMap(CalmStyleGroup.init(rawValue:))
+    }
+
+    mutating func assign(_ group: CalmStyleGroup, toKey key: String) {
+        assignments[key] = group.rawValue
+    }
+
+    func style(for group: CalmStyleGroup) -> WritingStyle? {
+        styles[group.rawValue].flatMap(WritingStyle.init(rawValue:))
+    }
+
+    mutating func setStyle(_ style: WritingStyle, for group: CalmStyleGroup) {
+        styles[group.rawValue] = style.rawValue
+    }
+
+    /// Decode a stored payload; anything unreadable is an empty store.
+    static func decode(_ json: String?) -> CalmStyleGroupStore {
+        guard let data = json?.data(using: .utf8),
+              let store = try? JSONDecoder().decode(CalmStyleGroupStore.self, from: data) else {
+            return CalmStyleGroupStore()
+        }
+        return store
+    }
+
+    func encodedJSON() -> String {
+        guard let data = try? JSONEncoder().encode(self), let json = String(data: data, encoding: .utf8) else {
+            return "{}"
+        }
+        return json
+    }
+}
+
+// MARK: - Websites
+
+/// Turning what someone typed into a website rule's host.
+enum CalmWebsiteHost {
+    /// "https://GitHub.com/foo/" → "github.com". Keeps a leading `*.`.
+    static func normalized(_ text: String) -> String {
+        var value = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if value.contains("://"), let url = URL(string: value), let host = url.host {
+            value = host
+        } else if let slash = value.firstIndex(of: "/") {
+            value = String(value[..<slash])
+        }
+        return value.trimmingCharacters(in: CharacterSet(charactersIn: "/."))
+    }
+
+    /// Whether the text reads as a website address rather than an app name.
+    static func looksLikeWebsite(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.contains(" ") else { return false }
+        let host = normalized(trimmed)
+        let labels = host.split(separator: ".", omittingEmptySubsequences: false)
+        guard labels.count >= 2, let tld = labels.last, tld.count >= 2,
+              tld.allSatisfy(\.isLetter) else { return false }
+        let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyz0123456789-*")
+        return labels.allSatisfy { label in
+            !label.isEmpty && label.unicodeScalars.allSatisfy(allowed.contains)
+        }
+    }
+}
+
+// MARK: - App candidates
+
+/// Apps the “Add app or website” dialog can offer.
+enum CalmAppCandidates {
+    /// Folders searched for installed apps, one level deep.
+    static var searchFolders: [URL] {
+        let fileManager = FileManager.default
+        var folders = [
+            URL(fileURLWithPath: "/Applications"),
+            URL(fileURLWithPath: "/Applications/Utilities"),
+            URL(fileURLWithPath: "/System/Applications"),
+            URL(fileURLWithPath: "/System/Applications/Utilities"),
+        ]
+        if let home = fileManager.urls(for: .applicationDirectory, in: .userDomainMask).first {
+            folders.append(home)
+        }
+        return folders
+    }
+
+    /// A snapshot for an app bundle on disk.
+    static func snapshot(forAppAt url: URL) -> RunningAppSnapshot {
+        let bundle = Bundle(url: url)
+        let info = bundle?.infoDictionary
+        let fallback = url.deletingPathExtension().lastPathComponent
+        let name = (info?["CFBundleDisplayName"] as? String) ?? (info?["CFBundleName"] as? String) ?? fallback
+        return RunningAppSnapshot(
+            displayName: name.isEmpty ? fallback : name,
+            bundleIdentifier: bundle?.bundleIdentifier,
+            processName: (info?["CFBundleExecutable"] as? String) ?? fallback
+        )
+    }
+
+    /// Installed apps, read from disk. Slow (one bundle read per app), so
+    /// call it off the main actor.
+    static func installedApps(in folders: [URL] = searchFolders) -> [RunningAppSnapshot] {
+        let fileManager = FileManager.default
+        var result: [RunningAppSnapshot] = []
+        for folder in folders {
+            guard let urls = try? fileManager.contentsOfDirectory(
+                at: folder, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]
+            ) else { continue }
+            for url in urls where url.pathExtension == "app" {
+                result.append(snapshot(forAppAt: url))
+            }
+        }
+        return result
+    }
+
+    /// Merge app lists, dropping repeats of the same app, sorted by name.
+    static func merged(_ lists: [[RunningAppSnapshot]], excludingBundleIdentifier ownID: String? = Bundle.main.bundleIdentifier) -> [RunningAppSnapshot] {
+        var seen = Set<String>()
+        var result: [RunningAppSnapshot] = []
+        for snapshot in lists.joined() {
+            if let ownID, snapshot.bundleIdentifier == ownID { continue }
+            let key = snapshot.bundleIdentifier?.lowercased() ?? "name:\(snapshot.displayName.lowercased())"
+            guard seen.insert(key).inserted else { continue }
+            result.append(snapshot)
+        }
+        return result.sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
+    }
+
+    /// Apps whose name contains `query` (all of them for an empty query).
+    static func filter(_ apps: [RunningAppSnapshot], query: String) -> [RunningAppSnapshot] {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return apps }
+        let matches = apps.filter { $0.displayName.localizedCaseInsensitiveContains(trimmed) }
+        // Names that start with the query first ("n" → Notion before Signal).
+        return matches.sorted { lhs, rhs in
+            let left = lhs.displayName.lowercased().hasPrefix(trimmed.lowercased())
+            let right = rhs.displayName.lowercased().hasPrefix(trimmed.lowercased())
+            if left != right { return left }
+            return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
+        }
+    }
+}
+
+// MARK: - AppState
+
+extension AppState {
+    /// The Styles page's stored group choices.
+    var calmStyleGroupStore: CalmStyleGroupStore {
+        get { CalmStyleGroupStore.decode(UserDefaults.standard.string(forKey: CalmStyleGroupStore.defaultsKey)) }
+        set {
+            UserDefaults.standard.set(newValue.encodedJSON(), forKey: CalmStyleGroupStore.defaultsKey)
+            objectWillChange.send()
+        }
+    }
+
+    /// The tab an app rule shows under: where it was put, else where the
+    /// catalog says it belongs, else the group of its style.
+    func calmStyleGroup(of binding: AppStyleBinding, store: CalmStyleGroupStore? = nil) -> CalmStyleGroup {
+        let store = store ?? calmStyleGroupStore
+        if let group = store.group(forKey: CalmStyleGroupStore.appKey(binding.id)) { return group }
+        if let group = CalmStyleGroup.catalogGroup(
+            bundleIdentifier: binding.bundleIdentifier, processName: binding.processName, id: binding.id
+        ) {
+            return group
+        }
+        return CalmStyleGroup.family(of: binding.style)
+    }
+
+    /// The tab a website rule shows under: where it was put, else the group of its style.
+    func calmStyleGroup(of website: WebsiteStyleBinding, store: CalmStyleGroupStore? = nil) -> CalmStyleGroup {
+        let store = store ?? calmStyleGroupStore
+        return store.group(forKey: CalmStyleGroupStore.websiteKey(website.id)) ?? CalmStyleGroup.family(of: website.style)
+    }
+
+    /// App rules in a group, in list order.
+    func calmApps(in group: CalmStyleGroup) -> [AppStyleBinding] {
+        let store = calmStyleGroupStore
+        return writingStyleBindings.filter { calmStyleGroup(of: $0, store: store) == group }
+    }
+
+    /// Website rules in a group, in list order.
+    func calmWebsites(in group: CalmStyleGroup) -> [WebsiteStyleBinding] {
+        let store = calmStyleGroupStore
+        return websiteStyleBindings.filter { calmStyleGroup(of: $0, store: store) == group }
+    }
+
+    /// The style a group's card shows as chosen. Everything else is the
+    /// default style. Other groups use the style last picked on their card;
+    /// before that, the style most of their apps use; with no apps, the
+    /// group's own default.
+    func calmStyle(for group: CalmStyleGroup) -> WritingStyle {
+        if group == .everythingElse { return writingStyleDefault }
+        if let picked = calmStyleGroupStore.style(for: group) { return picked }
+        let apps = calmApps(in: group)
+        let websites = calmWebsites(in: group)
+        let enabled = apps.filter(\.isEnabled).map(\.style) + websites.filter(\.isEnabled).map(\.style)
+        let all = apps.map(\.style) + websites.map(\.style)
+        return Self.mostCommonStyle(enabled.isEmpty ? all : enabled, preferring: group.cardStyles) ?? group.defaultStyle
+    }
+
+    /// The style used most often; ties go to the earlier style in `order`,
+    /// then to `WritingStyle.allCases` order.
+    static func mostCommonStyle(_ styles: [WritingStyle], preferring order: [WritingStyle]) -> WritingStyle? {
+        guard !styles.isEmpty else { return nil }
+        var counts: [WritingStyle: Int] = [:]
+        for style in styles { counts[style, default: 0] += 1 }
+        let ranking = order + WritingStyle.allCases.filter { !order.contains($0) }
+        return ranking.max { lhs, rhs in
+            let left = counts[lhs, default: 0]
+            let right = counts[rhs, default: 0]
+            if left != right { return left < right }
+            // Equal counts: the style earlier in the ranking counts as larger.
+            return (ranking.firstIndex(of: lhs) ?? 0) > (ranking.firstIndex(of: rhs) ?? 0)
+        }
+    }
+
+    /// Apps in `group` whose customized formatting picking `style` would reset.
+    func calmCustomizedApps(in group: CalmStyleGroup, switchingTo style: WritingStyle) -> [AppStyleBinding] {
+        calmApps(in: group).filter { $0.style != style && $0.hasCustomRules }
+    }
+
+    /// Pick a group's card: the group, and every app and website in it, uses
+    /// `style`. Each app's formatting goes back to the style's own; tone and
+    /// AI cleanup choices are kept. Everything else also sets the default style.
+    func calmApplyStyle(_ style: WritingStyle, to group: CalmStyleGroup) {
+        var store = calmStyleGroupStore
+        let apps = calmApps(in: group)
+        let websites = calmWebsites(in: group)
+        if group == .everythingElse {
+            writingStyleDefault = style
+        } else {
+            store.setStyle(style, for: group)
+        }
+        // Pin members to this group so a new style can't move them to another tab.
+        for app in apps { store.assign(group, toKey: CalmStyleGroupStore.appKey(app.id)) }
+        for site in websites { store.assign(group, toKey: CalmStyleGroupStore.websiteKey(site.id)) }
+        calmStyleGroupStore = store
+
+        let appIDs = Set(apps.map(\.id))
+        if apps.contains(where: { $0.style != style }) {
+            writingStyleBindings = writingStyleBindings.map { binding in
+                guard appIDs.contains(binding.id) else { return binding }
+                var updated = binding
+                if updated.style != style {
+                    updated.style = style
+                    updated.ruleOverrides = nil
+                }
+                return updated
+            }
+        }
+        let siteIDs = Set(websites.map(\.id))
+        if websites.contains(where: { $0.style != style }) {
+            websiteStyleBindings = websiteStyleBindings.map { site in
+                guard siteIDs.contains(site.id) else { return site }
+                var updated = site
+                updated.style = style
+                return updated
+            }
+        }
+        VocaLogger.info(.appState, "Styles: \(group.rawValue) now uses \(style.rawValue)")
+    }
+
+    /// Change one app's style. Its formatting goes back to the new style's own.
+    func calmSetStyle(_ style: WritingStyle, forApp id: String) {
+        calmUpdateApp(id) { binding in
+            guard binding.style != style else { return }
+            binding.style = style
+            binding.ruleOverrides = nil
+        }
+    }
+
+    /// Edit one app rule in place.
+    func calmUpdateApp(_ id: String, _ mutate: (inout AppStyleBinding) -> Void) {
+        var bindings = writingStyleBindings
+        guard let index = bindings.firstIndex(where: { $0.id == id }) else { return }
+        mutate(&bindings[index])
+        writingStyleBindings = bindings
+    }
+
+    /// Edit one website rule in place.
+    func calmUpdateWebsite(_ id: UUID, _ mutate: (inout WebsiteStyleBinding) -> Void) {
+        var rules = websiteStyleBindings
+        guard let index = rules.firstIndex(where: { $0.id == id }) else { return }
+        mutate(&rules[index])
+        websiteStyleBindings = rules
+    }
+
+    /// Add an app to a group with the group's style, replacing any rule the
+    /// app already had (wherever it was). Known apps keep their suggested tone.
+    @discardableResult
+    func calmAddApp(_ snapshot: RunningAppSnapshot, to group: CalmStyleGroup) -> AppStyleBinding {
+        let style = calmStyle(for: group)
+        var bindings = writingStyleBindings
+        bindings.removeAll { $0.matches(snapshot) }
+        var binding: AppStyleBinding
+        if let suggestion = WritingStyleCatalog.suggestion(matching: snapshot) {
+            binding = suggestion.binding
+            binding.displayName = snapshot.displayName.isEmpty ? suggestion.displayName : snapshot.displayName
+            if binding.style != style {
+                binding.style = style
+                binding.ruleOverrides = nil
+            }
+        } else {
+            binding = AppStyleBinding.from(snapshot: snapshot, style: style)
+        }
+        bindings.append(binding)
+        writingStyleBindings = bindings
+
+        var store = calmStyleGroupStore
+        store.assign(group, toKey: CalmStyleGroupStore.appKey(binding.id))
+        calmStyleGroupStore = store
+        return binding
+    }
+
+    /// Add a website to a group with the group's style. Returns nil when the
+    /// text is not a usable address. A rule for the same host is replaced.
+    @discardableResult
+    func calmAddWebsite(_ text: String, to group: CalmStyleGroup) -> WebsiteStyleBinding? {
+        let host = CalmWebsiteHost.normalized(text)
+        guard !host.isEmpty else { return nil }
+        let rule = WebsiteStyleBinding(hostPattern: host, displayName: host, style: calmStyle(for: group))
+        var rules = websiteStyleBindings
+        rules.removeAll { WebsiteStyleBinding.sharesHost($0, rule) }
+        rules.append(rule)
+        websiteStyleBindings = rules
+
+        var store = calmStyleGroupStore
+        store.assign(group, toKey: CalmStyleGroupStore.websiteKey(rule.id))
+        calmStyleGroupStore = store
+        return rule
+    }
+
+    /// The group an app already has a rule in, if any.
+    func calmExistingGroup(for snapshot: RunningAppSnapshot) -> CalmStyleGroup? {
+        let store = calmStyleGroupStore
+        return writingStyleBindings.first { $0.matches(snapshot) }.map { calmStyleGroup(of: $0, store: store) }
+    }
+
+    /// Catalog apps for `group` that are installed or running and not yet set up.
+    func calmSuggestedApps(for group: CalmStyleGroup, installed: [RunningAppSnapshot]) -> [RunningAppSnapshot] {
+        let bundleIDs = Set(installed.compactMap { $0.bundleIdentifier?.lowercased() })
+        return group.catalogSuggestions.compactMap { suggestion in
+            guard let bundleID = suggestion.bundleIdentifier, bundleIDs.contains(bundleID.lowercased()) else { return nil }
+            let snapshot = installed.first { $0.bundleIdentifier?.lowercased() == bundleID.lowercased() }
+                ?? RunningAppSnapshot(displayName: suggestion.displayName, bundleIdentifier: bundleID, processName: suggestion.processName)
+            return calmExistingGroup(for: snapshot) == nil ? snapshot : nil
+        }
+    }
+}
