@@ -403,7 +403,7 @@ private struct CalmFeedRow: View {
                 Label("Delete", systemImage: "trash")
             }
         } label: {
-            CalmIcon(.more, size: 18, weight: 2.4)
+            CalmIconMenuLabel("More actions", icon: .more, size: 18, weight: 2.4)
         }
         .menuStyle(.button)
         .menuIndicator(.hidden)

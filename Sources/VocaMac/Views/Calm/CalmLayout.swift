@@ -123,19 +123,21 @@ struct CalmPageHeader<Trailing: View>: View {
             if let back {
                 CalmBackLink(title: back.title, action: back.action)
             }
-            HStack(alignment: .center, spacing: 14) {
-                VStack(alignment: .leading, spacing: 6) {
+            // The actions centre on the title line, not on title plus
+            // description (Styles' ⋯ sat halfway down the description).
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .center, spacing: 14) {
                     Text(title)
                         .calmType(.title)
                         .accessibilityAddTraits(.isHeader)
-                    if let description {
-                        Text(description)
-                            .calmType(.pageDescription)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
+                    Spacer(minLength: 0)
+                    trailing
                 }
-                Spacer(minLength: 0)
-                trailing
+                if let description {
+                    Text(description)
+                        .calmType(.pageDescription)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
     }
@@ -712,7 +714,10 @@ struct CalmListRow<Content: View, Actions: View>: View {
             }
             .padding(.top, alignment == .top ? max(0, insets.top - 5) : 0)
             .padding(.trailing, max(0, insets.trailing - 6))
-            .opacity(showsActions ? 1 : 0)
+            // Not 0: SwiftUI drops fully transparent views from the
+            // accessibility tree, which left VoiceOver no way to copy a
+            // dictation or reach its menu. 0.001 is invisible.
+            .opacity(showsActions ? 1 : 0.001)
             .allowsHitTesting(showsActions)
             .onPreferenceChange(CalmFocusPresenceKey.self) { actionHasFocus = $0 }
     }
@@ -744,7 +749,10 @@ struct CalmTimeColumn: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(time).font(CalmFont.listTime)
-            if let app { Text(app).font(CalmFont.listApp).lineLimit(1) }
+            if let app {
+                // Two lines rather than “Brave Bro…”: the column is narrow.
+                Text(app).font(CalmFont.listApp).lineLimit(2).fixedSize(horizontal: false, vertical: true)
+            }
         }
         .foregroundStyle(CalmColor.muted)
         .padding(.top, 1)
@@ -887,6 +895,15 @@ struct CalmFeatureCard<Actions: View>: View {
 
     private var isCompact: Bool { width < CalmMetrics.heroCompactWidth }
 
+    /// Width the wave bars take at the right edge (7-point bars 7 apart,
+    /// 28 from the edge), less the card's own padding, plus a little air.
+    private var waveReserve: CGFloat {
+        let count = CGFloat(waveHeights.count)
+        let bars = count * 7 + max(count - 1, 0) * 7 + 28
+        let padding = isCompact ? CalmMetrics.heroCompactPadding.trailing : CalmMetrics.heroPadding.trailing
+        return max(bars - padding + 16, 0)
+    }
+
     /// The bars most pages use.
     static var defaultWave: [CGFloat] { [40, 86, 130, 64, 150, 96, 52] }
 
@@ -936,7 +953,10 @@ struct CalmFeatureCard<Actions: View>: View {
                     .frame(maxWidth: 560, alignment: .leading)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            // Kept clear of the wave bars: wrapping chips (Commands'
+            // examples, suggested words) ran underneath them.
             HStack(spacing: 8) { actions }
+                .padding(.trailing, waveReserve)
         }
         .padding(isCompact ? CalmMetrics.heroCompactPadding : CalmMetrics.heroPadding)
         .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)

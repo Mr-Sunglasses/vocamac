@@ -277,6 +277,37 @@ private struct CalmIconButtonBody: View {
     }
 }
 
+/// The label of an icon-only `Menu` (the ⋯ menus). `CalmIcon` is hidden
+/// from VoiceOver, and a `Menu` whose label is all hidden drops out of the
+/// accessibility tree, `.accessibilityLabel` or not. The title keeps it
+/// there and names it.
+///
+/// ```swift
+/// Menu { … } label: { CalmIconMenuLabel("Share and more", icon: .more, size: 18, weight: 2.4) }
+/// ```
+struct CalmIconMenuLabel: View {
+    let title: String
+    let icon: CalmIconName
+    var size: CGFloat = 16
+    var weight: CGFloat = 1.6
+
+    init(_ title: String, icon: CalmIconName, size: CGFloat = 16, weight: CGFloat = 1.6) {
+        self.title = title
+        self.icon = icon
+        self.size = size
+        self.weight = weight
+    }
+
+    var body: some View {
+        // A container that is itself an accessibility element: the hidden
+        // icon inside contributes nothing, the container carries the name.
+        ZStack { CalmIcon(icon, size: size, weight: weight) }
+            .contentShape(Rectangle())
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(title)
+    }
+}
+
 /// Text link: SF 13 / 550, ink, no underline, accent on hover. Add the
 /// 13-point chevron when it navigates.
 ///
@@ -847,9 +878,12 @@ struct CalmTextEditor: View {
                 .background(alignment: .topLeading) { sizer }
                 .overlay(alignment: .topLeading) {
                     if text.isEmpty {
+                        // The system placeholder colour, as single-line
+                        // fields draw theirs (macOS ignores a TextField
+                        // prompt's own colour), so both prompts match.
                         Text(prompt)
                             .font(CalmFont.field)
-                            .foregroundStyle(CalmColor.muted)
+                            .foregroundStyle(Color(nsColor: .placeholderTextColor))
                             .padding(.horizontal, 12)
                             .padding(.vertical, 10)
                             .allowsHitTesting(false)

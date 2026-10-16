@@ -407,7 +407,7 @@ struct CalmModelRow<Menu: View>: View {
         SwiftUI.Menu {
             menu()
         } label: {
-            CalmIcon(.more, size: 16, weight: 2.4)
+            CalmIconMenuLabel("More for \(name)", icon: .more, size: 16, weight: 2.4)
         }
         .menuStyle(.button)
         .menuIndicator(.hidden)

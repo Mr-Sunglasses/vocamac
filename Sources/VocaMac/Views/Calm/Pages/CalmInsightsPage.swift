@@ -165,7 +165,7 @@ struct CalmInsightsPage: View {
             Divider()
             Button("Reset All Statistics…", role: .destructive) { isConfirmingReset = true }
         } label: {
-            CalmIcon(.more, size: 18, weight: 2.4)
+            CalmIconMenuLabel("Share and more", icon: .more, size: 18, weight: 2.4)
         }
         .menuStyle(.button)
         .menuIndicator(.hidden)

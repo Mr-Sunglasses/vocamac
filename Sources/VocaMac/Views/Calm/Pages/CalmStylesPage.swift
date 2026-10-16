@@ -41,7 +41,9 @@ struct CalmStylesPage: View {
                     selection: Binding(get: { group }, set: { storedTab = $0.rawValue }),
                     tabs: CalmStyleGroup.allCases.map { CalmOption($0, $0.title) }
                 ) {
-                    otherStylesMenu
+                    // Text, not a 34-point control: lift it onto the tabs'
+                    // baseline (they sit 11 above the line, trailing 6).
+                    otherStylesMenu.padding(.bottom, 5)
                 }
                 cards
                     .settingsTarget("writing-styles", aliases: ["default-writing-style"])
@@ -123,7 +125,7 @@ struct CalmStylesPage: View {
             Button("Remove All Apps…", role: .destructive) { isConfirmingRemoveAll = true }
                 .disabled(appState.writingStyleBindings.isEmpty)
         } label: {
-            CalmIcon(.more, size: 18, weight: 2.4)
+            CalmIconMenuLabel("App list options", icon: .more, size: 18, weight: 2.4)
         }
         .menuStyle(.button)
         .menuIndicator(.hidden)
