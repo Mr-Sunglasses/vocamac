@@ -1,8 +1,8 @@
 // MenuBarView.swift
 // VocaMac
 //
-// The panel shown when clicking the menu bar icon: live status, the
-// choices for the next dictation, the last dictation, and quick actions.
+// The popover view shown when clicking the menu bar icon.
+// Displays current status, audio level, last transcription, and quick actions.
 
 import SwiftUI
 
@@ -114,13 +114,13 @@ final class ProcessMonitor: ObservableObject {
     }
 }
 
-/// The menu bar panel, in the v3 menu style: a live status line (dot, state,
-/// model), the notices and choices for the next dictation, then rows like a
-/// native menu (h30, r6, hover panel2, shortcut on the right).
 struct MenuBarView: View {
     /// Confirmation text after binding or clearing a style, if any.
     @State private var bindNotice: String?
     @State private var panelWindow = MenuPanelWindowReference()
+    /// Time of day for the header scene, read when the menu opens.
+    @State private var headerMood: SceneMood = .day
+    @Environment(\.colorScheme) private var colorScheme
 
     @EnvironmentObject var appState: AppState
     @ObservedObject var settingsManager: SettingsWindowManager
@@ -150,353 +150,133 @@ struct MenuBarView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 0) {
-                statusSection
-                MenuSeparator()
-                primaryRows
-                MenuSeparator()
+            VStack(spacing: 10) {
+                headerSection
+                statusSection.menuPanelCard()
             }
+            .padding([.horizontal, .top], MenuPanelMetrics.inset)
+            .padding(.bottom, 10)
             .fixedSize(horizontal: false, vertical: true)
             .measureHeight(MenuChromeHeightKey.self)
 
             ScrollView {
                 supplementaryContent
+                    .padding(.horizontal, MenuPanelMetrics.inset)
+                    .padding(.bottom, 10)
                     .measureHeight(MenuContentHeightKey.self)
             }
             .scrollIndicators(contentOverflows ? .automatic : .never)
             .frame(height: scrollHeight)
 
             VStack(spacing: 0) {
-                MenuSeparator()
                 actionsSection
+                    .padding(.horizontal, MenuPanelMetrics.inset - 6)
+                    .padding(.top, 10)
+                    .padding(.bottom, 8)
             }
             .fixedSize(horizontal: false, vertical: true)
             .measureHeight(MenuChromeHeightKey.self)
         }
-        .padding(MenuPanelMetrics.padding)
         .frame(width: MenuPanelMetrics.width)
-        .background(CalmColor.content)
+        .background {
+            ZStack {
+                VocaDesign.canvas
+                PaperGrainOverlay()
+            }
+        }
         .clipShape(RoundedRectangle(cornerRadius: MenuPanelMetrics.panelRadius, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: MenuPanelMetrics.panelRadius, style: .continuous)
-                .strokeBorder(CalmColor.line2, lineWidth: 1)
+                .strokeBorder(VocaDesign.line)
         )
-        .background(MenuPanelWindowSizer(
-            height: chromeHeight + scrollHeight + MenuPanelMetrics.padding * 2,
-            onWindow: { panelWindow.window = $0 }
-        ))
+        .background(MenuPanelWindowSizer(height: chromeHeight + scrollHeight, onWindow: { panelWindow.window = $0 }))
         .onPreferenceChange(MenuContentHeightKey.self) { contentHeight = $0 }
         .onPreferenceChange(MenuChromeHeightKey.self) { chromeHeight = $0 }
-        .tint(CalmColor.accent)
+        .tint(VocaDesign.accent)
         .onAppear {
             let screen = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main
-            availableHeight = min(720, (screen?.visibleFrame.height ?? 760) - 40) - MenuPanelMetrics.padding * 2
+            availableHeight = min(720, (screen?.visibleFrame.height ?? 760) - 40)
+            headerMood = SceneMood.menuHeader(for: colorScheme)
             bindNotice = nil
             appState.refreshActiveWritingStyle(readingWebsite: true)
             Task { await gateway.refreshStatus() }
         }
         // A "saved for Ghostty" notice is wrong once the user is in Discord.
         .onChange(of: appState.activeWritingTargetName) { _, _ in bindNotice = nil }
-    }
-
-    // MARK: - Status
-
-    /// The menu's first line is live status: dot, state, model. What the
-    /// state needs (a download, the live words, an error and its fix)
-    /// follows directly under it.
-    private var statusSection: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 8) {
-                MenuStatusDot(
-                    color: statusColor,
-                    isActive: appState.appStatus == .recording || appState.appStatus == .processing
-                )
-                Text(statusText)
-                    .font(CalmFont.statusTitle)
-                    .foregroundStyle(CalmColor.ink)
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
-                Spacer(minLength: 8)
-                modelLabel
-            }
-            .padding(EdgeInsets(top: 8, leading: 10, bottom: 6, trailing: 10))
-
-            if hasStatusDetails {
-                statusDetails
-                    .padding(.horizontal, 10)
-                    .padding(.top, 2)
-                    .padding(.bottom, 6)
-            }
+        // The header mood clamps night in light mode, so re-evaluate it when
+        // the system appearance flips while the popover is open.
+        .onChange(of: colorScheme) { _, scheme in
+            headerMood = SceneMood.menuHeader(for: scheme)
         }
     }
-
-    /// Whether anything shows under the status line, so an idle menu has
-    /// no empty gap there.
-    private var hasStatusDetails: Bool {
-        let downloading = appState.currentModel == nil && !appState.whisperService.isModelLoaded
-            && appState.availableModels.contains { $0.downloadProgress != nil }
-        let commandHint = appState.appStatus == .idle && appState.shortcut(for: .commandMode) != nil
-        let unload = appState.modelUnloadStatusMessage != nil && (appState.appStatus == .idle || appState.isAutoPaused)
-        let error = appState.errorNotice != nil && (appState.appStatus == .idle || appState.appStatus == .error)
-        return downloading || commandHint || unload || error
-            || appState.commandModeSession != nil || appState.appStatus == .recording
-    }
-
-    @ViewBuilder
-    private var modelLabel: some View {
-        Group {
-            if let model = appState.currentModel {
-                Text(model.size.isRemotelyHosted ? "\(CalmModelText.name(model.size)) · Remote" : CalmModelText.name(model.size))
-            } else if appState.whisperService.isModelLoaded {
-                Text(appState.loadedModelDisplayName ?? "Model loaded")
-            } else if let downloading = appState.availableModels.first(where: { $0.downloadProgress != nil }),
-                      let progress = downloading.downloadProgress {
-                Text("Downloading \(Int(progress * 100))%")
-            } else if let loading = appState.availableModels.first(where: { $0.isLoading }) {
-                Text("Loading \(CalmModelText.name(loading.size))…")
-            } else if appState.isAutoPaused || appState.lastModelUnloadReason == .idleKeepAlive {
-                Text("Model unloaded")
-            } else {
-                Text("No model loaded").foregroundStyle(CalmColor.amber)
-            }
-        }
-        .font(CalmFont.note)
-        .foregroundStyle(CalmColor.muted)
-        .lineLimit(1)
-        .truncationMode(.middle)
-    }
-
-    @ViewBuilder
-    private var statusDetails: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            if appState.currentModel == nil, !appState.whisperService.isModelLoaded,
-               let downloading = appState.availableModels.first(where: { $0.downloadProgress != nil }),
-               let progress = downloading.downloadProgress {
-                CalmProgressBar(
-                    value: progress,
-                    title: "Downloading \(CalmModelText.name(downloading.size))",
-                    detail: "\(Int(progress * 100))%"
-                )
-            }
-
-            if appState.appStatus == .idle, let combo = appState.shortcut(for: .commandMode) {
-                Text("Select text and press \(CalmKeyCaps.compactText(for: combo)) to edit it with your voice")
-                    .font(CalmFont.note)
-                    .foregroundStyle(CalmColor.muted)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            if let unloadMessage = appState.modelUnloadStatusMessage,
-               appState.appStatus == .idle || appState.isAutoPaused {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(unloadMessage)
-                        .foregroundStyle(CalmColor.ink2)
-                    if let freed = appState.approximateMemoryFreedMB {
-                        Text(String(format: "About %.0f MB of process memory was released.", freed))
-                            .foregroundStyle(CalmColor.muted)
-                    }
-                }
-                .font(CalmFont.note)
-                .fixedSize(horizontal: false, vertical: true)
-            }
-
-            if let session = appState.commandModeSession {
-                commandSessionCard(session)
-            }
-
-            if appState.appStatus == .recording {
-                CalmMicLevelMeter(meter: appState.audioMeter, barCount: 24)
-                ObservedLiveTranscriptView(state: appState.liveTranscriptState)
-                    .foregroundStyle(CalmColor.ink)
-            }
-
-            // The last error stays, with its fix, until dismissed.
-            if let notice = appState.errorNotice,
-               appState.appStatus == .idle || appState.appStatus == .error {
-                errorNoticeCard(notice)
-            }
-        }
-    }
-
-    private var statusText: String {
-        if let session = appState.commandModeSession {
-            switch (appState.appStatus, session.phase) {
-            case (.recording, _): return "Command Mode — listening"
-            case (_, .rewriting): return "Rewriting selection…"
-            default: return "Transcribing instruction…"
-            }
-        }
-        if appState.isAutoPaused {
-            return appState.autoPauseTriggerDisplayName.map { "Paused (\($0))" } ?? "Auto-paused"
-        }
-        switch appState.appStatus {
-        case .idle:       return appState.dictationReadinessTitle
-        case .recording:  return "Listening…"
-        case .processing: return appState.processingStatusText
-        case .error:
-            // The card below shows the whole message once.
-            return appState.errorNotice == nil ? appState.errorMessage ?? "Error" : "Something went wrong"
-        }
-    }
-
-    private var statusColor: Color {
-        if appState.commandModeSession != nil { return CalmColor.violet }
-        if appState.isAutoPaused { return CalmColor.off }
-        switch appState.appStatus {
-        case .idle:       return appState.isDictationReady ? CalmColor.accent : CalmColor.amber
-        case .recording:  return CalmColor.accent
-        case .processing: return CalmColor.ink2
-        case .error:      return CalmColor.amber
-        }
-    }
-
-    private func errorNoticeCard(_ notice: DictationErrorNotice) -> some View {
-        MenuNoticeCard(tone: .warning) {
-            Text(notice.message)
-                .font(CalmFont.note)
-                .foregroundStyle(CalmColor.ink)
-                .fixedSize(horizontal: false, vertical: true)
-                .textSelection(.enabled)
-            HStack(spacing: 8) {
-                if let action = notice.action {
-                    Button(action.title) {
-                        appState.performErrorFix(action) { page in
-                            settingsManager.open(appState: appState, page: page)
-                        }
-                    }
-                    .calmButton(.primary, size: .small)
-                }
-                Button("Dismiss") { appState.dismissErrorNotice() }
-                    .calmButton(.secondary, size: .small)
-            }
-        }
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Error")
-    }
-
-    /// Shown while Command Mode listens or rewrites: what is being edited,
-    /// where, and how to back out.
-    private func commandSessionCard(_ session: CommandModeSession) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
-                CalmIcon(.commands, size: 14)
-                    .foregroundStyle(CalmColor.violet)
-                Text(commandSessionTitle(session))
-                    .font(CalmFont.sf(13, weight: 560))
-                    .foregroundStyle(CalmColor.ink)
-            }
-            if session.phase == .rewriting, let instruction = session.instruction, !instruction.isEmpty {
-                Text("“\(instruction)”").lineLimit(2).foregroundStyle(CalmColor.ink2)
-            }
-            if session.phase == .rewriting, let written = session.previewTail {
-                Text(written).lineLimit(2).foregroundStyle(CalmColor.ink2)
-            }
-            if session.kind != .compose {
-                Text("\(session.kind == .answer ? "About" : "Editing") “\(session.selectionPreview)”")
-                    .lineLimit(2)
-                    .foregroundStyle(CalmColor.muted)
-            }
-            Text(commandSessionDetail(session))
-                .foregroundStyle(CalmColor.muted)
-        }
-        .font(CalmFont.note)
-        .padding(10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(CommandReviewView.violetSoft, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .accessibilityElement(children: .combine)
-    }
-
-    private func commandSessionTitle(_ session: CommandModeSession) -> String {
-        switch (session.kind, session.phase) {
-        case (.edit, .listening): return "Say how to change the selection"
-        case (.compose, .listening): return "Say what to write"
-        case (.answer, .listening): return "Ask about the selection"
-        case (.edit, .rewriting): return "Rewriting with \(session.engineName)"
-        case (.compose, .rewriting): return "Writing with \(session.engineName)"
-        case (.answer, .rewriting): return "Answering with \(session.engineName)"
-        }
-    }
-
-    private func commandSessionDetail(_ session: CommandModeSession) -> String {
-        guard session.kind != .compose else {
-            let place = session.appName.flatMap { $0.isEmpty ? nil : "Typed at the cursor in \($0)" } ?? "Typed at the cursor"
-            return "\(place) · Esc cancels"
-        }
-        var parts = ["\(session.characterCount) characters"]
-        if let app = session.appName, !app.isEmpty { parts[0] += " in \(app)" }
-        parts.append(session.kind == .answer ? "Esc cancels" : "Esc leaves it unchanged")
-        return parts.joined(separator: " · ")
-    }
-
-    // MARK: - Notices and choices
 
     private var supplementaryContent: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 10) {
             if let info = appState.updateChecker.activeUpdateInfo {
-                MenuNoticeCard(tone: .success) {
-                    Text("VocaMac \(info.tagName) is ready")
-                        .font(CalmFont.sf(13, weight: 600))
-                        .foregroundStyle(CalmColor.ink)
-                    Button("See what’s new") { updateWindowManager.open(appState: appState, info: info) }
-                        .calmButton(.primary, size: .small)
-                }
-                .accessibilityElement(children: .contain)
+                UpdateBannerView(info: info, updateWindowManager: updateWindowManager)
+                    .menuPanelCard()
             }
 
             // Setup problems come first: nothing else works until they are fixed.
             if needsSetup {
                 permissionsSection
+                    .menuPanelCard(padding: 0)
             }
 
             if let crash = appState.pendingCrashReport {
                 crashSection(crash)
+                    .menuPanelCard()
             }
 
             // A dictation that failed or was interrupted, with its audio saved
             if let entry = appState.recoverableHistoryEntry {
                 recoverySection(entry)
-            }
-
-            // A spelling the user fixed, offered for the dictionary
-            if let suggestion = appState.dictionarySuggestions.first {
-                suggestionSection(suggestion)
-            }
-
-            if let held = appState.heldOutput {
-                heldOutputSection(held)
+                    .menuPanelCard()
             }
 
             // Microphone and writing style for the next dictation
             recordingOptionsSection
+                .menuPanelCard(padding: 0)
+
+            // A spelling the user fixed, offered for the dictionary
+            if let suggestion = appState.dictionarySuggestions.first {
+                suggestionSection(suggestion)
+                    .menuPanelCard(padding: 10)
+            }
 
             // Last Command Mode edit, which replaces the dictation card until
             // the next dictation so its original stays one click away.
             if let edit = appState.lastCommandEdit {
-                MenuSeparator()
                 commandEditSection(edit)
+                    .menuPanelCard()
             } else if let transcription = appState.lastTranscription {
-                MenuSeparator()
                 transcriptionSection(transcription, output: appState.lastOutput)
+                    .menuPanelCard()
+            }
+
+            if let held = appState.heldOutput {
+                heldOutputSection(held)
+                    .menuPanelCard()
             }
         }
-        .padding(.top, 2)
     }
 
     private func heldOutputSection(_ held: String) -> some View {
-        MenuNoticeCard(tone: .neutral) {
+        VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text("Saved dictation")
-                    .font(CalmFont.sf(13, weight: 600))
-                    .foregroundStyle(CalmColor.ink)
+                Label("Saved dictation", systemImage: "tray.and.arrow.down")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
                 Spacer()
-                MenuIconButton(icon: .copy, help: "Copy saved dictation") { appState.copyHeldOutput() }
+                MenuPanelIconButton(systemImage: "doc.on.doc", help: "Copy saved dictation") {
+                    appState.copyHeldOutput()
+                }
             }
             Text("The destination changed before it could be typed.")
-                .font(CalmFont.note)
-                .foregroundStyle(CalmColor.muted)
+                .font(.caption)
+                .foregroundStyle(.secondary)
             Text(held)
-                .font(.system(size: 13))
-                .foregroundStyle(CalmColor.ink)
+                .font(.callout)
                 .lineLimit(4)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -505,28 +285,35 @@ struct MenuBarView: View {
 
     // MARK: - Recording Options
 
-    /// Microphone and writing style as value rows, like a menu's submenus.
+    /// Microphone and writing style as one grouped list, the way System
+    /// Settings lays out related choices.
     private var recordingOptionsSection: some View {
         VStack(alignment: .leading, spacing: 0) {
             microphoneRow
 
             if appState.writingStyleEnabled {
+                MenuPanelRowDivider()
                 writingStyleRow
                 // Only shown while a one-off override is waiting, so it can
                 // be seen and cancelled.
                 if appState.nextWritingProfile != nil {
+                    MenuPanelRowDivider()
                     nextDictationRow
                 }
             }
 
+            MenuPanelRowDivider()
             NextDictationSummary()
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 9)
 
             if let notice = recordingOptionsNotice {
+                MenuPanelRowDivider()
                 notice
-                    .padding(.horizontal, 10)
-                    .padding(.bottom, 6)
+                    .font(.caption)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .transition(.opacity)
             }
@@ -536,35 +323,42 @@ struct MenuBarView: View {
     /// The one line of follow-up the rows above need, if any.
     private var recordingOptionsNotice: AnyView? {
         if let fallbackNotice = appState.inputDeviceFallbackNotice {
-            return AnyView(CalmInlineNotice(fallbackNotice, tone: .warning))
+            return AnyView(Label(fallbackNotice, systemImage: "exclamationmark.triangle.fill").foregroundStyle(VocaDesign.warning))
         }
         if appState.isSecureInputActive, appState.hotKeyIsKeyed {
-            return AnyView(CalmInlineNotice(
-                "Secure keyboard entry is on in another app. Your shortcut still works through a fallback.",
-                tone: .info
-            ))
+            return AnyView(Label("Secure keyboard entry is on in another app. Your shortcut still works through a fallback.",
+                                 systemImage: "lock.fill").foregroundStyle(.secondary))
         }
         if appState.isRecording {
-            return AnyView(Text("Stop recording before changing the microphone.")
-                .font(CalmFont.note).foregroundStyle(CalmColor.muted))
+            return AnyView(Text("Stop recording before changing the microphone.").foregroundStyle(.secondary))
         }
         if let bindNotice {
-            return AnyView(CalmInlineNotice(bindNotice, tone: .success))
+            return AnyView(Label(bindNotice, systemImage: "checkmark.circle.fill").foregroundStyle(.secondary))
         }
         return nil
     }
 
+    // MARK: - Writing Style
+
     /// A pending one-off override, with a way to cancel it. Choosing one lives
     /// in the Style menu, so this row only exists while one is waiting.
     private var nextDictationRow: some View {
-        MenuValueRow(title: "Next dictation only") {
+        MenuPanelRow(
+            title: "Next dictation only",
+            systemImage: "forward.frame",
+            tint: .indigo
+        ) {
             HStack(spacing: 6) {
                 Text(appState.nextWritingProfile.map(nextProfileLabel) ?? "")
-                    .font(CalmFont.note)
-                    .foregroundStyle(CalmColor.muted)
-                MenuIconButton(icon: .close, help: "Cancel and use the app's usual style") {
+                    .foregroundStyle(.secondary)
+                Button {
                     appState.nextWritingProfile = nil
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
                 }
+                .buttonStyle(.borderless)
+                .help("Cancel and use the app's usual style")
             }
         }
     }
@@ -573,7 +367,11 @@ struct MenuBarView: View {
     /// remembers it for that app; the submenu applies one just once.
     private var writingStyleRow: some View {
         let appName = appState.activeWritingTargetName
-        return MenuValueRow(title: appName.map { "Style in \($0)" } ?? "Style") {
+        return MenuPanelRow(
+            title: appName.map { "Style in \($0)" } ?? "Style",
+            systemImage: appState.activeWritingStyle.style.systemImage,
+            tint: .orange
+        ) {
             Menu {
                 Section(appName.map { "Always use in \($0)" } ?? "Always use") {
                     ForEach(WritingStyle.allCases) { style in
@@ -617,12 +415,13 @@ struct MenuBarView: View {
                 Divider()
 
                 Button("Writing Style Settings…") {
-                    settingsManager.open(appState: appState, page: .writingStyles)
+                    appState.requestSettingsPage(.writingStyles)
+                    settingsManager.open(appState: appState)
                 }
             } label: {
                 Text(writingStyleLabel)
             }
-            .menuValueStyle()
+            .menuPanelValueMenu()
             .help("How text is formatted when you dictate into this app")
         }
     }
@@ -649,13 +448,257 @@ struct MenuBarView: View {
         return "\(profile.format.displayName) · \(profile.intent.displayName)"
     }
 
+    // MARK: - Header
+
+    /// The name and model over a strip of scenery painted at the hour it is
+    /// now. It holds still and keeps no timer: the time of day is read each
+    /// time the menu opens, which is the only time anyone sees it.
+    private var headerSection: some View {
+        headerRow
+            .padding(.horizontal, 14)
+            .padding(.top, 26)
+            .padding(.bottom, 14)
+            .frame(maxWidth: .infinity, minHeight: 84, alignment: .bottomLeading)
+            .background {
+                VocaScene(mood: headerMood, animated: false, scrim: false, framing: .horizon)
+                    // Darker toward the text only, so the sky stays bright.
+                    .overlay(LinearGradient(
+                        colors: [.black.opacity(0.05), .black.opacity(0.45)],
+                        startPoint: .top, endPoint: .bottom
+                    ))
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            // Secondary text and the warning tint switch to their light
+            // forms over the painted, darker strip.
+            .environment(\.colorScheme, .dark)
+    }
+
+    private var headerRow: some View {
+        HStack(spacing: 10) {
+            BrandLogoView(size: 32)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text("VocaMac")
+                    .font(VocaDesign.display(20))
+
+                if let model = appState.currentModel {
+                    Text(model.size.isRemotelyHosted
+                         ? "\(model.size.displayName) · Remote"
+                         : model.size.displayName)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                } else if appState.whisperService.isModelLoaded {
+                    Text("Model: \(appState.loadedModelDisplayName ?? "Loaded")")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                } else if let downloadingModel = appState.availableModels.first(where: { $0.downloadProgress != nil }),
+                          let progress = downloadingModel.downloadProgress {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Downloading \(downloadingModel.size.displayName)… \(Int(progress * 100))%")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                        ProgressView(value: progress)
+                            .progressViewStyle(.linear)
+                    }
+                } else if let loadingModel = appState.availableModels.first(where: { $0.isLoading }) {
+                    Text("Loading \(loadingModel.size.displayName)…")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                } else if appState.isAutoPaused {
+                    Text("Model unloaded")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                } else if appState.lastModelUnloadReason == .idleKeepAlive {
+                    Text("Model unloaded")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("No model loaded")
+                        .font(.subheadline)
+                        .foregroundStyle(VocaDesign.warning)
+                }
+            }
+
+            Spacer(minLength: 8)
+        }
+    }
+
+    // MARK: - Status
+
+    private var statusSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                MenuPanelStatusDot(
+                    color: statusColor,
+                    isActive: appState.appStatus == .recording || appState.appStatus == .processing
+                )
+
+                Text(statusText)
+                    .font(.system(size: 13, weight: .semibold))
+                    .lineLimit(2)
+
+                Spacer(minLength: 8)
+
+                VStack(alignment: .trailing, spacing: 4) {
+                    MenuPanelShortcutHint(verb: activationModeHint.verb, keys: activationModeHint.keys)
+                    if appState.appStatus == .idle,
+                       let combo = appState.shortcut(for: .commandMode) {
+                        MenuPanelShortcutHint(
+                            verb: "Edit",
+                            keys: KeyCodeReference.displayName(for: combo),
+                            tint: VocaDesign.command
+                        )
+                        .help("Select text in any app, press this, and say how to change it")
+                    }
+                }
+            }
+
+            if let unloadMessage = appState.modelUnloadStatusMessage,
+               appState.appStatus == .idle || appState.isAutoPaused {
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: appState.isAutoPaused ? "pause.circle.fill" : "memorychip")
+                        .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(unloadMessage)
+                            .font(.caption)
+                            .foregroundStyle(.primary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        if let freed = appState.approximateMemoryFreedMB {
+                            Text(String(format: "About %.0f MB of process memory was released.", freed))
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            }
+
+            if let session = appState.commandModeSession {
+                commandSessionCard(session)
+            }
+
+            // Audio level indicator (visible during recording)
+            if appState.appStatus == .recording {
+                ObservedAudioLevelView(
+                    meter: appState.audioMeter,
+                    tint: appState.commandModeSession == nil ? nil : VocaDesign.command
+                )
+                .frame(height: 6)
+
+                ObservedLiveTranscriptView(state: appState.liveTranscriptState)
+
+                // Stop/recovery button — visible during recording so the user
+                // can unstick the app if the hotkey isn't responding
+                HStack {
+                    Button {
+                        Task { @MainActor in
+                            await appState.stopRecordingAndTranscribe()
+                        }
+                    } label: {
+                        if appState.commandModeSession != nil {
+                            Label("Finish Instruction", systemImage: "checkmark.circle.fill")
+                                .font(.callout)
+                                .foregroundStyle(VocaDesign.command)
+                        } else {
+                            Label("Stop Recording", systemImage: "stop.circle.fill")
+                                .font(.callout)
+                                .foregroundStyle(VocaDesign.clay)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    Spacer()
+                    cancelDictationButton
+                }
+            }
+
+            // Processing indicator
+            if appState.appStatus == .processing {
+                HStack {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(appState.commandModeSession == nil ? nil : VocaDesign.command)
+                    Spacer()
+                    if appState.canCancelDictation {
+                        cancelDictationButton
+                    }
+                }
+            }
+
+            // The last error stays, with its fix, until dismissed.
+            if let notice = appState.errorNotice,
+               appState.appStatus == .idle || appState.appStatus == .error {
+                errorNoticeCard(notice)
+            } else if appState.appStatus == .error {
+                Button {
+                    appState.dismissErrorNotice()
+                } label: {
+                    Label("Dismiss", systemImage: "xmark.circle")
+                        .font(.callout)
+                        .foregroundStyle(VocaDesign.warning)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    /// Throws the dictation away, as Escape does. Offered for every
+    /// dictation, not only Command Mode edits.
+    private var cancelDictationButton: some View {
+        let isEdit = appState.commandModeSession != nil
+        return Button(isEdit ? "Cancel Edit" : "Cancel") {
+            Task { @MainActor in await appState.cancelDictation() }
+        }
+        .controlSize(.small)
+        .help(isEdit
+              ? "Leave the selection unchanged" + (appState.escapeCancelsDictation ? " (Esc)" : "")
+              : "Discard this dictation" + (appState.escapeCancelsDictation ? " (Esc)" : ""))
+    }
+
+    private func errorNoticeCard(_ notice: DictationErrorNotice) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(VocaDesign.warning)
+                    .accessibilityHidden(true)
+                Text(notice.message)
+                    .font(.caption)
+                    .foregroundStyle(.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+            }
+            HStack(spacing: 8) {
+                if let action = notice.action {
+                    Button {
+                        appState.performErrorFix(action) { page in
+                            settingsManager.open(appState: appState, page: page)
+                        }
+                    } label: {
+                        Label(action.title, systemImage: action.systemImage)
+                    }
+                    .buttonStyle(VocaPrimaryButtonStyle())
+                    .controlSize(.small)
+                }
+                Button("Dismiss") { appState.dismissErrorNotice() }
+                    .controlSize(.small)
+                Spacer(minLength: 0)
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(VocaDesign.warning.opacity(0.1), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Error")
+    }
+
     // MARK: - Microphone
 
     /// Provides a quick microphone switcher without requiring the Settings window.
     /// The selected device is persisted by AppState and takes effect on the next
     /// recording; it does not change macOS's global input-device selection.
     private var microphoneRow: some View {
-        MenuValueRow(title: "Microphone") {
+        MenuPanelRow(title: "Microphone", systemImage: "mic.fill", tint: VocaDesign.accentSolid) {
             Menu {
                 VocaMenuChoice(title: "System Default", isSelected: appState.selectedAudioDeviceID.isEmpty) {
                     appState.selectAudioDevice(nil)
@@ -685,7 +728,7 @@ struct MenuBarView: View {
             } label: {
                 Text(selectedAudioDeviceDisplayName)
             }
-            .menuValueStyle()
+            .menuPanelValueMenu()
             .disabled(appState.isRecording)
             .help("Applies to the next recording. Does not change macOS's system default.")
         }
@@ -726,7 +769,7 @@ struct MenuBarView: View {
         }
     }
 
-    // MARK: - Last Dictation
+    // MARK: - Transcription
 
     private func transcriptionSection(
         _ result: VocaTranscription,
@@ -737,94 +780,42 @@ struct MenuBarView: View {
         // pair an output with the raw transcript it was actually derived from.
         let matchingOutput = output?.original == result.text ? output : nil
         let displayedText = matchingOutput?.text ?? result.text
-        return VStack(alignment: .leading, spacing: 6) {
+        return VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
-                Text("Last dictation")
-                    .calmType(.caption)
+                Text("LAST DICTATION")
+                    .font(VocaDesign.eyebrow)
+                    .tracking(1.2)
+                    .foregroundStyle(.secondary)
+
                 Spacer()
-                MenuIconButton(icon: .copy, help: "Copy to clipboard") {
+
+                MenuPanelIconButton(systemImage: "doc.on.doc", help: "Copy to clipboard") {
                     copyToPasteboard(displayedText)
                 }
             }
 
             Text(displayedText)
-                .font(.system(size: 13.5))
-                .lineSpacing(3)
-                .foregroundStyle(CalmColor.ink)
+                .font(VocaDesign.display(15))
                 .lineLimit(4)
+                .lineSpacing(2)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             if let matchingOutput {
                 Text(matchingOutput.summary)
-                    .font(CalmFont.note)
-                    .foregroundStyle(CalmColor.muted)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Text([
                 "\(String(format: "%.1f", result.audioLengthSeconds))s audio",
                 "\(String(format: "%.1f", result.duration))s to transcribe",
                 result.detectedLanguage.uppercased(),
-            ].joined(separator: " · "))
-            .font(CalmFont.note)
+            ].joined(separator: "  ·  "))
+            .font(.caption)
             .monospacedDigit()
-            .foregroundStyle(CalmColor.muted)
+            .foregroundStyle(.secondary)
         }
-        .padding(EdgeInsets(top: 4, leading: 10, bottom: 6, trailing: 6))
-    }
-
-    private func commandEditSection(_ edit: CommandModeEdit) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
-                CalmIcon(.commands, size: 13).foregroundStyle(CalmColor.violet)
-                Text(commandEditTitle(edit))
-                    .calmType(.caption)
-                Spacer()
-                Text(edit.engineName)
-                    .font(CalmFont.note)
-                    .foregroundStyle(CalmColor.muted)
-                    .lineLimit(1)
-            }
-            Text("“\(edit.instruction)”")
-                .font(CalmFont.note)
-                .foregroundStyle(CalmColor.muted)
-                .lineLimit(2)
-            Text(edit.replacement.trimmingCharacters(in: .whitespacesAndNewlines))
-                .font(.system(size: 13.5))
-                .foregroundStyle(CalmColor.ink)
-                .lineLimit(4)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            if let note = edit.note {
-                CalmInlineNotice("Check this: \(note).", tone: .warning)
-            }
-            if edit.kind != .action {
-                HStack(spacing: 8) {
-                    if edit.kind == .edit {
-                        Button("Copy Original") { copyToPasteboard(edit.original) }
-                            .calmButton(.secondary, size: .small)
-                            .help("Copy the text as it was before the edit")
-                    }
-                    Button("Copy Result") { copyToPasteboard(edit.replacement) }
-                        .calmButton(.secondary, size: .small)
-                }
-            }
-        }
-        .padding(EdgeInsets(top: 4, leading: 10, bottom: 6, trailing: 10))
-    }
-
-    private func commandEditTitle(_ edit: CommandModeEdit) -> String {
-        switch edit.kind {
-        case .edit: return "Last Edit"
-        case .composed: return "Last Written"
-        case .answer: return "Last Answer"
-        case .action: return "Last Action"
-        }
-    }
-
-    private func copyToPasteboard(_ text: String) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
     }
 
     // MARK: - Permissions
@@ -840,60 +831,77 @@ struct MenuBarView: View {
     }
 
     private var permissionsSection: some View {
-        MenuNoticeCard(tone: .warning) {
-            HStack(spacing: 6) {
-                CalmIcon(.warning, size: 14, weight: 2).foregroundStyle(CalmColor.amber)
-                Text("Finish setting up")
-                    .font(CalmFont.sf(13, weight: 600))
-                    .foregroundStyle(CalmColor.ink)
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(VocaDesign.warning)
+                Text("Finish Setting Up")
+                    .font(.system(size: 13, weight: .semibold))
+                Spacer()
             }
+            .padding(.horizontal, 12)
+            .padding(.top, 10)
+            .padding(.bottom, 6)
 
             if appState.needsSpeechModel {
+                MenuPanelRowDivider()
                 permissionRow(
                     title: "Speech model",
                     detail: "Pick a model so VocaMac can transcribe.",
+                    systemImage: "brain",
                     isDenied: false,
                     buttonTitle: "Choose…",
                     help: "Open Speech Model settings",
-                    action: { settingsManager.open(appState: appState, page: .speechModel) }
+                    action: {
+                        appState.requestSettingsPage(.speechModel)
+                        settingsManager.open(appState: appState)
+                    }
                 )
             }
 
             if appState.micPermission != .granted {
+                MenuPanelRowDivider()
                 permissionRow(
                     title: "Microphone",
                     detail: appState.micPermission == .denied
                         ? "Denied. Turn it on in Privacy & Security."
                         : "Captures your voice for transcription.",
+                    systemImage: "mic.fill",
                     isDenied: appState.micPermission == .denied,
                     action: { appState.requestMicrophonePermission() }
                 )
             }
 
             if appState.accessibilityPermission != .granted {
+                MenuPanelRowDivider()
                 permissionRow(
                     title: "Accessibility",
                     detail: "Needed for global hotkeys and typing text.",
+                    systemImage: "accessibility",
                     isDenied: appState.accessibilityPermission == .denied,
                     action: { appState.requestAccessibilityPermission() }
                 )
             }
 
             if appState.inputMonitoringPermission != .granted {
+                MenuPanelRowDivider()
                 permissionRow(
                     title: "Input Monitoring",
                     detail: "Needed to detect the hotkey in every app.",
+                    systemImage: "keyboard",
                     isDenied: appState.inputMonitoringPermission == .denied,
                     action: { appState.requestInputMonitoringPermission() }
                 )
             }
 
             if appState.permissionsMayNeedRelaunch {
+                MenuPanelRowDivider()
                 permissionRow(
                     title: appState.permissionsAwaitingGrant ? "Still shows as off?" : "Shortcut not connected",
                     detail: appState.permissionsAwaitingGrant
                         ? "macOS can wait to apply a permission until VocaMac reopens."
                         : "macOS hasn't connected your shortcut yet. Reopening fixes this.",
+                    systemImage: "arrow.clockwise",
                     isDenied: false,
                     buttonTitle: "Reopen",
                     help: "Quit and reopen VocaMac",
@@ -901,84 +909,92 @@ struct MenuBarView: View {
                 )
             }
         }
+        .padding(.bottom, 4)
     }
 
     /// A missing permission with its reason and one button to fix it.
     private func permissionRow(
         title: String,
         detail: String,
+        systemImage: String,
         isDenied: Bool,
         buttonTitle: String? = nil,
         help: String? = nil,
         action: @escaping () -> Void
     ) -> some View {
         HStack(spacing: 10) {
+            MenuPanelSymbolTile(systemImage: systemImage, tint: isDenied ? .red : .orange)
             VStack(alignment: .leading, spacing: 1) {
-                Text(title)
-                    .font(CalmFont.sf(13, weight: 560))
-                    .foregroundStyle(CalmColor.ink)
+                Text(title).font(.body)
                 Text(detail)
-                    .font(CalmFont.note)
-                    .foregroundStyle(isDenied ? CalmColor.amber : CalmColor.muted)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 8)
             Button(buttonTitle ?? (isDenied ? "Open…" : "Allow…"), action: action)
-                .calmButton(.primary, size: .small)
+                .controlSize(.small)
+                .vocaGlassButton()
                 .help(help ?? (isDenied ? "Open System Settings" : "Ask macOS for access"))
         }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
     }
 
     // MARK: - Recovery and Suggestions
 
     private func recoverySection(_ entry: DictationHistoryEntry) -> some View {
-        MenuNoticeCard(tone: .warning) {
-            Text(recoveryTitle(entry))
-                .font(CalmFont.sf(13, weight: 600))
-                .foregroundStyle(CalmColor.ink)
+        VStack(alignment: .leading, spacing: 6) {
+            Label(recoveryTitle(entry), systemImage: "exclamationmark.arrow.circlepath")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(VocaDesign.warning)
             Text("The \(String(format: "%.0f", entry.audioSeconds))-second recording is saved. Retry transcribes it again and copies the text\(pasteShortcutHint).")
-                .font(CalmFont.note)
-                .foregroundStyle(CalmColor.muted)
+                .font(.caption)
+                .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            HStack(spacing: 8) {
+            HStack {
                 if appState.retryingHistoryEntryID == entry.id {
-                    CalmSpinner(size: 15)
-                    Text("Transcribing…").font(CalmFont.note).foregroundStyle(CalmColor.muted)
+                    ProgressView().controlSize(.small)
+                    Text("Transcribing…").font(.caption)
                 } else {
                     Button("Retry") {
                         Task { await appState.retryHistoryEntry(entry.id) }
                     }
-                    .calmButton(.primary, size: .small)
+                    .buttonStyle(VocaPrimaryButtonStyle())
+                    .controlSize(.small)
                     .disabled(appState.retryingHistoryEntryID != nil)
                 }
                 Button("Dismiss") { appState.dismissRecovery(entry.id) }
-                    .calmButton(.secondary, size: .small)
-                Spacer(minLength: 4)
-                Button("History") { openHistory() }
-                    .calmLink(muted: true, font: CalmFont.note)
+                    .controlSize(.small)
+                Spacer()
+                Button("History…") { openHistory() }
+                    .buttonStyle(.vocaLink)
+                    .font(.caption)
             }
         }
     }
 
     private func crashSection(_ crash: PendingCrashReport) -> some View {
-        MenuNoticeCard(tone: .warning) {
-            Text("VocaMac quit unexpectedly last time")
-                .font(CalmFont.sf(13, weight: 600))
-                .foregroundStyle(CalmColor.ink)
+        VStack(alignment: .leading, spacing: 6) {
+            Label("VocaMac quit unexpectedly last time", systemImage: "exclamationmark.triangle")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(VocaDesign.warning)
             Text("Report opens a new GitHub issue in your browser, filled in with where it crashed. Opening it gives those details to GitHub; nothing is posted until you submit.")
-                .font(CalmFont.note)
-                .foregroundStyle(CalmColor.muted)
+                .font(.caption)
+                .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            HStack(spacing: 8) {
+            HStack {
                 Button("Report…") { appState.reportPendingCrash() }
-                    .calmButton(.primary, size: .small)
+                    .buttonStyle(VocaPrimaryButtonStyle())
+                    .controlSize(.small)
                     .disabled(!appState.canReportPendingCrash)
                     .help(appState.canReportPendingCrash ? "" : "Available when the dictation finishes")
                 Button("Dismiss") { appState.dismissPendingCrash() }
-                    .calmButton(.secondary, size: .small)
-                Spacer(minLength: 4)
+                    .controlSize(.small)
+                Spacer()
                 Button("Show File") { appState.revealPendingCrashReport() }
-                    .calmLink(muted: true, font: CalmFont.note)
+                    .buttonStyle(.vocaLink)
+                    .font(.caption)
                     .help(crash.fileURL.lastPathComponent)
             }
         }
@@ -998,37 +1014,54 @@ struct MenuBarView: View {
     }
 
     private func suggestionSection(_ suggestion: CorrectionSuggestion) -> some View {
-        MenuNoticeCard(tone: .neutral) {
-            HStack(spacing: 8) {
-                (Text("Spell it ") + Text(suggestion.corrected).fontWeight(.semibold) + Text(" next time?"))
-                    .font(.system(size: 13))
-                    .foregroundStyle(CalmColor.ink)
-                    .lineLimit(2)
-                Spacer(minLength: 6)
-                Button("Add") { appState.acceptDictionarySuggestion(suggestion) }
-                    .calmButton(.secondary, size: .small)
-                MenuIconButton(icon: .close, help: "Dismiss suggestion") {
-                    appState.dismissDictionarySuggestion(suggestion)
-                }
+        HStack(spacing: 10) {
+            MenuPanelSymbolTile(systemImage: "character.book.closed", tint: VocaDesign.accentSolid)
+            (Text("Spell it ") + Text(suggestion.corrected).fontWeight(.semibold) + Text(" next time?"))
+                .font(.callout)
+                .lineLimit(2)
+            Spacer(minLength: 6)
+            Button("Add") { appState.acceptDictionarySuggestion(suggestion) }
+                .controlSize(.small)
+                .vocaGlassButton()
+            MenuPanelIconButton(systemImage: "xmark", help: "Dismiss") {
+                appState.dismissDictionarySuggestion(suggestion)
             }
+            .accessibilityLabel("Dismiss suggestion")
         }
     }
 
     private func openHistory() {
-        settingsManager.open(appState: appState, page: .history)
+        appState.requestSettingsPage(.history)
+        settingsManager.open(appState: appState)
     }
 
     // MARK: - Actions
 
-    /// The design's first group: start (or finish) a dictation, paste the
-    /// last one, Smart Cleanup on or off.
-    private var primaryRows: some View {
-        VStack(spacing: 0) {
-            dictationRows
-            menuRow(
-                "Paste last dictation",
-                shortcut: appState.shortcut(for: .pasteLastDictation).map { CalmKeyCaps.compactText(for: $0) }
-            ) {
+    private var actionsSection: some View {
+        VStack(spacing: 1) {
+            // One row for the three utility windows, so the tools don't push
+            // History, Settings, and Quit down the menu.
+            HStack(spacing: 8) {
+                toolButton("Scratchpad", systemImage: "note.text",
+                           help: "A floating note to dictate into") {
+                    scratchpadManager.open(appState: appState)
+                }
+                toolButton("Transcribe File", systemImage: "waveform",
+                           help: "Transcribe an audio or video file") {
+                    fileTranscriptionManager.open(appState: appState)
+                }
+                toolButton("System Audio", systemImage: "speaker.wave.2.fill",
+                           help: "Transcribe what this Mac is playing") {
+                    meetingCaptureManager.open(appState: appState)
+                }
+            }
+            .padding(.horizontal, 6)
+            .padding(.bottom, 8)
+
+            // Its own row: the shortcut used to sit on History, which it
+            // doesn't open.
+            menuRow("Paste Last Dictation", systemImage: "doc.on.clipboard",
+                    shortcut: appState.shortcut(for: .pasteLastDictation).map { KeyCodeReference.displayName(for: $0) }) {
                 // The panel has to give focus back before the text is typed.
                 panelWindow.window?.orderOut(nil)
                 Task { @MainActor in
@@ -1037,175 +1070,295 @@ struct MenuBarView: View {
                 }
             }
             .disabled(appState.lastDictationText == nil || appState.isRecording || appState.appStatus == .processing)
-            menuRow("Smart Cleanup", isChecked: appState.transcriptCleanupEnabled) {
-                appState.transcriptCleanupEnabled.toggle()
-                Task { @MainActor in await appState.syncTranscriptCleanup() }
-            }
-        }
-    }
-
-    private var actionsSection: some View {
-        VStack(spacing: 0) {
-            menuRow("Scratchpad") { scratchpadManager.open(appState: appState) }
-                .help("A floating note to dictate into")
-            menuRow("Transcribe a file…") { fileTranscriptionManager.open(appState: appState) }
-                .help("Transcribe an audio or video file")
-            menuRow("Transcribe system audio…") { meetingCaptureManager.open(appState: appState) }
-                .help("Transcribe what this Mac is playing")
-
-            MenuSeparator()
-
-            menuRow("Open VocaMac") { settingsManager.open(appState: appState) }
-            menuRow("History") { openHistory() }
-            // The same switch as "Save history" in Settings, one click away
-            // for a private moment.
-            menuRow(appState.historyEnabled ? "Pause history" : "Resume history") {
+            menuRow("History", systemImage: "clock.arrow.circlepath", shortcut: nil) { openHistory() }
+            // The same switch as "Save dictation history" in Settings, one
+            // click away for a private moment.
+            menuRow(
+                appState.historyEnabled ? "Pause History" : "Resume History",
+                systemImage: appState.historyEnabled ? "pause.circle" : "play.circle",
+                shortcut: nil
+            ) {
                 // Said explicitly so this open menu redraws its own label.
                 appState.objectWillChange.send()
                 appState.historyEnabled.toggle()
             }
-            menuRow("Settings…", shortcut: "⌘,", keyEquivalent: ",") {
+            menuRow("Settings…", systemImage: "gearshape", shortcut: "⌘,", keyEquivalent: ",") {
                 settingsManager.open(appState: appState, page: .dictation)
             }
-            menuRow("Check for updates…") {
-                settingsManager.open(appState: appState, page: .about)
-                Task { await appState.updateChecker.checkForUpdates() }
-            }
             if gateway.status.allowsPairing {
-                menuRow("Pair phone…") {
+                menuRow("Pair phone…", systemImage: "qrcode", shortcut: nil) {
                     settingsManager.open(appState: appState, page: .gateway, showPairing: true)
                 }
             }
-
-            MenuSeparator()
-
-            menuRow("Quit VocaMac", shortcut: "⌘Q", keyEquivalent: "q") {
+            menuRow("Quit VocaMac", systemImage: "power", shortcut: "⌘Q", keyEquivalent: "q") {
                 NSApplication.shared.terminate(nil)
             }
         }
     }
 
-    /// Start, or while a dictation runs, finish or cancel it.
-    @ViewBuilder
-    private var dictationRows: some View {
-        let isEdit = appState.commandModeSession != nil
-        switch appState.appStatus {
-        case .recording:
-            menuRow(isEdit ? "Finish instruction" : "Stop and type") {
-                Task { @MainActor in await appState.stopRecordingAndTranscribe() }
-            }
-            cancelRow(isEdit: isEdit)
-        case .processing:
-            if appState.canCancelDictation {
-                cancelRow(isEdit: isEdit)
-            }
-        case .idle, .error:
-            menuRow("Start dictation", shortcut: dictationKeyName) {
-                // The panel gives focus back to the app the words are for.
-                panelWindow.window?.orderOut(nil)
-                Task { @MainActor in
-                    await Task.yield()
-                    await appState.toggleHandsFreeDictation()
-                }
-            }
-            .help("Records until you press the hands-free shortcut, click Stop on the overlay, or stop talking")
-        }
-    }
-
-    /// Throws the dictation away, as Escape does. Offered for every
-    /// dictation, not only Command Mode edits.
-    private func cancelRow(isEdit: Bool) -> some View {
-        menuRow(isEdit ? "Cancel edit" : "Cancel dictation", shortcut: appState.escapeCancelsDictation ? "Esc" : nil) {
-            Task { @MainActor in await appState.cancelDictation() }
-        }
-        .help(isEdit ? "Leave the selection unchanged" : "Discard this dictation")
-    }
-
-    private var dictationKeyName: String {
-        CalmKeyCaps.compactText(for: HotKeyCombo(keyCode: appState.hotKeyCode, modifiers: appState.hotKeyModifiers))
-    }
-
-    /// A row that highlights like a native menu item. With a `keyEquivalent`,
-    /// ⌘ plus that key triggers the row while the menu is open, so the
-    /// shortcut it shows actually works.
+    /// A full-width row that highlights like a native menu item. With a
+    /// `keyEquivalent`, ⌘ plus that key triggers the row while the menu is
+    /// open, so the shortcut it shows actually works.
     @ViewBuilder
     private func menuRow(
         _ title: String,
-        shortcut: String? = nil,
-        isChecked: Bool? = nil,
+        systemImage: String,
+        shortcut: String?,
         keyEquivalent: KeyEquivalent? = nil,
         action: @escaping () -> Void
     ) -> some View {
-        let row = Button(action: action) {
-            HStack(spacing: 8) {
-                Text(title)
-                    .font(.system(size: 13.5))
-                    .foregroundStyle(CalmColor.ink)
-                    .lineLimit(1)
-                Spacer(minLength: 8)
-                if isChecked == true {
-                    CalmIcon(.check, size: 13, weight: 2)
-                        .foregroundStyle(CalmColor.muted)
-                } else if let shortcut {
-                    Text(shortcut)
-                        .font(.system(size: 12.5))
-                        .foregroundStyle(CalmColor.muted)
-                        .lineLimit(1)
-                }
-            }
-            .padding(.horizontal, 10)
-            .frame(height: MenuPanelMetrics.rowHeight)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(MenuRowButtonStyle())
-        .accessibilityAddTraits(isChecked == true ? .isSelected : [])
+        let row = menuRowButton(title, systemImage: systemImage, shortcut: shortcut, action: action)
         if let keyEquivalent {
             row.keyboardShortcut(keyEquivalent, modifiers: .command)
         } else {
             row
         }
     }
+
+    private func menuRowButton(
+        _ title: String,
+        systemImage: String,
+        shortcut: String?,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 18)
+                Text(title)
+                    .font(.body)
+                Spacer(minLength: 8)
+                if let shortcut {
+                    Text(shortcut)
+                        .font(.body)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .padding(.horizontal, 8)
+            .frame(height: 26)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(MenuRowButtonStyle())
+    }
+
+    /// Shown while Command Mode listens or rewrites: what is being edited,
+    /// where, and how to back out.
+    private func commandSessionCard(_ session: CommandModeSession) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: "wand.and.stars")
+                    .foregroundStyle(VocaDesign.command)
+                Text(commandSessionTitle(session))
+                    .font(.callout.weight(.medium))
+                Spacer(minLength: 0)
+            }
+            if session.phase == .rewriting, let instruction = session.instruction, !instruction.isEmpty {
+                Text("“\(instruction)”")
+                    .font(.caption)
+                    .lineLimit(2)
+            }
+            if session.phase == .rewriting, let written = session.previewTail {
+                Text(written)
+                    .font(.caption)
+                    .lineLimit(2)
+            }
+            if session.kind != .compose {
+                Text("\(session.kind == .answer ? "About" : "Editing") “\(session.selectionPreview)”")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+            Text(commandSessionDetail(session))
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(VocaDesign.command.opacity(0.10), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(VocaDesign.command.opacity(0.35))
+        )
+        .accessibilityElement(children: .combine)
+    }
+
+    private func commandSessionTitle(_ session: CommandModeSession) -> String {
+        switch (session.kind, session.phase) {
+        case (.edit, .listening): return "Say how to change the selection"
+        case (.compose, .listening): return "Say what to write"
+        case (.answer, .listening): return "Ask about the selection"
+        case (.edit, .rewriting): return "Rewriting with \(session.engineName)"
+        case (.compose, .rewriting): return "Writing with \(session.engineName)"
+        case (.answer, .rewriting): return "Answering with \(session.engineName)"
+        }
+    }
+
+    private func commandSessionDetail(_ session: CommandModeSession) -> String {
+        guard session.kind != .compose else {
+            let place = session.appName.flatMap { $0.isEmpty ? nil : "Typed at the cursor in \($0)" } ?? "Typed at the cursor"
+            return "\(place) · Esc cancels"
+        }
+        var parts = ["\(session.characterCount) characters"]
+        if let app = session.appName, !app.isEmpty { parts[0] += " in \(app)" }
+        parts.append(session.kind == .answer ? "Esc cancels" : "Esc leaves it unchanged")
+        return parts.joined(separator: " · ")
+    }
+
+    private func commandEditSection(_ edit: CommandModeEdit) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Label(commandEditTitle(edit), systemImage: "wand.and.stars")
+                    .font(.subheadline)
+                    .foregroundStyle(VocaDesign.command)
+                Spacer()
+                Text(edit.engineName)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            Text("“\(edit.instruction)”")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+            Text(edit.replacement.trimmingCharacters(in: .whitespacesAndNewlines))
+                .font(.callout)
+                .lineLimit(4)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            if let note = edit.note {
+                Label("Check this: \(note).", systemImage: "exclamationmark.triangle")
+                    .font(.caption2)
+                    .foregroundStyle(VocaDesign.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if edit.kind != .action {
+                HStack {
+                    if edit.kind == .edit {
+                        Button("Copy Original") { copyToPasteboard(edit.original) }
+                            .help("Copy the text as it was before the edit")
+                    }
+                    Button("Copy Result") { copyToPasteboard(edit.replacement) }
+                    Spacer()
+                }
+                .controlSize(.small)
+            }
+        }
+    }
+
+    private func commandEditTitle(_ edit: CommandModeEdit) -> String {
+        switch edit.kind {
+        case .edit: return "Last Edit"
+        case .composed: return "Last Written"
+        case .answer: return "Last Answer"
+        case .action: return "Last Action"
+        }
+    }
+
+    private func copyToPasteboard(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+
+    // MARK: - Helpers
+
+    private func toolButton(
+        _ title: String,
+        systemImage: String,
+        help: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            VStack(spacing: 5) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(VocaDesign.accent)
+                    // Symbols differ in height; a fixed box keeps the three
+                    // titles on one baseline.
+                    .frame(height: 18)
+                Text(title)
+                    .font(.caption.weight(.medium))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 9)
+            .contentShape(RoundedRectangle(cornerRadius: MenuPanelMetrics.tileRadius, style: .continuous))
+        }
+        .buttonStyle(MenuPanelTileButtonStyle())
+        .help(help)
+        .accessibilityLabel(title)
+    }
+
+    private var statusText: String {
+        if let session = appState.commandModeSession {
+            switch (appState.appStatus, session.phase) {
+            case (.recording, _): return "Command Mode — listening"
+            case (_, .rewriting): return "Rewriting selection…"
+            default: return "Transcribing instruction…"
+            }
+        }
+        if appState.isAutoPaused {
+            return appState.autoPauseTriggerDisplayName.map { "Paused (\($0))" } ?? "Auto-paused"
+        }
+        switch appState.appStatus {
+        case .idle:       return appState.dictationReadinessTitle
+        case .recording:  return "Recording…"
+        case .processing: return appState.processingStatusText
+        case .error:
+            // The card below shows the whole message once.
+            return appState.errorNotice == nil ? appState.errorMessage ?? "Error" : "Something went wrong"
+        }
+    }
+
+    private var statusColor: Color {
+        if appState.commandModeSession != nil { return VocaDesign.command }
+        if appState.isAutoPaused { return .secondary }
+        switch appState.appStatus {
+        case .idle:       return appState.isDictationReady ? VocaDesign.success : VocaDesign.warning
+        case .recording:  return Color(nsColor: BrandAssets.brandColor)
+        case .processing: return VocaDesign.busy
+        case .error:      return VocaDesign.warning
+        }
+    }
+
+    private var activationModeHint: (verb: String, keys: String) {
+        let keyName = KeyCodeReference.displayName(for: HotKeyCombo(keyCode: appState.hotKeyCode, modifiers: appState.hotKeyModifiers))
+        switch appState.activationMode {
+        case .pushToTalk:
+            return ("Hold", keyName)
+        case .doubleTapToggle:
+            return ("Double-tap", keyName)
+        }
+    }
 }
 
 // MARK: - Menu Row Button Style
 
-/// A menu item: no fill until hovered, then panel2 at radius 6, like a
-/// native menu highlight.
+/// A button style that highlights on hover, matching native macOS menu behavior.
 struct MenuRowButtonStyle: ButtonStyle {
+    @State private var isHovered = false
+
     func makeBody(configuration: Configuration) -> some View {
-        MenuRowBody(configuration: configuration)
-    }
-
-    private struct MenuRowBody: View {
-        let configuration: ButtonStyleConfiguration
-        @Environment(\.isEnabled) private var isEnabled
-        @Environment(\.calmPreviewInteraction) private var forced
-        @State private var isHovered = false
-
-        var body: some View {
-            let highlighted = (isHovered || forced == .hover) && isEnabled
-            configuration.label
-                .background(
-                    RoundedRectangle(cornerRadius: CalmMetrics.Radius.menuItem, style: .continuous)
-                        .fill(configuration.isPressed ? CalmColor.line2 : highlighted ? CalmColor.panel2 : .clear)
-                )
-                .opacity(isEnabled ? 1 : 0.45)
-                .onHover { isHovered = $0 }
-        }
+        configuration.label
+            .background(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(Color.primary.opacity(configuration.isPressed ? 0.14 : isHovered ? 0.08 : 0))
+            )
+            .onHover { isHovered = $0 }
     }
 }
 
 // MARK: - Menu Panel Components
 
 enum MenuPanelMetrics {
-    /// The design's menu is 280 wide.
-    static let width: CGFloat = 280
-    /// Corner of the panel itself: the menu's radius.
-    static let panelRadius: CGFloat = CalmMetrics.Radius.menu
-    /// Room between the panel edge and its rows.
-    static let padding: CGFloat = 5
-    static let rowHeight: CGFloat = 30
+    static let width: CGFloat = 380
+    /// The panel's own corner: the paper sheet is the window's shape.
+    static let panelRadius: CGFloat = 16
+    static let inset: CGFloat = 12
+    static let cardRadius: CGFloat = 14
+    static let tileRadius: CGFloat = 11
 }
 
 /// Weak reference used to dismiss the panel before pasting into its destination.
@@ -1240,17 +1393,17 @@ private struct MenuPanelWindowSizer: NSViewRepresentable {
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
-            if let window { Self.makePlainPanel(window) }
+            if let window { Self.makePaperPanel(window) }
             onWindow?(window)
             scheduleResize()
         }
 
-        /// The panel paints its own rounded menu surface. Left alone, the
+        /// The panel paints its own rounded paper sheet. Left alone, the
         /// system window draws its material and a light rim around it, and
-        /// the surface sat inside that as a second frame. Clearing the window
-        /// and hiding the material leaves one edge: the panel's own hairline,
-        /// with the window shadow following its shape.
-        static func makePlainPanel(_ window: NSWindow) {
+        /// the paper sat inside that as a second, square-cornered frame.
+        /// Clearing the window and hiding the material leaves one edge: the
+        /// sheet's own hairline, with the window shadow following its shape.
+        static func makePaperPanel(_ window: NSWindow) {
             window.isOpaque = false
             window.backgroundColor = .clear
             if let frameView = window.contentView?.superview {
@@ -1308,81 +1461,90 @@ private extension View {
             Color.clear.preference(key: key, value: proxy.size.height)
         })
     }
+}
 
-    /// A pull-down showing its current value at the trailing edge of a row,
-    /// in the muted colour of a menu item's shortcut.
-    func menuValueStyle() -> some View {
-        self
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.visible)
-            .fixedSize()
-            .foregroundStyle(CalmColor.muted)
-            .tint(CalmColor.muted)
-            .font(.system(size: 12.5))
+/// The grouped surface every section of the panel sits on. The panel's own
+/// material shows through, so cards read as layers rather than grey boxes.
+private struct MenuPanelCard: ViewModifier {
+    var padding: CGFloat
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: MenuPanelMetrics.cardRadius, style: .continuous)
+        content
+            .padding(padding)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            // A sheet laid on the paper: no outline, just a lighter face and
+            // the faintest shadow, so stacked sections don't read as boxes.
+            .background(VocaDesign.surface, in: shape)
+            .shadow(color: .black.opacity(0.05), radius: 1.5, y: 1)
+            .overlay(shape.strokeBorder(contrast == .increased ? Color.primary.opacity(0.35) : .clear))
     }
 }
 
-/// The menu's separator: a 1-point line inset 6, with 5 above and below.
-private struct MenuSeparator: View {
+extension View {
+    fileprivate func menuPanelCard(padding: CGFloat = 12) -> some View {
+        modifier(MenuPanelCard(padding: padding))
+    }
+
+    /// A pull-down that shows its current value at the trailing edge of a row.
+    fileprivate func menuPanelValueMenu() -> some View {
+        self
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .foregroundStyle(.secondary)
+            .tint(.secondary)
+            .font(.body)
+    }
+}
+
+/// A System Settings–style list row: tinted symbol, title, trailing control.
+private struct MenuPanelRow<Accessory: View>: View {
+    let title: String
+    let systemImage: String
+    let tint: Color
+    @ViewBuilder let accessory: Accessory
+
     var body: some View {
-        Rectangle()
-            .fill(CalmColor.line)
-            .frame(height: 1)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 5)
+        HStack(spacing: 10) {
+            MenuPanelSymbolTile(systemImage: systemImage, tint: tint)
+            Text(title)
+                .font(.body)
+                .lineLimit(1)
+                .layoutPriority(1)
+            Spacer(minLength: 12)
+            accessory
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 12)
+        .frame(minHeight: 40)
+    }
+}
+
+/// A small tinted well holding its symbol, like ink on paper.
+private struct MenuPanelSymbolTile: View {
+    let systemImage: String
+    let tint: Color
+
+    var body: some View {
+        Image(systemName: systemImage)
+            .font(.system(size: 11, weight: .semibold))
+            .symbolRenderingMode(.monochrome)
+            .foregroundStyle(tint)
+            .frame(width: 24, height: 24)
+            .background(tint.opacity(0.13), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
             .accessibilityHidden(true)
     }
 }
 
-/// A menu row with a title and a value control on the right (Microphone,
-/// Style), the height of a menu item.
-private struct MenuValueRow<Accessory: View>: View {
-    let title: String
-    @ViewBuilder let accessory: Accessory
-
+/// Hairline between rows, inset past the symbol tile like a grouped list.
+private struct MenuPanelRowDivider: View {
     var body: some View {
-        HStack(spacing: 8) {
-            Text(title)
-                .font(.system(size: 13.5))
-                .foregroundStyle(CalmColor.ink)
-                .lineLimit(1)
-                .layoutPriority(1)
-            Spacer(minLength: 10)
-            accessory
-                .lineLimit(1)
-        }
-        .padding(.horizontal, 10)
-        .frame(minHeight: MenuPanelMetrics.rowHeight)
+        Divider().padding(.leading, 44)
     }
 }
 
-/// A notice inside the menu: a panel-coloured block (amber-tinted for
-/// problems) with a title, a line or two, and small buttons.
-private struct MenuNoticeCard<Content: View>: View {
-    var tone: CalmTone = .neutral
-    @ViewBuilder let content: Content
-
-    private var fill: Color {
-        switch tone {
-        case .warning: return CalmColor.amberSoft
-        case .success: return CalmColor.accentSoft
-        case .neutral, .info, .label: return CalmColor.panel
-        }
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            content
-        }
-        .padding(10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(fill, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-    }
-}
-
-/// The status line's dot: 7 points with a 3-point soft ring, pulsing while
-/// a dictation runs.
-private struct MenuStatusDot: View {
+private struct MenuPanelStatusDot: View {
     let color: Color
     let isActive: Bool
 
@@ -1392,15 +1554,15 @@ private struct MenuStatusDot: View {
     var body: some View {
         ZStack {
             Circle()
-                .fill(color.opacity(0.16))
-                .frame(width: 13, height: 13)
-                .scaleEffect(isActive && pulse ? 1.3 : 1)
-                .opacity(isActive && pulse ? 0.4 : 1)
+                .fill(color.opacity(0.22))
+                .frame(width: 18, height: 18)
+                .scaleEffect(isActive && pulse ? 1.25 : 1)
+                .opacity(isActive && pulse ? 0.35 : 1)
             Circle()
                 .fill(color)
-                .frame(width: 7, height: 7)
+                .frame(width: 8, height: 8)
         }
-        .frame(width: 13, height: 13)
+        .frame(width: 20, height: 20)
         .onAppear { startPulse() }
         .onChange(of: isActive) { startPulse() }
         .accessibilityHidden(true)
@@ -1417,22 +1579,74 @@ private struct MenuStatusDot: View {
     }
 }
 
-/// A small borderless icon button with a hover highlight.
-private struct MenuIconButton: View {
-    let icon: CalmIconName
+/// "Hold ⌥ Space" with the keys drawn as a keycap.
+private struct MenuPanelShortcutHint: View {
+    let verb: String
+    let keys: String
+    var tint: Color = .secondary
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Text(verb)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text(keys)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(tint == .secondary ? Color.primary : tint)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 2)
+                // A paper keycap: a light face over a darker lip.
+                .background(
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(VocaDesign.surface)
+                        .shadow(color: .black.opacity(0.14), radius: 0, y: 1.5)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .strokeBorder(Color.primary.opacity(0.14))
+                )
+        }
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// A borderless symbol button with a hover highlight.
+private struct MenuPanelIconButton: View {
+    let systemImage: String
     let help: String
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            CalmIcon(icon, size: 13)
-                .foregroundStyle(CalmColor.muted)
-                .frame(width: 24, height: 24)
+            Image(systemName: systemImage)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 22, height: 22)
                 .contentShape(Rectangle())
         }
         .buttonStyle(MenuRowButtonStyle())
         .help(help)
         .accessibilityLabel(help)
+    }
+}
+
+/// Utility tile: a sheet of paper that lifts on hover and settles when pressed.
+private struct MenuPanelTileButtonStyle: ButtonStyle {
+    @State private var isHovered = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func makeBody(configuration: Configuration) -> some View {
+        let shape = RoundedRectangle(cornerRadius: MenuPanelMetrics.tileRadius, style: .continuous)
+        let lifted = isHovered && !configuration.isPressed && !reduceMotion
+        configuration.label
+            .background(VocaDesign.surface, in: shape)
+            .overlay(shape.strokeBorder(isHovered ? VocaDesign.accent.opacity(0.35) : .clear))
+            .shadow(color: .black.opacity(lifted ? 0.10 : 0.05), radius: lifted ? 6 : 1.5, y: lifted ? 3 : 1)
+            .offset(y: lifted ? -1 : 0)
+            .scaleEffect(configuration.isPressed ? 0.97 : 1)
+            .onHover { isHovered = $0 }
+            .animation(.spring(response: 0.3, dampingFraction: 0.8), value: isHovered)
+            .animation(.spring(response: 0.2, dampingFraction: 0.8), value: configuration.isPressed)
     }
 }
 

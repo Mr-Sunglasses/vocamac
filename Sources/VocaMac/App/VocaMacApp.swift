@@ -553,20 +553,21 @@ struct VocaMacApp: App {
 
 // MARK: - Menu Bar Icon
 
-/// The five-bar VocaMac mark in the menu bar, at 18 points, in the state
-/// the Overlay board draws:
+/// Renders the Voca mark in the menu bar with color changes based on app status.
 ///
-///   • Ready            → template (follows the menu bar)
-///   • Listening        → accent (#0F6B57 on a light bar, #55C2A0 on a dark one)
-///   • Working          → template at 55% with a dot
-///   • Command Mode     → violet (#5E3BC4 / #BBA4FF)
-///   • Needs attention  → the mark with an orange badge (a permission or an error)
-///   • Off              → template at 35% (a model is still on its way)
+/// Idle uses a template SF Symbol mic so it matches neighboring status items.
+/// Recording tints the Voca mark brand green. Processing and error keep SF Symbols.
 ///
-/// Colours only appear while something is happening. MenuBarExtra strips
-/// SwiftUI colours, so coloured states are drawn into a non-template
-/// `NSImage`; their colours resolve against the menu bar's appearance when
-/// the image draws.
+/// MenuBarExtra strips SwiftUI `.foregroundStyle()` colors, so status colors
+/// are applied via `NSImage` + `sourceAtop` with `isTemplate = false`.
+///
+/// States:
+///   • idle       → SF Symbol mic.fill (template, adapts to menu bar);
+///                  dimmed, with a badge when a permission or model is missing
+///                  (still template)
+///   • recording  → Voca mark in brand green (mic hot)
+///   • processing → yellow ellipsis (non-template, colored)
+///   • error      → orange warning (non-template, colored)
 struct MenuBarIcon: View {
     let appStatus: AppStatus
     var isCommandMode = false
@@ -580,106 +581,122 @@ struct MenuBarIcon: View {
     }
 
     private func makeMenuBarIcon() -> NSImage {
-        let style = MenuBarIconStyle.style(for: appStatus, isCommandMode: isCommandMode, readiness: readiness)
-        let image = Self.image(for: MenuBarGlyphState(style: style))
+        let image = makeStatusImage()
         // The status item reads the image's description too.
         image.accessibilityDescription = accessibilityLabel
         return image
     }
 
-    /// Canvas: the 18-point mark plus room for its badge to the upper right
-    /// and its dot to the lower right.
-    static let canvasSize = NSSize(width: 22, height: 22)
-    /// Where the 18-point mark sits in the canvas (AppKit coordinates).
-    static let glyphRect = NSRect(x: 1, y: 2, width: 18, height: 18)
+    private func makeStatusImage() -> NSImage {
+        switch MenuBarIconStyle.style(for: appStatus, isCommandMode: isCommandMode, readiness: readiness) {
+        case .systemSymbolTemplate(let name):
+            return fallbackSymbol(named: name, tint: nil)
+        case .notReadyTemplate(let badged):
+            return notReadySymbol(badged: badged)
+        case .brandMarkTinted:
+            if let mark = sizedMark() {
+                return tintedImage(base: mark, color: BrandAssets.brandColor)
+            }
+            return fallbackSymbol(named: "mic.fill", tint: BrandAssets.brandColor)
+        case .systemSymbol(let name):
+            return fallbackSymbol(named: name, tint: statusColor)
+        }
+    }
 
-    /// Draws one state of the mark.
-    static func image(for state: MenuBarGlyphState) -> NSImage {
-        let glyphRect = Self.glyphRect
-        let glyph = CGPath.calmBrandMark(in: glyphRect)
-        let image = NSImage(size: canvasSize, flipped: false) { _ in
-            guard let context = NSGraphicsContext.current?.cgContext else { return false }
-            func strokeMark(_ color: NSColor) {
-                context.saveGState()
-                context.addPath(glyph)
-                context.setLineWidth(2.2 * glyphRect.width / 22)
-                context.setLineCap(.round)
-                context.setStrokeColor(color.cgColor)
-                context.strokePath()
-                context.restoreGState()
-            }
-            func fillDot(_ rect: NSRect, _ color: NSColor) {
-                context.setFillColor(color.cgColor)
-                context.fillEllipse(in: rect)
-            }
-            switch state {
-            case .ready:
-                strokeMark(.black)
-            case .listening:
-                strokeMark(CalmNSColor.accent)
-            case .working:
-                strokeMark(NSColor.black.withAlphaComponent(0.55))
-                // 6 points, 2 past the mark's right edge and 1 below it.
-                fillDot(NSRect(x: glyphRect.maxX - 4, y: glyphRect.minY - 1, width: 6, height: 6), .black)
-            case .commandMode:
-                strokeMark(CalmNSColor.violet)
-            case .needsAttention:
-                strokeMark(.labelColor)
-                // 7 points, 3 past the right edge and 2 above the top.
-                fillDot(
-                    NSRect(x: glyphRect.maxX - 4, y: glyphRect.maxY - 5, width: 7, height: 7),
-                    CalmNSColor.rgb(0xE08A00)
-                )
-            case .off:
-                strokeMark(NSColor.black.withAlphaComponent(0.35))
-            }
+    /// Point size of the SF Symbols in the menu bar slot.
+    private static let symbolPointSize: CGFloat = 16
+
+    /// Menu-bar point size for the brand mark.
+    /// Slightly above the 16pt SF Symbol default so the line-art mic reads at a
+    /// similar visual weight to neighboring status items.
+    private static let markPointSize: CGFloat = 20
+
+    /// Sized copy of the bundled mic mark, or `nil` if the asset is missing.
+    ///
+    /// The mark is taller than it is wide, so it is scaled to fit the square
+    /// slot (not stretched) and centered — that uses the full slot height.
+    private func sizedMark() -> NSImage? {
+        guard let mark = BrandAssets.mark else { return nil }
+        let slot = Self.markPointSize
+        let size = NSSize(width: slot, height: slot)
+        return NSImage(size: size, flipped: false) { rect in
+            NSGraphicsContext.current?.imageInterpolation = .high
+            let markSize = mark.size
+            guard markSize.width > 0, markSize.height > 0 else { return false }
+            let scale = min(rect.width / markSize.width, rect.height / markSize.height)
+            let drawSize = NSSize(width: markSize.width * scale, height: markSize.height * scale)
+            let drawRect = NSRect(
+                x: rect.midX - drawSize.width / 2,
+                y: rect.midY - drawSize.height / 2,
+                width: drawSize.width,
+                height: drawSize.height
+            )
+            mark.draw(in: drawRect)
             return true
         }
-        image.isTemplate = state.isTemplate
+    }
+
+    private func fallbackSymbol(named name: String, tint: NSColor?) -> NSImage {
+        let config = NSImage.SymbolConfiguration(pointSize: Self.symbolPointSize, weight: .regular)
+        guard let baseImage = NSImage(systemSymbolName: name, accessibilityDescription: "VocaMac")?
+            .withSymbolConfiguration(config) else {
+            return NSImage(systemSymbolName: "mic", accessibilityDescription: "VocaMac") ?? NSImage()
+        }
+
+        guard let tint else {
+            let copy = baseImage.copy() as? NSImage ?? baseImage
+            copy.isTemplate = true
+            return copy
+        }
+
+        return tintedImage(base: baseImage, color: tint)
+    }
+
+    /// The mic at reduced opacity, with a solid dot in its corner when the
+    /// user has something to fix. A template image renders by alpha alone, so
+    /// both stay legible on light and dark menu bars.
+    private func notReadySymbol(badged: Bool) -> NSImage {
+        let config = NSImage.SymbolConfiguration(pointSize: Self.symbolPointSize, weight: .regular)
+        guard let mic = NSImage(systemSymbolName: "mic.fill", accessibilityDescription: nil)?
+            .withSymbolConfiguration(config) else {
+            return fallbackSymbol(named: "mic", tint: nil)
+        }
+        let image = NSImage(size: mic.size, flipped: false) { rect in
+            mic.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 0.4)
+            guard badged else { return true }
+            let diameter = max(5, rect.width * 0.42)
+            let dot = NSRect(x: rect.maxX - diameter, y: rect.minY, width: diameter, height: diameter)
+            // A clear ring keeps the dot apart from the mic under it.
+            NSGraphicsContext.current?.compositingOperation = .clear
+            NSBezierPath(ovalIn: dot.insetBy(dx: -1.5, dy: -1.5)).fill()
+            NSGraphicsContext.current?.compositingOperation = .sourceOver
+            NSColor.black.setFill()
+            NSBezierPath(ovalIn: dot).fill()
+            return true
+        }
+        image.isTemplate = true
         return image
     }
-}
 
-/// The six menu bar states on the Overlay board, from the icon style.
-enum MenuBarGlyphState: Equatable {
-    case ready, listening, working, commandMode, needsAttention, off
-
-    init(style: MenuBarIconStyle) {
-        switch style {
-        case .systemSymbolTemplate: self = .ready
-        case .brandMarkTinted: self = .listening
-        case .notReadyTemplate(let badged): self = badged ? .needsAttention : .off
-        case .systemSymbol(let name):
-            switch name {
-            case "wand.and.stars": self = .commandMode
-            case "ellipsis.circle": self = .working
-            default: self = .needsAttention
-            }
+    private func tintedImage(base: NSImage, color: NSColor) -> NSImage {
+        let size = base.size
+        let tinted = NSImage(size: size, flipped: false) { rect in
+            base.draw(in: rect)
+            color.set()
+            rect.fill(using: .sourceAtop)
+            return true
         }
+        tinted.isTemplate = false
+        return tinted
     }
 
-    /// Template states follow the menu bar's own colour; coloured ones don't.
-    var isTemplate: Bool {
-        switch self {
-        case .ready, .working, .off: return true
-        case .listening, .commandMode, .needsAttention: return false
+    private var statusColor: NSColor {
+        if isCommandMode { return VocaDesign.commandNSColor }
+        switch appStatus {
+        case .idle:       return BrandAssets.brandColor
+        case .recording:  return BrandAssets.brandColor
+        case .processing: return .systemYellow
+        case .error:      return .systemOrange
         }
-    }
-}
-
-extension CGPath {
-    /// The five-bar mark (22-point grid) scaled into `rect`. The bars are
-    /// symmetric top to bottom, so AppKit's flipped y needs no correction.
-    static func calmBrandMark(in rect: NSRect) -> CGPath {
-        let scale = rect.width / 22
-        let path = CGMutablePath()
-        let bars: [(x: CGFloat, top: CGFloat, bottom: CGFloat)] = [
-            (5, 9.5, 12.5), (8.3, 7, 15), (11.6, 4.5, 17.5), (14.9, 7.5, 14.5), (18, 9.5, 12.5),
-        ]
-        for bar in bars {
-            path.move(to: CGPoint(x: rect.minX + bar.x * scale, y: rect.minY + bar.top * scale))
-            path.addLine(to: CGPoint(x: rect.minX + bar.x * scale, y: rect.minY + bar.bottom * scale))
-        }
-        return path
     }
 }
