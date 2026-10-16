@@ -1072,15 +1072,17 @@ struct CalmShortcutPill: View {
     var body: some View {
         let radius: CGFloat = caption == nil ? 10 : 9
         HStack(spacing: 4) {
-            CalmKeyCombo(caps)
+            if !caps.isEmpty { CalmKeyCombo(caps) }
             if let caption {
                 Text(caption)
                     .font(.system(size: 13))
                     .foregroundStyle(CalmColor.ink2)
-                    .padding(.leading, 2)
+                    .padding(.leading, caps.isEmpty ? 4 : 2)
                     .padding(.trailing, 4)
             }
         }
+        // Caps or not (“Set a shortcut”), the pill keeps the caps' height.
+        .frame(minHeight: CalmMetrics.keyCapHeight)
         .padding(.vertical, 6)
         .padding(.horizontal, caption == nil ? 6 : 8)
         .overlay(RoundedRectangle(cornerRadius: radius, style: .continuous).strokeBorder(CalmColor.line2, lineWidth: 1))

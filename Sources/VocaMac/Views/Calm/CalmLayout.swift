@@ -212,21 +212,24 @@ struct CalmBackLink: View {
 /// feature's shortcut pill (a button when `onShortcutTap` is set).
 ///
 /// ```swift
-/// CalmFeatureHeader("Commands", shortcut: ["⌃", "⌥", "E"]) { showRecorder = true }
+/// CalmFeatureHeader("Commands", shortcut: ["⌃", "⌥", "E"], shortcutCaption: "to edit by voice") { showRecorder = true }
 /// ```
 struct CalmFeatureHeader: View {
     let title: String
     var isOn: Binding<Bool>?
     var shortcut: [String]?
+    /// Words after the caps in the pill (“to edit by voice”).
+    var shortcutCaption: String?
     var onShortcutTap: (() -> Void)?
 
     init(
         _ title: String, isOn: Binding<Bool>? = nil, shortcut: [String]? = nil,
-        onShortcutTap: (() -> Void)? = nil
+        shortcutCaption: String? = nil, onShortcutTap: (() -> Void)? = nil
     ) {
         self.title = title
         self.isOn = isOn
         self.shortcut = shortcut
+        self.shortcutCaption = shortcutCaption
         self.onShortcutTap = onShortcutTap
     }
 
@@ -246,12 +249,14 @@ struct CalmFeatureHeader: View {
             }
             if let shortcut {
                 if let onShortcutTap {
-                    Button(action: onShortcutTap) { CalmShortcutPill(shortcut) }
+                    Button(action: onShortcutTap) { CalmShortcutPill(shortcut, caption: shortcutCaption) }
                         .buttonStyle(CalmPlainFocusStyle(radius: 10))
                         .focusEffectDisabled()
-                        .accessibilityLabel("Shortcut \(shortcut.joined(separator: " ")). Change")
+                        .accessibilityLabel(
+                            shortcut.isEmpty ? (shortcutCaption ?? "Shortcut") : "Shortcut \(shortcut.joined(separator: " ")). Change"
+                        )
                 } else {
-                    CalmShortcutPill(shortcut)
+                    CalmShortcutPill(shortcut, caption: shortcutCaption)
                 }
             }
         }
