@@ -381,4 +381,40 @@ final class CalmInsightsTests: XCTestCase {
         XCTAssertTrue(appState.hasStatistics)
         XCTAssertEqual(appState.insightsSummary().wordsPerMinute, 100)
     }
+
+    // MARK: Heatmap fit
+
+    func testHeatmapUsesFullCellsWhenThereIsRoom() {
+        let fit = CalmHeatmapFit.fit(width: 900, weekCount: 53)
+        XCTAssertEqual(fit, CalmHeatmapFit(cell: 12, gap: 3, weeks: 53))
+    }
+
+    func testHeatmapShrinksCellsToFitTheMinimumWindow() {
+        // The Insights panel at the 1080-wide minimum window leaves about 700.
+        let fit = CalmHeatmapFit.fit(width: 698, weekCount: 53)
+        XCTAssertEqual(fit.weeks, 53)
+        XCTAssertLessThan(fit.cell, 12)
+        XCTAssertGreaterThanOrEqual(fit.cell, CalmHeatmapFit.minCell)
+        XCTAssertLessThanOrEqual(fit.width, 698)
+    }
+
+    func testHeatmapSwitchesToTightGapsBeforeDroppingWeeks() {
+        let fit = CalmHeatmapFit.fit(width: 53 * 9 + 52 * 2, weekCount: 53)
+        XCTAssertEqual(fit.gap, 2)
+        XCTAssertEqual(fit.weeks, 53)
+        XCTAssertGreaterThanOrEqual(fit.cell, CalmHeatmapFit.minCell)
+    }
+
+    func testHeatmapDropsOldestWeeksRatherThanOverflowing() {
+        for width in stride(from: CGFloat(60), through: 1400, by: 7) {
+            let fit = CalmHeatmapFit.fit(width: width, weekCount: 53)
+            XCTAssertLessThanOrEqual(fit.width, max(width, CalmHeatmapFit.minCell), "width \(width)")
+            XCTAssertGreaterThanOrEqual(fit.cell, CalmHeatmapFit.minCell, "width \(width)")
+            XCTAssertLessThanOrEqual(fit.cell, CalmHeatmapFit.maxCell, "width \(width)")
+            XCTAssertLessThanOrEqual(fit.weeks, 53)
+        }
+        let narrow = CalmHeatmapFit.fit(width: 400, weekCount: 53)
+        XCTAssertEqual(narrow.cell, CalmHeatmapFit.minCell)
+        XCTAssertEqual(narrow.weeks, 40)
+    }
 }

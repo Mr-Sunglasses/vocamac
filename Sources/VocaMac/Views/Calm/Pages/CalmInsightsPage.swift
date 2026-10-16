@@ -263,7 +263,6 @@ private struct CalmStreakPanel: View {
     @State private var hoveredIndex: Int?
     @State private var availableWidth: CGFloat = 800
 
-    private static let gap: CGFloat = 3
     private static let labelColumn: CGFloat = 24
     private static let labelGap: CGFloat = 6
     /// The design lets the grid run into the panel's trailing padding.
@@ -333,23 +332,30 @@ private struct CalmStreakPanel: View {
 
     // MARK: Heatmap
 
-    private func cellSize() -> CGFloat {
-        let columns = CGFloat(CalmActivityCalendar.weekCount)
-        let room = availableWidth + Self.trailingOverhang - Self.labelColumn - Self.labelGap - (columns - 1) * Self.gap
-        return max(6, min(12, (room / columns * 2).rounded(.down) / 2))
+    /// Fits the year into the panel's inner width plus the trailing
+    /// overhang the design lets the grid use.
+    private func fit() -> CalmHeatmapFit {
+        let room = availableWidth + Self.trailingOverhang - Self.labelColumn - Self.labelGap
+        return CalmHeatmapFit.fit(width: room, weekCount: CalmActivityCalendar.weekCount)
     }
 
     private func heatmap(
         days: [CalmActivityDay], selected: Int, todayIndex: Int, calendar: Calendar, stats: UserStats
     ) -> some View {
-        let cell = cellSize()
-        let step = cell + Self.gap
-        let columns = days.count / 7
+        let fit = fit()
+        let cell = fit.cell
+        let gap = fit.gap
+        let step = cell + gap
+        let allColumns = days.count / 7
+        let columns = min(fit.weeks, allColumns)
+        // When the panel is too narrow for a year, the oldest weeks go.
+        let firstColumn = allColumns - columns
+        let offset = firstColumn * 7
         let months = CalmActivityCalendar.monthLabels(for: days, calendar: calendar)
         let rowLabels = CalmActivityCalendar.weekdayRowLabels(calendar: calendar)
         let wpm = stats.averageWPM
         return HStack(alignment: .top, spacing: Self.labelGap) {
-            VStack(alignment: .leading, spacing: Self.gap) {
+            VStack(alignment: .leading, spacing: gap) {
                 ForEach(0..<7, id: \.self) { row in
                     Text(rowLabels[row])
                         .font(.system(size: 10))
@@ -363,8 +369,8 @@ private struct CalmStreakPanel: View {
             .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: Self.gap) {
-                    ForEach(0..<columns, id: \.self) { column in
+                HStack(spacing: gap) {
+                    ForEach(firstColumn..<allColumns, id: \.self) { column in
                         Text(months[column])
                             .font(.system(size: 10))
                             .foregroundStyle(CalmColor.muted)
@@ -374,9 +380,9 @@ private struct CalmStreakPanel: View {
                 }
                 .accessibilityHidden(true)
 
-                HStack(alignment: .top, spacing: Self.gap) {
-                    ForEach(0..<columns, id: \.self) { column in
-                        VStack(spacing: Self.gap) {
+                HStack(alignment: .top, spacing: gap) {
+                    ForEach(firstColumn..<allColumns, id: \.self) { column in
+                        VStack(spacing: gap) {
                             ForEach(0..<7, id: \.self) { row in
                                 let index = column * 7 + row
                                 let day = days[index]
@@ -393,23 +399,26 @@ private struct CalmStreakPanel: View {
                 .contentShape(Rectangle())
                 .onContinuousHover { phase in
                     switch phase {
-                    case .active(let point): hoveredIndex = index(at: point, step: step, count: days.count)
+                    case .active(let point):
+                        hoveredIndex = index(at: point, step: step, offset: offset, count: days.count)
                     case .ended: hoveredIndex = nil
                     }
                 }
                 .onTapGesture { point in
-                    guard let index = index(at: point, step: step, count: days.count), !days[index].isFuture else { return }
+                    guard let index = index(at: point, step: step, offset: offset, count: days.count),
+                          !days[index].isFuture else { return }
                     selectedIndex = index == todayIndex ? nil : index
                 }
                 .accessibilityElement(children: .ignore)
-                .accessibilityLabel("Dictation activity for the past year")
+                .accessibilityLabel(columns < allColumns
+                    ? "Dictation activity for the past \(columns) weeks" : "Dictation activity for the past year")
                 .accessibilityValue(days.indices.contains(selected)
                     ? days[selected].detail(for: metric, averageWPM: wpm, calendar: calendar) : "")
                 .accessibilityAdjustableAction { direction in
                     let next: Int
                     switch direction {
                     case .increment: next = min(todayIndex, selected + 1)
-                    case .decrement: next = max(0, selected - 1)
+                    case .decrement: next = max(offset, selected - 1)
                     @unknown default: return
                     }
                     selectedIndex = next == todayIndex ? nil : next
@@ -417,19 +426,20 @@ private struct CalmStreakPanel: View {
             }
         }
         .padding(.trailing, -Self.trailingOverhang)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        // minWidth 0 so this measures the panel, not the grid inside it.
+        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
             // The panel's inner width; the grid may use the overhang beyond it.
             if width > 0, abs(width - availableWidth) > 0.5 { availableWidth = width }
         }
     }
 
-    private func index(at point: CGPoint, step: CGFloat, count: Int) -> Int? {
+    private func index(at point: CGPoint, step: CGFloat, offset: Int, count: Int) -> Int? {
         guard point.x >= 0, point.y >= 0 else { return nil }
         let column = Int(point.x / step)
         let row = Int(point.y / step)
         guard row < 7 else { return nil }
-        let index = column * 7 + row
+        let index = offset + column * 7 + row
         return index < count ? index : nil
     }
 }

@@ -56,15 +56,17 @@ enum CalmStyleGroup: String, CaseIterable, Identifiable, Codable, Sendable {
     /// The words are the group's, but a card only gets spoken commands
     /// (“new line”, “bold”, “bullet”) its style turns into formatting, so
     /// none of them shows up as text: Plain types every word as spoken, and
-    /// a command in its sample would read as a mistake.
+    /// a command in its sample would read as a mistake. The three samples
+    /// in a group differ at a glance (a full stop, a line break, bold or
+    /// bullets), not only in a letter.
     func sampleSpeech(for style: WritingStyle) -> String {
         switch (self, style) {
         case (.messages, .chat):
-            return "hey, are you free Thursday? new line I can bring the slides"
+            return "sounds good new line see you Thursday"
         case (.messages, .slack):
-            return "hey, are you free Thursday? new line bold I can bring the slides"
+            return "bold Thursday plan new line bullet slides new line bullet demo"
         case (.messages, _):
-            return "hey, are you free Thursday? I can bring the slides"
+            return "Sure, I can bring the slides on Thursday."
         case (.email, .email), (.email, .chat):
             return "um, hi Sam, new line thanks for the notes. I'll send the draft on Friday"
         case (.email, _):

@@ -86,11 +86,15 @@ final class SettingsWindowManager: ObservableObject {
         // With automatic hosting sizing disabled, attaching the controller
         // can collapse the initial window to its 1-point intrinsic width.
         // Establish the default again before applying a saved frame.
-        window.setContentSize(defaultSize)
+        window.setContentSize(SettingsWindowGeometry.openingContentSize(forVisibleFrame: NSScreen.main?.visibleFrame))
         window.autorecalculatesKeyViewLoop = true
-        if !window.setFrameUsingName("VocaMac.Settings") { window.center() }
+        if !window.setFrameUsingName(SettingsWindowGeometry.frameAutosaveName) { window.center() }
         restoreUsableFrame(window)
-        window.setFrameAutosaveName("VocaMac.Settings")
+        window.setFrameAutosaveName(SettingsWindowGeometry.frameAutosaveName)
+        // The old Settings window's frame is never used again.
+        for name in SettingsWindowGeometry.retiredFrameAutosaveNames {
+            UserDefaults.standard.removeObject(forKey: "NSWindow Frame \(name)")
+        }
         window.isReleasedWhenClosed = false
         window.makeKeyAndOrderFront(nil)
 
@@ -153,7 +157,8 @@ final class SettingsWindowManager: ObservableObject {
     private func restoreUsableFrame(_ window: NSWindow) {
         let screens = NSScreen.screens.map(\.visibleFrame)
         if SettingsWindowGeometry.needsReset(window.frame, screens: screens) {
-            window.setContentSize(SettingsWindowGeometry.defaultContentSize)
+            let screen = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame
+            window.setContentSize(SettingsWindowGeometry.openingContentSize(forVisibleFrame: screen))
             window.center()
         }
     }

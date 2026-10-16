@@ -74,6 +74,62 @@ final class CalmStylesTests: XCTestCase {
         }
     }
 
+    /// Cards in a group must look different at a glance once rendered, not
+    /// only differ by a character the wrapping hides: line count, the last
+    /// character, a capital at the start, bold, code or bullets.
+    func testCardSamplesDifferAtAGlance() {
+        let state = makeState()
+        struct Glance: Hashable {
+            let lines: Int
+            let last: Character?
+            let startsUppercase: Bool
+            let hasBold: Bool
+            let hasCode: Bool
+            let hasBullets: Bool
+        }
+        for group in CalmStyleGroup.allCases {
+            let glances = group.cardStyles.map { style -> Glance in
+                let typed = state.writingStylePreview(group.sampleSpeech(for: style), style: style)
+                let sample = CalmStyleSample(typed, dialect: style.defaultRules.emphasisDialect)
+                let runs = sample.lines.flatMap(\.runs)
+                return Glance(
+                    lines: sample.lines.count,
+                    last: sample.plainText.last,
+                    startsUppercase: sample.plainText.first?.isUppercase ?? false,
+                    hasBold: runs.contains { $0.look == .bold },
+                    hasCode: runs.contains { $0.look == .code },
+                    hasBullets: sample.lines.contains(where: \.isBullet)
+                )
+            }
+            XCTAssertEqual(Set(glances).count, 3, "\(group): \(glances)")
+        }
+        let slack = CalmStyleSample(
+            state.writingStylePreview(CalmStyleGroup.messages.sampleSpeech(for: .slack), style: .slack),
+            dialect: .slackMrkdwn
+        )
+        XCTAssertFalse(slack.plainText.contains("*"), "Slack's bold markers must render, not show: \(slack.plainText)")
+    }
+
+    func testStyleSampleRendersMarkupTheWayTheTargetAppShowsIt() {
+        let slack = CalmStyleSample("*Thursday plan*\n- Slides\n- `demo.key` ", dialect: .slackMrkdwn)
+        XCTAssertEqual(slack.lines, [
+            .init(isBullet: false, runs: [.init(text: "Thursday plan", look: .bold)]),
+            .init(isBullet: true, runs: [.init(text: "Slides")]),
+            .init(isBullet: true, runs: [.init(text: "demo.key", look: .code)]),
+        ])
+        XCTAssertEqual(slack.plainText, "Thursday plan\n• Slides\n• demo.key")
+
+        let markdown = CalmStyleSample("**Groceries** and *more*", dialect: .markdown)
+        XCTAssertEqual(markdown.lines.first?.runs, [
+            .init(text: "Groceries", look: .bold), .init(text: " and "), .init(text: "more", look: .italic),
+        ])
+
+        // Plain text keeps its asterisks, and a lone or spaced one is never markup.
+        XCTAssertEqual(CalmStyleSample("*not bold*", dialect: .none).plainText, "*not bold*")
+        XCTAssertEqual(CalmStyleSample("2 * 3 * 4", dialect: .slackMrkdwn).plainText, "2 * 3 * 4")
+        XCTAssertEqual(CalmStyleSample("a *b", dialect: .slackMrkdwn).plainText, "a *b")
+    }
+
     func testCardSamplesNeverShowSpokenCommands() {
         let state = makeState()
         let commands = ["new line", "new paragraph", "bullet", "bold", "italic"]
@@ -94,7 +150,9 @@ final class CalmStylesTests: XCTestCase {
             state.writingStylePreview(group.sampleSpeech(for: style), style: style)
                 .trimmingCharacters(in: .whitespaces)
         }
-        XCTAssertEqual(sample(.messages, .slack), "Hey, are you free Thursday?\n*I can bring the slides*")
+        XCTAssertEqual(sample(.messages, .plain), "Sure, I can bring the slides on Thursday.")
+        XCTAssertEqual(sample(.messages, .chat), "Sounds good\nSee you Thursday")
+        XCTAssertEqual(sample(.messages, .slack), "*Thursday plan*\n- Slides\n- Demo")
         XCTAssertEqual(sample(.email, .email), "Hi Sam,\nThanks for the notes. I'll send the draft on Friday.")
         XCTAssertEqual(sample(.code, .code), "the fix is in main.swift. can you review it?")
         XCTAssertEqual(sample(.code, .plain), "The fix is in main dot swift. Can you review it?")

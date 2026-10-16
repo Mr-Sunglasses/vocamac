@@ -70,7 +70,9 @@ struct CalmPage<Content: View>: View {
                 VStack(alignment: .leading, spacing: spacing ?? layout.gap) {
                     content
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                // minWidth 0: the column is as wide as the page allows,
+                // whatever its content would like.
+                .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
                 .padding(layout.padding)
                 .frame(maxWidth: layout.maxWidth ?? .infinity)
                 .frame(maxWidth: .infinity)
@@ -632,8 +634,10 @@ enum CalmListRowPadding: Sendable {
     }
 }
 
-/// A list item. Its actions show on hover or while one of them has
-/// keyboard focus; they keep their space either way so text never jumps.
+/// A list item. With `alwaysShowsActions` the actions sit in their own
+/// column. Otherwise they float over the row's top-right corner on hover
+/// or while one of them has keyboard focus, so the text keeps the row's
+/// full width and never jumps.
 ///
 /// ```swift
 /// CalmListRow {
@@ -670,19 +674,47 @@ struct CalmListRow<Content: View, Actions: View>: View {
     }
 
     var body: some View {
-        let showsActions = alwaysShowsActions || isHovered || actionHasFocus
-        HStack(alignment: alignment, spacing: 16) {
-            content
-            HStack(spacing: 2) { actions }
-                .padding(.top, alignment == .top ? -5 : 0)
-                .opacity(showsActions ? 1 : 0)
-                .onPreferenceChange(CalmFocusPresenceKey.self) { actionHasFocus = $0 }
+        Group {
+            if alwaysShowsActions {
+                HStack(alignment: alignment, spacing: 16) {
+                    content
+                    HStack(spacing: 2) { actions }
+                        .padding(.top, alignment == .top ? -5 : 0)
+                }
+                .padding(padding.insets)
+            } else {
+                HStack(alignment: alignment, spacing: 16) { content }
+                    .padding(padding.insets)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .overlay(alignment: alignment == .top ? .topTrailing : .trailing) { floatingActions }
+            }
         }
-        .padding(padding.insets)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(isHovered ? CalmColor.panel : .clear)
         .contentShape(Rectangle())
         .onHover { hoveredForReal = $0 }
+    }
+
+    /// Hover actions on the row's own hover fill, with a short fade on
+    /// their leading edge so the text they cover tucks under them.
+    private var floatingActions: some View {
+        let showsActions = isHovered || actionHasFocus
+        let insets = padding.insets
+        return HStack(spacing: 2) { actions }
+            .padding(.leading, 4)
+            .background(alignment: .leading) {
+                HStack(spacing: 0) {
+                    LinearGradient(colors: [CalmColor.panel.opacity(0), CalmColor.panel], startPoint: .leading, endPoint: .trailing)
+                        .frame(width: 20)
+                    CalmColor.panel
+                }
+                .padding(.leading, -20)
+            }
+            .padding(.top, alignment == .top ? max(0, insets.top - 5) : 0)
+            .padding(.trailing, max(0, insets.trailing - 6))
+            .opacity(showsActions ? 1 : 0)
+            .allowsHitTesting(showsActions)
+            .onPreferenceChange(CalmFocusPresenceKey.self) { actionHasFocus = $0 }
     }
 }
 
@@ -851,6 +883,9 @@ struct CalmFeatureCard<Actions: View>: View {
     private let dismissKey: String?
 
     @AppStorage private var isDismissed: Bool
+    @State private var width: CGFloat = 900
+
+    private var isCompact: Bool { width < CalmMetrics.heroCompactWidth }
 
     /// The bars most pages use.
     static var defaultWave: [CGFloat] { [40, 86, 130, 64, 150, 96, 52] }
@@ -882,9 +917,9 @@ struct CalmFeatureCard<Actions: View>: View {
     }
 
     private var card: some View {
-        VStack(alignment: .leading, spacing: CalmMetrics.heroGap) {
+        VStack(alignment: .leading, spacing: isCompact ? CalmMetrics.heroCompactGap : CalmMetrics.heroGap) {
             title
-                .font(CalmFont.featureTitle)
+                .font(isCompact ? CalmFont.featureTitleCompact : CalmFont.featureTitle)
                 .tracking(-0.48)
                 .foregroundStyle(CalmColor.heroText)
                 .fixedSize(horizontal: false, vertical: true)
@@ -903,8 +938,11 @@ struct CalmFeatureCard<Actions: View>: View {
             }
             HStack(spacing: 8) { actions }
         }
-        .padding(CalmMetrics.heroPadding)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(isCompact ? CalmMetrics.heroCompactPadding : CalmMetrics.heroPadding)
+        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { newWidth in
+            if newWidth > 0, abs(newWidth - width) > 0.5 { width = newWidth }
+        }
         .background(alignment: .trailing) {
             HStack(spacing: 7) {
                 ForEach(Array(waveHeights.enumerated()), id: \.offset) { _, height in
@@ -1137,6 +1175,44 @@ enum CalmHeatLevel {
         case 480..<800: return 3
         default: return 4
         }
+    }
+}
+
+/// How big the heatmap's cells are and how many weeks it shows, so the
+/// grid always fits its panel: 12-point cells 3 apart where there's room,
+/// shrinking to 8-point cells 2 apart, then dropping the oldest weeks.
+struct CalmHeatmapFit: Equatable {
+    var cell: CGFloat
+    var gap: CGFloat
+    /// The most recent weeks to show (at most the weeks given).
+    var weeks: Int
+
+    static let maxCell: CGFloat = 12
+    static let minCell: CGFloat = 8
+    /// Cells smaller than this sit 2 apart instead of 3.
+    static let tightCell: CGFloat = 10
+
+    /// The grid's width for this fit.
+    var width: CGFloat { CGFloat(weeks) * cell + CGFloat(max(0, weeks - 1)) * gap }
+
+    /// Fits `weekCount` columns into `width` points.
+    static func fit(width: CGFloat, weekCount: Int) -> CalmHeatmapFit {
+        let weekCount = max(1, weekCount)
+        func cell(gap: CGFloat, weeks: Int) -> CGFloat {
+            let room = width - CGFloat(weeks - 1) * gap
+            return (room / CGFloat(weeks) * 2).rounded(.down) / 2
+        }
+        let loose = cell(gap: 3, weeks: weekCount)
+        if loose >= tightCell {
+            return CalmHeatmapFit(cell: min(maxCell, loose), gap: 3, weeks: weekCount)
+        }
+        let tight = cell(gap: 2, weeks: weekCount)
+        if tight >= minCell {
+            return CalmHeatmapFit(cell: min(tightCell, tight), gap: 2, weeks: weekCount)
+        }
+        // Too narrow for a year: keep the smallest cell, show fewer weeks.
+        let weeks = Int(((width + 2) / (minCell + 2)).rounded(.down))
+        return CalmHeatmapFit(cell: minCell, gap: 2, weeks: min(weekCount, max(1, weeks)))
     }
 }
 

@@ -135,13 +135,13 @@ private struct CalmSnippetExample: Identifiable {
     var id: String { say }
 
     static let all = [
-        CalmSnippetExample(say: "my address", types: "[Your street address, city]"),
+        CalmSnippetExample(say: "my address", types: "221B Baker Street, London"),
         CalmSnippetExample(say: "standup", types: "Yesterday: … Today: … Blockers: …"),
         CalmSnippetExample(say: "intro email", types: "Hi, thanks for reaching out…"),
     ]
 }
 
-/// “my address” → [Your street address, city] as two hero pills.
+/// “my address” → 221B Baker Street, London as two hero pills.
 private struct CalmSnippetExampleRow: View {
     let example: CalmSnippetExample
 

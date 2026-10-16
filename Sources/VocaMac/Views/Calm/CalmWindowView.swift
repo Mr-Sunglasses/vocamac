@@ -34,6 +34,7 @@ struct CalmWindowView: View {
             HStack(spacing: 0) {
                 CalmSidebar()
                     .frame(width: CalmMetrics.sidebarWidth)
+                    .layoutPriority(1)
                 contentArea
             }
             if navigator.isSettingsPresented {
@@ -64,8 +65,11 @@ struct CalmWindowView: View {
 
     private var contentArea: some View {
         let shape = RoundedRectangle(cornerRadius: CalmMetrics.Radius.content, style: .continuous)
+        // minWidth 0: the content area takes the width left beside the
+        // sidebar and never grows to fit a page, so a wide page can't push
+        // the sidebar off the window.
         return CalmMainPageView(page: navigator.mainPage)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .top)
             .background(CalmColor.content)
             .clipShape(shape)
             .overlay(shape.strokeBorder(CalmColor.line, lineWidth: 1))
@@ -325,6 +329,13 @@ enum CalmSidebarStatus: Equatable {
         var errorActionTitle: String?
     }
 
+    /// The model line without where it runs: “Parakeet Unified · on this
+    /// Mac” → “Parakeet Unified”, for a card too narrow for both.
+    static func shortModelLine(_ line: String) -> String {
+        guard let range = line.range(of: " · ", options: .backwards) else { return line }
+        return String(line[..<range.lowerBound])
+    }
+
     /// A download's progress as the card writes it: “42%”.
     static func percent(_ progress: Double) -> String {
         "\(Int((min(max(progress, 0), 1) * 100).rounded(.down)))%"
@@ -485,7 +496,7 @@ struct CalmStatusCardContent: View {
             switch status {
             case .ready(let verb, let keys, let detail, let paused, let download):
                 if !paused { keyedLine(verb, keys: keys, rest: "and speak.") }
-                statusText(detail)
+                if paused { statusText(detail) } else { modelLine(detail) }
                 if let download {
                     CalmProgressBar(value: download.progress, title: download.title, detail: download.percent)
                         .padding(.top, 8)
@@ -522,6 +533,19 @@ struct CalmStatusCardContent: View {
         default:
             EmptyView()
         }
+    }
+
+    /// “Parakeet Unified · on this Mac” on one line: without “· on this
+    /// Mac” when the whole line doesn't fit, then truncated.
+    private func modelLine(_ text: String) -> some View {
+        ViewThatFits(in: .horizontal) {
+            Text(text).lineLimit(1).fixedSize()
+            Text(CalmSidebarStatus.shortModelLine(text)).lineLimit(1).truncationMode(.tail)
+        }
+        .font(CalmFont.note)
+        .foregroundStyle(CalmColor.muted)
+        .help(text)
+        .accessibilityLabel(text)
     }
 
     private func statusText(_ text: String) -> some View {

@@ -168,6 +168,8 @@ enum CalmFont {
     static let title = Font.system(size: 30, weight: .regular, design: .serif)
     /// Feature (hero) card title: New York 32, line 1.1, tracking −1.5%.
     static let featureTitle = Font.system(size: 32, weight: .regular, design: .serif)
+    /// The feature-card title in a narrow window.
+    static let featureTitleCompact = Font.system(size: 28, weight: .regular, design: .serif)
     /// Serif section title: New York 22, once or twice per page.
     static let sectionSerif = Font.system(size: 22, weight: .regular, design: .serif)
     /// Big number: New York 28 (Home side card, Insights).
@@ -497,4 +499,9 @@ enum CalmMetrics {
 
     static let heroPadding = EdgeInsets(top: 30, leading: 34, bottom: 30, trailing: 34)
     static let heroGap: CGFloat = 14
+    /// Below this width a feature card tightens (the 1080-wide window), so
+    /// it doesn't take half of a short page.
+    static let heroCompactWidth: CGFloat = 780
+    static let heroCompactPadding = EdgeInsets(top: 24, leading: 28, bottom: 24, trailing: 28)
+    static let heroCompactGap: CGFloat = 12
 }

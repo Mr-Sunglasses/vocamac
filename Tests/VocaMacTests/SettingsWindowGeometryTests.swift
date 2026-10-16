@@ -39,4 +39,31 @@ final class SettingsWindowGeometryTests: XCTestCase {
         let second = CGRect(x: 1920, y: 0, width: 1920, height: 1080)
         XCTAssertFalse(SettingsWindowGeometry.needsReset(CGRect(x: 2400, y: 200, width: 1240, height: 800), screens: [screen, second]))
     }
+
+    func testV3WindowDoesNotReuseTheOldSettingsFrame() {
+        // The old window saved 1080 × 740 under this name; the v3 window
+        // must start fresh at the default size.
+        XCTAssertNotEqual(SettingsWindowGeometry.frameAutosaveName, "VocaMac.Settings")
+        XCTAssertTrue(SettingsWindowGeometry.retiredFrameAutosaveNames.contains("VocaMac.Settings"))
+        XCTAssertFalse(SettingsWindowGeometry.retiredFrameAutosaveNames.contains(SettingsWindowGeometry.frameAutosaveName))
+    }
+
+    func testOpensAtTheDefaultSizeOnARoomyScreen() {
+        XCTAssertEqual(
+            SettingsWindowGeometry.openingContentSize(forVisibleFrame: CGRect(x: 0, y: 0, width: 1728, height: 1079)),
+            SettingsWindowGeometry.defaultContentSize
+        )
+        XCTAssertEqual(SettingsWindowGeometry.openingContentSize(forVisibleFrame: nil), SettingsWindowGeometry.defaultContentSize)
+    }
+
+    func testOpeningSizeShrinksToFitASmallScreenButNotBelowTheMinimum() {
+        let small = SettingsWindowGeometry.openingContentSize(forVisibleFrame: CGRect(x: 0, y: 0, width: 1280, height: 775))
+        XCTAssertEqual(small.width, 1200)
+        XCTAssertEqual(small.height, 740)
+        let tiny = SettingsWindowGeometry.openingContentSize(forVisibleFrame: CGRect(x: 0, y: 0, width: 1024, height: 640))
+        XCTAssertEqual(tiny, SettingsWindowGeometry.minimumContentSize)
+        // A size it opens at is never one the frame check would reset.
+        let frame = CGRect(origin: CGPoint(x: 40, y: 0), size: small)
+        XCTAssertFalse(SettingsWindowGeometry.needsReset(frame, screens: [CGRect(x: 0, y: 0, width: 1280, height: 775)]))
+    }
 }

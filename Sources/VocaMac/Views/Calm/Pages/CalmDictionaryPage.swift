@@ -120,7 +120,8 @@ struct CalmDictionaryPage: View {
                 + "Words you correct after dictating show up here as suggestions.",
             waveHeights: [40, 86, 130, 64, 150, 96, 52, 110, 30]
         ) {
-            HStack(spacing: 8) {
+            // Wraps: suggested words can be long and the window narrow.
+            FlowLayout(spacing: 8) {
                 Button("Add a word") { editor = .add(.word) }
                     .calmButton(.heroPrimary)
                 ForEach(Array(shown)) { suggestion in

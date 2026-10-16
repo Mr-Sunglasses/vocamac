@@ -263,6 +263,13 @@ final class CalmSidebarStatusTests: XCTestCase {
         )
     }
 
+    func testModelLineCanDropWhereItRuns() {
+        // The card drops “· on this Mac” before it lets the line wrap.
+        XCTAssertEqual(CalmSidebarStatus.shortModelLine("Parakeet Unified · on this Mac"), "Parakeet Unified")
+        XCTAssertEqual(CalmSidebarStatus.shortModelLine("Parakeet v3 · on your server"), "Parakeet v3")
+        XCTAssertEqual(CalmSidebarStatus.shortModelLine("On this Mac"), "On this Mac")
+    }
+
     func testMissingModelOffersAFix() {
         guard case .error(_, _, let action) = CalmSidebarStatus.resolve(inputs(readiness: .needsModel)) else {
             return XCTFail("a missing model is an error with a fix")

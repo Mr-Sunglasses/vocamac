@@ -18,17 +18,30 @@ struct CalmHomePage: View {
     @State private var query = ""
     @FocusState private var isSearchFocused: Bool
 
+    @State private var columnWidth: CGFloat = 844
+
     private var trimmedQuery: String { query.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    /// The side column's width and the gap before it: the design's 250 / 24
+    /// once the page column is 800 wide, narrower below that so the feed
+    /// keeps room for its text.
+    static func sideLayout(for columnWidth: CGFloat) -> (width: CGFloat, gap: CGFloat) {
+        columnWidth >= 800 ? (250, 24) : (224, 20)
+    }
 
     var body: some View {
         CalmPage(.list) {
             CalmPageHeader("Welcome back") { searchControl }
-            HStack(alignment: .top, spacing: 24) {
+            HStack(alignment: .top, spacing: Self.sideLayout(for: columnWidth).gap) {
                 CalmHomeFeed(query: trimmedQuery, player: player) { query = "" }
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
                     .settingsTarget("history")
                 CalmHomeSideColumn()
-                    .frame(width: 250)
+                    .frame(width: Self.sideLayout(for: columnWidth).width)
+            }
+            .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
+                if width > 0, abs(width - columnWidth) > 0.5 { columnWidth = width }
             }
         }
         .onDisappear { player.stop() }
