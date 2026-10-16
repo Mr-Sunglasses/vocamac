@@ -44,6 +44,13 @@ struct CalmWindowView: View {
             }
         }
         .animation(.easeOut(duration: 0.18), value: navigator.isSettingsPresented)
+        // Behind a dialog, nothing answers Tab, VoiceOver or a click: the
+        // scrim only stopped the mouse, so a row under the dialog could
+        // still be focused or pressed and open a second dialog. The scrim
+        // already dims it, so skip the controls' own disabled dimming.
+        .disabled(isDialogPresented)
+        .environment(\.calmDimsWhenDisabled, !isDialogPresented)
+        .accessibilityHidden(isDialogPresented)
         .calmDialogHost()
         .onPreferenceChange(CalmDialogPresenceKey.self) { isDialogPresented = $0 }
         .background(CalmColor.frame)

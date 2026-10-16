@@ -253,12 +253,21 @@ private struct CalmDialogPresenter<Dialog: View>: ViewModifier {
 
     func body(content: Content) -> some View {
         let binding = $isPresented
+        let shows = isPresented
+        let entryID = id
+        let dialog = dialog
+        // `transformPreference`, not `preference`: a view with several
+        // `.calmDialog` modifiers (or a page whose rows present their own)
+        // must keep the entries from inside it. `.preference` replaces
+        // them, so only the outermost dialog could ever open.
         content
-            .preference(
-                key: CalmDialogStackKey.self,
-                value: isPresented ? [CalmDialogEntry(id: id, content: AnyView(dialog()), dismiss: { binding.wrappedValue = false })] : []
-            )
-            .preference(key: CalmDialogPresenceKey.self, value: isPresented)
+            .transformPreference(CalmDialogStackKey.self) { entries in
+                guard shows else { return }
+                entries.append(CalmDialogEntry(id: entryID, content: AnyView(dialog()), dismiss: { binding.wrappedValue = false }))
+            }
+            .transformPreference(CalmDialogPresenceKey.self) { value in
+                value = value || shows
+            }
     }
 }
 
