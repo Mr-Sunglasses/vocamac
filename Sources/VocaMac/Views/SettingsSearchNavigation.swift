@@ -49,24 +49,8 @@ private struct SettingsSearchTarget: ViewModifier {
     }
 }
 
-private struct SettingsSearchReveal: ViewModifier {
-    let ids: [String]
-    @Binding var expanded: Bool
-    @Environment(\.settingsSearchTarget) private var selected
-
-    func body(content: Content) -> some View {
-        content.onChange(of: selected, initial: true) { _, target in
-            if let target, ids.contains(target) { expanded = true }
-        }
-    }
-}
-
 extension View {
     func settingsTarget(_ id: String, aliases: [String] = []) -> some View {
         modifier(SettingsSearchTarget(ids: [id] + aliases))
-    }
-
-    func revealSettingsTargets(_ ids: [String], expanded: Binding<Bool>) -> some View {
-        modifier(SettingsSearchReveal(ids: ids, expanded: expanded))
     }
 }

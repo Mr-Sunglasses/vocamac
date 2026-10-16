@@ -209,7 +209,7 @@ struct CalmStylesPage: View {
         let selected = appState.calmStyle(for: group)
         return CalmGroup("Used in") {
             VStack(alignment: .leading, spacing: 10) {
-                CalmStylesFlowLayout(spacing: 8, lineSpacing: 8) {
+                FlowLayout(spacing: 8) {
                     if group == .everythingElse {
                         CalmStylesStaticChip(title: "All other apps")
                     }

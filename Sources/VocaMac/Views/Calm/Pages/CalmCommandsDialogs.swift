@@ -399,7 +399,7 @@ struct CalmCommandsHowItWorksDialog: View {
             }
             VStack(alignment: .leading, spacing: 10) {
                 Text("Things to try").calmType(.caption).foregroundStyle(CalmColor.muted)
-                CalmCommandsFlow(spacing: 6) {
+                FlowLayout(spacing: 6) {
                     ForEach(CalmCommandsText.moreExamples, id: \.self) { example in
                         Text("“\(example)”")
                             .font(CalmFont.description.italic())

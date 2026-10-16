@@ -8,6 +8,7 @@ import SwiftUI
 
 extension Notification.Name {
     static let vocaOpenURL = Notification.Name("com.vocamac.open-url")
+    static let showOnboarding = Notification.Name("com.vocamac.showOnboarding")
 }
 
 final class VocaApplicationDelegate: NSObject, NSApplicationDelegate {

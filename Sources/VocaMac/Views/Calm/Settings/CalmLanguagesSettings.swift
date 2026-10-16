@@ -39,7 +39,7 @@ struct CalmLanguagesSettings: View {
     private var youSpeakPanel: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("You speak").calmType(.rowTitle)
-            CalmLanguageFlow(spacing: 8) {
+            FlowLayout(spacing: 8) {
                 ForEach(spokenLanguages, id: \.self) { code in
                     CalmLanguageChip(name: SpokenLanguages.displayName(for: code)) {
                         appState.setSpokenLanguages(spokenLanguages.filter { $0 != code })
@@ -258,57 +258,5 @@ struct CalmAddChipLabel: View {
         .overlay(shape.strokeBorder(CalmColor.line2, lineWidth: 1.5))
         .contentShape(shape)
         .onHover { isHovered = $0 }
-    }
-}
-
-/// Lays chips out left to right, wrapping onto new lines.
-struct CalmLanguageFlow: Layout {
-    var spacing: CGFloat = 8
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let rows = arrange(width: proposal.width ?? .infinity, subviews: subviews)
-        let height = rows.last.map { $0.y + $0.height } ?? 0
-        let width = rows.map(\.width).max() ?? 0
-        return CGSize(width: proposal.width ?? width, height: height)
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        let rows = arrange(width: bounds.width, subviews: subviews)
-        for row in rows {
-            var x = bounds.minX
-            for index in row.indices {
-                let size = subviews[index].sizeThatFits(.unspecified)
-                subviews[index].place(
-                    at: CGPoint(x: x, y: bounds.minY + row.y + (row.height - size.height) / 2),
-                    proposal: ProposedViewSize(size)
-                )
-                x += size.width + spacing
-            }
-        }
-    }
-
-    private struct Row {
-        var indices: [Int] = []
-        var y: CGFloat = 0
-        var width: CGFloat = 0
-        var height: CGFloat = 0
-    }
-
-    private func arrange(width: CGFloat, subviews: Subviews) -> [Row] {
-        var rows: [Row] = []
-        var current = Row()
-        for index in subviews.indices {
-            let size = subviews[index].sizeThatFits(.unspecified)
-            let needed = current.indices.isEmpty ? size.width : current.width + spacing + size.width
-            if !current.indices.isEmpty, needed > width {
-                rows.append(current)
-                current = Row(y: current.y + current.height + spacing)
-            }
-            current.width = current.indices.isEmpty ? size.width : current.width + spacing + size.width
-            current.height = max(current.height, size.height)
-            current.indices.append(index)
-        }
-        if !current.indices.isEmpty { rows.append(current) }
-        return rows
     }
 }

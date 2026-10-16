@@ -6,6 +6,8 @@
 // to copy.
 
 import AppKit
+import CoreImage
+import CoreImage.CIFilterBuiltins
 import SwiftUI
 
 /// The pairing dialog (Dialogs board, “Phone gateway”): 460 wide, a QR
@@ -89,5 +91,25 @@ struct CalmGatewayPairDialog: View {
             try? await Task.sleep(for: .seconds(1.5))
             copied = false
         }
+    }
+}
+
+// MARK: - QR helper
+
+enum GatewayQRCodeImage {
+    static func make(from string: String) -> NSImage? {
+        let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        let context = CIContext()
+        let filter = CIFilter.qrCodeGenerator()
+        filter.message = Data(trimmed.utf8)
+        filter.correctionLevel = "M"
+        guard let output = filter.outputImage else { return nil }
+
+        let scale: CGFloat = 12
+        let scaled = output.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        guard let cgImage = context.createCGImage(scaled, from: scaled.extent) else { return nil }
+        return NSImage(cgImage: cgImage, size: NSSize(width: scaled.extent.width, height: scaled.extent.height))
     }
 }
