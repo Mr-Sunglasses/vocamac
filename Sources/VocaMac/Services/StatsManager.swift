@@ -145,6 +145,14 @@ class StatsManager: StatsManaging, ObservableObject {
             updatedStats.dailyTranscriptionCounts[dateKey, default: 0],
             1
         )
+        let audioSeconds = transcription.audioLengthSeconds
+        if audioSeconds.isFinite, audioSeconds > 0 {
+            updatedStats.dailyAudioSeconds[dateKey] = addingDuration(
+                audioSeconds,
+                to: updatedStats.dailyAudioSeconds[dateKey, default: 0]
+            )
+            updatedStats.longestDictationSeconds = max(updatedStats.longestDictationSeconds, audioSeconds)
+        }
         updatedStats.timeZoneIdentifier = statisticsTimeZone.identifier
 
         if updatedStats.lastUsageDate.map({ transcription.timestamp > $0 }) ?? true {
