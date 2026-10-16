@@ -196,6 +196,9 @@ protocol CursorOverlayManaging: AnyObject {
     func setControlActions(stop: @escaping @MainActor () -> Void, cancel: @escaping @MainActor () -> Void)
     /// Whether Escape cancels, so the overlay only offers it when it does.
     func setEscapeHintVisible(_ visible: Bool)
+    /// How this dictation ends ("Let go of Right ⌥ to type"), and whether it
+    /// carries on after the key is let go. `show` resets it.
+    func setStopHint(_ hint: OverlayStopHint?)
 }
 
 extension CursorOverlayManaging {
@@ -205,6 +208,7 @@ extension CursorOverlayManaging {
     func transitionToCleaningUp() {}
     func setControlActions(stop: @escaping @MainActor () -> Void, cancel: @escaping @MainActor () -> Void) {}
     func setEscapeHintVisible(_ visible: Bool) {}
+    func setStopHint(_ hint: OverlayStopHint?) {}
 }
 
 // MARK: - ModelManaging

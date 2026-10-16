@@ -366,3 +366,30 @@ final class AppStateDictationFeedbackTests: XCTestCase {
         await appState.cancelRecording()
     }
 }
+
+// MARK: - Overlay Stop Hint
+
+@MainActor
+final class OverlayStopHintStateTests: XCTestCase {
+
+    func testHintFollowsTheActivationModeAndKey() {
+        let (state, _) = AppState.makeTestState()
+        let savedMode = state.activationMode
+        let savedKey = state.hotKeyCode
+        let savedModifiers = state.hotKeyModifiers
+        defer {
+            state.activationMode = savedMode
+            state.hotKeyCode = savedKey
+            state.hotKeyModifiers = savedModifiers
+        }
+        state.hotKeyCode = 61
+        state.hotKeyModifiers = []
+
+        state.activationMode = .pushToTalk
+        XCTAssertEqual(state.overlayStopHint, .hold(key: "Right ⌥"))
+
+        state.activationMode = .doubleTapToggle
+        XCTAssertEqual(state.overlayStopHint, .doubleTap(key: "Right ⌥"))
+        XCTAssertTrue(state.overlayStopHint.isHandsFree)
+    }
+}
