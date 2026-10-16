@@ -793,33 +793,42 @@ struct CalmTextField: View {
     }
 }
 
-/// A labelled multi-line field that grows from 88 points.
+/// A labelled multi-line field: 88 points tall when short, growing with
+/// its text up to `maxHeight`, then scrolling. It never takes more height
+/// than its text needs, so it can sit in a dialog that offers the whole
+/// window.
 struct CalmTextEditor: View {
     let label: String?
     @Binding var text: String
     var prompt: String = ""
     var minHeight: CGFloat = CalmMetrics.multilineFieldMinHeight
+    var maxHeight: CGFloat = CalmMetrics.multilineFieldMaxHeight
     var error: String?
     var focus: FocusState<Bool>.Binding?
 
     @FocusState private var ownFocus: Bool
+    @State private var contentHeight: CGFloat = 0
     @Environment(\.calmPreviewInteraction) private var forced
     @Environment(\.isEnabled) private var isEnabled
 
     init(
         _ label: String?, text: Binding<String>, prompt: String = "",
-        minHeight: CGFloat = CalmMetrics.multilineFieldMinHeight, error: String? = nil,
-        focus: FocusState<Bool>.Binding? = nil
+        minHeight: CGFloat = CalmMetrics.multilineFieldMinHeight,
+        maxHeight: CGFloat = CalmMetrics.multilineFieldMaxHeight,
+        error: String? = nil, focus: FocusState<Bool>.Binding? = nil
     ) {
         self.label = label
         _text = text
         self.prompt = prompt
         self.minHeight = minHeight
+        self.maxHeight = max(minHeight, maxHeight)
         self.error = error
         self.focus = focus
     }
 
     private var focusBinding: FocusState<Bool>.Binding { focus ?? $ownFocus }
+
+    private var height: CGFloat { min(max(contentHeight, minHeight), maxHeight) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -834,7 +843,8 @@ struct CalmTextEditor: View {
                 .focused(focusBinding)
                 .padding(.horizontal, 7)
                 .padding(.vertical, 8)
-                .frame(minHeight: minHeight, alignment: .topLeading)
+                .frame(height: height, alignment: .topLeading)
+                .background(alignment: .topLeading) { sizer }
                 .overlay(alignment: .topLeading) {
                     if text.isEmpty {
                         Text(prompt)
@@ -852,6 +862,23 @@ struct CalmTextEditor: View {
             }
         }
         .calmDisabledDimming()
+    }
+
+    /// The text laid out the way the editor lays it out, unseen, to measure
+    /// how tall the field should be. The trailing space keeps a final
+    /// empty line (after Return) counted.
+    private var sizer: some View {
+        Text((text.isEmpty ? prompt : text) + " ")
+            .font(CalmFont.field)
+            .lineSpacing(3)
+            .padding(.horizontal, 12)
+            .padding(.top, 10)
+            .padding(.bottom, 12)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .fixedSize(horizontal: false, vertical: true)
+            .hidden()
+            .accessibilityHidden(true)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
     }
 }
 

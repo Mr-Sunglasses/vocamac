@@ -27,8 +27,7 @@ struct CalmCleanupTryDialog: View {
             width: CalmMetrics.dialogListWidth
         ) {
             VStack(alignment: .leading, spacing: 14) {
-                CalmTextEditor(nil, text: $text, prompt: "um so I think we should…")
-                    .frame(height: 96)
+                CalmTextEditor(nil, text: $text, prompt: "um so I think we should…", maxHeight: 160)
                 if isRunning {
                     HStack(spacing: 6) {
                         CalmSpinner(size: 14, weight: 2.4)
@@ -107,8 +106,7 @@ struct CalmCleanupPromptDialog: View {
                         tone: .warning
                     )
                 }
-                CalmTextEditor(nil, text: $draft, prompt: "Instructions for the cleanup model")
-                    .frame(height: 260)
+                CalmTextEditor(nil, text: $draft, prompt: "Instructions for the cleanup model", minHeight: 160, maxHeight: 260)
                 Text("About \(max(0, budget)) English characters of speech fit per pass")
                     .font(CalmFont.note)
                     .foregroundStyle(CalmColor.muted)

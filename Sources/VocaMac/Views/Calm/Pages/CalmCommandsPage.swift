@@ -51,7 +51,7 @@ struct CalmCommandsPage: View {
         }
         .calmDialog(item: $dialog) { dialog in
             switch dialog {
-            case .shortcut: CalmCommandShortcutDialog(current: appState.shortcut(for: .commandMode))
+            case .shortcut: CalmShortcutRecorderDialog(target: .commandMode, current: appState.shortcut(for: .commandMode))
             case .command(let draft): CalmSavedCommandDialog(draft: draft)
             case .voiceShortcuts: CalmVoiceShortcutsDialog(text: appState.voiceActionShortcuts)
             case .howItWorks: CalmCommandsHowItWorksDialog()
@@ -86,7 +86,8 @@ struct CalmCommandsPage: View {
         CalmFeatureCard(
             dismissKey: nil,
             title: Text("Select text. Say what to change."),
-            message: CalmCommandsText.heroMessage(review: appState.commandModeReview)
+            message: CalmCommandsText.heroMessage(review: appState.commandModeReview),
+            waveHeights: [60, 100, 150, 90, 120, 44]
         ) {
             VStack(alignment: .leading, spacing: 18) {
                 FlowLayout(spacing: 8) {
@@ -151,7 +152,6 @@ struct CalmCommandsPage: View {
             }
 
             modelRow(status: status)
-                .settingsTarget("command-mode-model", aliases: ["command-mode-share"])
         }
     }
 
@@ -162,7 +162,7 @@ struct CalmCommandsPage: View {
                 if case .downloading(let kind, let progress) = status {
                     CalmProgressBar(
                         value: progress,
-                        title: "Downloading \(CalmCommandsText.modelName(kind))",
+                        title: "Downloading \(CalmModelText.name(kind))",
                         detail: "\(Int((progress * 100).rounded()))%"
                     )
                     .frame(maxWidth: 360)
@@ -214,7 +214,7 @@ private struct CalmCommandsStatusPanel: View {
         case .needsDownload(let kind):
             CalmPanel {
                 CalmStatusRow(
-                    "\(CalmCommandsText.modelName(kind)) isn’t downloaded yet",
+                    "\(CalmModelText.name(kind)) isn’t downloaded yet",
                     description: "Command Mode needs it to edit text. It’s \(kind.descriptor.sizeDescription.replacingOccurrences(of: "~", with: "about ")) and runs on this Mac.",
                     tone: .warning
                 ) {

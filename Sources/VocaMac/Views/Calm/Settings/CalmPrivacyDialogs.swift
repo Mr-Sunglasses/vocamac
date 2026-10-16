@@ -55,7 +55,7 @@ struct CalmExcludedAppsDialog: View {
                     CalmList {
                         ForEach(appState.historyExcludedApps) { app in
                             CalmListRow(padding: .compact, alignment: .center, alwaysShowsActions: true) {
-                                CalmPrivacyAppTile(name: app.displayName)
+                                CalmAppTile(name: app.displayName)
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(app.displayName).font(CalmFont.body).foregroundStyle(CalmColor.ink)
                                     if let detail = app.bundleIdentifier ?? app.processName {
@@ -121,7 +121,7 @@ struct CalmExcludedAppsDialog: View {
     private func appChoice(_ app: RunningAppSnapshot) -> some View {
         Button { picked = app } label: {
             HStack(spacing: 12) {
-                CalmPrivacyAppTile(name: app.displayName)
+                CalmAppTile(name: app.displayName)
                 Text(app.displayName).font(CalmFont.body).foregroundStyle(CalmColor.ink)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 if picked == app {
@@ -163,19 +163,5 @@ struct CalmExcludedAppsDialog: View {
         search = ""
         picked = nil
         step = .add
-    }
-}
-
-/// A 28-point tile with an app's first letter, as in the Add app dialog.
-struct CalmPrivacyAppTile: View {
-    let name: String
-
-    var body: some View {
-        Text(name.first.map { String($0).uppercased() } ?? "?")
-            .font(.system(size: 12, weight: .bold))
-            .foregroundStyle(CalmColor.ink2)
-            .frame(width: 28, height: 28)
-            .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(CalmColor.panel2))
-            .accessibilityHidden(true)
     }
 }

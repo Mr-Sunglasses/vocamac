@@ -117,7 +117,8 @@ struct CalmDictionaryPage: View {
             dismissKey: Self.heroKey,
             title: Text("VocaMac spells the way ") + Text("you").italic() + Text(" do."),
             message: "Add names, product words and jargon so they come out right every time. "
-                + "Words you correct after dictating show up here as suggestions."
+                + "Words you correct after dictating show up here as suggestions.",
+            waveHeights: [40, 86, 130, 64, 150, 96, 52, 110, 30]
         ) {
             HStack(spacing: 8) {
                 Button("Add a word") { editor = .add(.word) }
@@ -135,9 +136,7 @@ struct CalmDictionaryPage: View {
                     .help("See every suggested word")
                 }
             }
-            // The design's 4 above the chips, plus the 2.5 its 1.5 line
-            // height adds under the message, which SwiftUI text leaves out.
-            .padding(.top, 6.5)
+            .padding(.top, 4)
         }
     }
 

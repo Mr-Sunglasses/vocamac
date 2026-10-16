@@ -21,8 +21,7 @@ struct CalmModelDetailsDialog: View {
     let onUse: () -> Void
 
     var body: some View {
-        let shape = RoundedRectangle(cornerRadius: CalmMetrics.Radius.dialog, style: .continuous)
-        VStack(alignment: .leading, spacing: CalmMetrics.dialogGap) {
+        CalmDialog(name, width: 400) {
             HStack(spacing: 12) {
                 CalmLogo(logo, box: 40)
                 VStack(alignment: .leading, spacing: 2) {
@@ -31,6 +30,7 @@ struct CalmModelDetailsDialog: View {
                     Text(origin).calmType(.description)
                 }
             }
+        } content: {
             Grid(alignment: .topLeading, horizontalSpacing: 12, verticalSpacing: 8) {
                 ForEach(Array(facts.enumerated()), id: \.offset) { _, fact in
                     GridRow {
@@ -41,20 +41,13 @@ struct CalmModelDetailsDialog: View {
                 }
             }
             .font(CalmFont.description)
+        } footer: {
             if canUse {
                 CalmDialogFooter(primaryTitle: "Use this model", cancelTitle: "Close", onPrimary: onUse)
             } else {
                 CalmDialogFooter(primaryTitle: "Close", primaryKind: .secondary, cancelTitle: nil) {}
             }
         }
-        .padding(CalmMetrics.dialogPadding)
-        .frame(width: 400, alignment: .leading)
-        .background(shape.fill(CalmColor.content))
-        .overlay(shape.strokeBorder(CalmColor.line2, lineWidth: 1))
-        .shadow(color: .black.opacity(0.22), radius: 30, y: 24)
-        .accessibilityElement(children: .contain)
-        .accessibilityAddTraits(.isModal)
-        .accessibilityLabel(name)
     }
 }
 

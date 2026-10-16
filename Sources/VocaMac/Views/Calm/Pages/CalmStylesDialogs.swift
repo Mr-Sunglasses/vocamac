@@ -144,9 +144,9 @@ struct CalmStylesAddDialog: View {
         HStack(spacing: 12) {
             switch row {
             case .website(let host):
-                CalmStylesAppIcon(name: host, bundleIdentifier: nil)
+                CalmAppTile(name: host)
             case .app(let app):
-                CalmStylesAppIcon(name: app.displayName, bundleIdentifier: app.bundleIdentifier)
+                CalmAppTile(name: app.displayName, bundleIdentifier: app.bundleIdentifier)
             }
             Text(row.name)
                 .font(CalmFont.body)

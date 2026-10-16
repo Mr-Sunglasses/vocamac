@@ -149,7 +149,7 @@ struct CalmGeneralSettings: View {
                 target: target, current: dictationCombo,
                 mode: appState.activationMode, threshold: appState.doubleTapThreshold
             )
-        case .handsFree, .pasteLast:
+        case .handsFree, .pasteLast, .commandMode:
             CalmShortcutRecorderDialog(target: target, current: target.action.flatMap { appState.shortcut(for: $0) })
         }
     }

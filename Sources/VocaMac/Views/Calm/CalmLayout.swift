@@ -846,14 +846,23 @@ struct CalmFeatureCard<Actions: View>: View {
     let title: Text
     let message: String?
     let actions: Actions
+    /// The decorative bars on the right, as each page draws them.
+    let waveHeights: [CGFloat]
     private let dismissKey: String?
 
     @AppStorage private var isDismissed: Bool
 
-    init(dismissKey: String?, title: Text, message: String?, @ViewBuilder actions: () -> Actions) {
+    /// The bars most pages use.
+    static var defaultWave: [CGFloat] { [40, 86, 130, 64, 150, 96, 52] }
+
+    init(
+        dismissKey: String?, title: Text, message: String?,
+        waveHeights: [CGFloat] = Self.defaultWave, @ViewBuilder actions: () -> Actions
+    ) {
         self.dismissKey = dismissKey
         self.title = title
         self.message = message
+        self.waveHeights = waveHeights
         self.actions = actions()
         _isDismissed = AppStorage(wrappedValue: false, Self.storageKey(dismissKey ?? "always"))
     }
@@ -882,9 +891,12 @@ struct CalmFeatureCard<Actions: View>: View {
                 .padding(.trailing, dismissKey == nil ? 0 : 30)
                 .accessibilityAddTraits(.isHeader)
             if let message {
+                // 14.5 on a 1.5 line: SwiftUI adds the extra only between
+                // lines, so the half-leading above and below is padding.
                 Text(message)
                     .font(CalmFont.heroBody)
-                    .lineSpacing(3.5)
+                    .lineSpacing(4.5)
+                    .padding(.vertical, 2.2)
                     .foregroundStyle(CalmColor.heroText.opacity(0.86))
                     .frame(maxWidth: 560, alignment: .leading)
                     .fixedSize(horizontal: false, vertical: true)
@@ -895,10 +907,10 @@ struct CalmFeatureCard<Actions: View>: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(alignment: .trailing) {
             HStack(spacing: 7) {
-                ForEach(Array([40, 86, 130, 64, 150, 96, 52].enumerated()), id: \.offset) { _, height in
+                ForEach(Array(waveHeights.enumerated()), id: \.offset) { _, height in
                     RoundedRectangle(cornerRadius: 4)
                         .fill(CalmColor.heroText.opacity(0.09))
-                        .frame(width: 7, height: CGFloat(height))
+                        .frame(width: 7, height: height)
                 }
             }
             .padding(.trailing, 28)
@@ -922,8 +934,8 @@ struct CalmFeatureCard<Actions: View>: View {
 }
 
 extension CalmFeatureCard where Actions == EmptyView {
-    init(dismissKey: String?, title: Text, message: String?) {
-        self.init(dismissKey: dismissKey, title: title, message: message) { EmptyView() }
+    init(dismissKey: String?, title: Text, message: String?, waveHeights: [CGFloat] = Self.defaultWave) {
+        self.init(dismissKey: dismissKey, title: title, message: message, waveHeights: waveHeights) { EmptyView() }
     }
 }
 

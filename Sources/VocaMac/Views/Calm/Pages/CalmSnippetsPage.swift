@@ -87,7 +87,8 @@ struct CalmSnippetsPage: View {
             dismissKey: "snippets",
             title: Text("Say a word, get the whole thing."),
             message: "Save text you type often, like an address, an intro or a standup template. "
-                + "Say its name while dictating and VocaMac types the full text."
+                + "Say its name while dictating and VocaMac types the full text.",
+            waveHeights: [50, 120, 80, 160, 70, 110, 40]
         ) {
             VStack(alignment: .leading, spacing: 0) {
                 VStack(alignment: .leading, spacing: 8) {
@@ -95,9 +96,7 @@ struct CalmSnippetsPage: View {
                         CalmSnippetExampleRow(example: example)
                     }
                 }
-                // The design's 2, plus the 2.5 its 1.5 line height adds
-                // under the message, which SwiftUI text leaves out.
-                .padding(.top, 4.5)
+                .padding(.top, 2)
                 Button("Add a snippet") { editor = .add }
                     .calmButton(.heroPrimary)
                     .padding(.top, 20)

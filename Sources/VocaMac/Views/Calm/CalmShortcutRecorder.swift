@@ -1,9 +1,11 @@
-// CalmGeneralShortcutDialog.swift
+// CalmShortcutRecorder.swift
 // VocaMac
 //
 // The shortcut recorder (Dialogs board): one dialog for the dictation key,
-// the hands-free shortcut and Paste last dictation. States: waiting (accent
-// ring, pulsing), captured, conflict (amber, Save disabled).
+// the hands-free shortcut, Paste last dictation and the Command Mode
+// shortcut. States: waiting (accent ring, pulsing), captured, conflict
+// (amber, Save disabled). Also the key box and the hidden key capture the
+// saved-command dialog's inline recorder reuses.
 
 import CoreGraphics
 import SwiftUI
@@ -13,6 +15,8 @@ enum CalmShortcutTarget: String, Identifiable, Sendable {
     case dictationKey
     case handsFree
     case pasteLast
+    /// Saving keys turns Command Mode on; Turn off clears them.
+    case commandMode
 
     var id: String { rawValue }
 
@@ -22,6 +26,7 @@ enum CalmShortcutTarget: String, Identifiable, Sendable {
         case .dictationKey: return nil
         case .handsFree: return .handsFreeToggle
         case .pasteLast: return .pasteLastDictation
+        case .commandMode: return .commandMode
         }
     }
 
@@ -30,6 +35,7 @@ enum CalmShortcutTarget: String, Identifiable, Sendable {
         case .dictationKey: return "Dictation key"
         case .handsFree: return "Hands-free shortcut"
         case .pasteLast: return "Paste last dictation"
+        case .commandMode: return "Command Mode shortcut"
         }
     }
 }
@@ -50,6 +56,8 @@ struct CalmShortcutRecorderDialog: View {
     /// Drives the hidden key capture; true while the recorder listens.
     @State private var isCapturing = false
     @State private var listenerWasRunning = false
+    /// Whether a shortcut was saved when the dialog opened.
+    private let hadShortcut: Bool
 
     /// - Parameters:
     ///   - current: The shortcut saved now (nil when unset).
@@ -66,6 +74,7 @@ struct CalmShortcutRecorderDialog: View {
         _mode = State(initialValue: mode)
         _threshold = State(initialValue: threshold)
         _isWaiting = State(initialValue: startsWaiting)
+        hadShortcut = current != nil
     }
 
     var body: some View {
@@ -88,17 +97,7 @@ struct CalmShortcutRecorderDialog: View {
             }
         }
         .background {
-            // The recorder itself: an event tap while `isCapturing` is on.
-            HotKeyRecorderButton(
-                isRecording: $isCapturing,
-                onStart: {},
-                onCancel: captureCancelled,
-                onKeyRecorded: captured
-            )
-            .frame(width: 0, height: 0)
-            .opacity(0)
-            .disabled(true)
-            .accessibilityHidden(true)
+            CalmKeyCapture(isCapturing: $isCapturing, onCancel: captureCancelled, onCapture: captured)
         }
         .onAppear { if isWaiting { startWaiting() } }
         .onDisappear { stopCapture() }
@@ -114,6 +113,7 @@ struct CalmShortcutRecorderDialog: View {
                 : "Double-tap this key to talk. Pick one you don’t use for anything else."
         case .handsFree: return "Press once to start, again to stop."
         case .pasteLast: return "Types your last dictation again."
+        case .commandMode: return "Press it once, speak, and press it again. Or hold it while you speak."
         }
     }
 
@@ -154,7 +154,7 @@ struct CalmShortcutRecorderDialog: View {
                     }
                 } else {
                     Text("No shortcut yet").font(.system(size: 14)).foregroundStyle(CalmColor.muted)
-                    Text("Press to record one").font(.system(size: 12)).foregroundStyle(CalmColor.muted)
+                    Text("Click to record one").font(.system(size: 12)).foregroundStyle(CalmColor.muted)
                 }
             }
         }
@@ -215,6 +215,25 @@ struct CalmShortcutRecorderDialog: View {
                     candidate = HotKeyCombo.defaultPasteLast
                 }
                 .calmButton(.quiet)
+            }
+        case .commandMode:
+            if hadShortcut {
+                Button("Turn off") {
+                    stopCapture()
+                    appState.setCommandModeOn(false)
+                    dismissDialog?()
+                }
+                .calmButton(.quiet)
+                .help("Clears the shortcut. The switch puts it back.")
+            } else if let suggestion = ShortcutValidation.suggestion(for: .commandMode, appState: appState),
+                      suggestion != candidate {
+                Button("Use \(CalmCommandsText.keys(suggestion))") {
+                    stopCapture()
+                    isWaiting = false
+                    candidate = suggestion
+                }
+                .calmButton(.quiet)
+                .help("Three modifiers, which other apps rarely use")
             }
         }
     }
@@ -311,5 +330,21 @@ struct CalmKeyBox<Content: View>: View {
                 }
             }
             .contentShape(shape)
+    }
+}
+
+/// The hidden key capture behind a recorder: an event tap while
+/// `isCapturing` is on (see `HotKeyRecorderButton`).
+struct CalmKeyCapture: View {
+    @Binding var isCapturing: Bool
+    let onCancel: () -> Void
+    let onCapture: (HotKeyCombo) -> Void
+
+    var body: some View {
+        HotKeyRecorderButton(isRecording: $isCapturing, onStart: {}, onCancel: onCancel, onKeyRecorded: onCapture)
+            .frame(width: 0, height: 0)
+            .opacity(0)
+            .disabled(true)
+            .accessibilityHidden(true)
     }
 }

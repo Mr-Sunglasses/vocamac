@@ -55,10 +55,6 @@ struct CalmSnippetEditor: View {
             CalmTextField("Say", text: $trigger, prompt: "e.g. my address", error: check.message, focus: $isTriggerFocused)
                 .help("Say this while dictating and VocaMac types the text below instead.")
             CalmTextEditor("Type", text: $expansion, prompt: "The text VocaMac types for it")
-                // A text editor takes all the height it is offered, and the
-                // dialog host offers the whole window: hold it at the
-                // design's size (label + 88) and let longer text scroll.
-                .frame(height: Self.typeFieldHeight)
         } footer: {
             CalmDialogFooter(
                 primaryTitle: editingSnippet == nil ? "Add" : "Save",
@@ -79,9 +75,6 @@ struct CalmSnippetEditor: View {
             DispatchQueue.main.async { isTriggerFocused = true }
         }
     }
-
-    /// Label (about 16) + 6 gap + the 88-point field.
-    private static let typeFieldHeight: CGFloat = 110
 
     private func save() {
         guard appState.checkSnippet(trigger: trigger, expansion: expansion, editing: editingSnippet?.id).isValid else { return }

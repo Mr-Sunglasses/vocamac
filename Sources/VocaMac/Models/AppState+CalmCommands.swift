@@ -41,13 +41,6 @@ enum CalmCommandsText {
         }
     }
 
-    /// A model's short name: “Ministral 3 3B”, not “Ministral 3 3B Instruct”.
-    static func modelName(_ kind: CleanupModelKind) -> String {
-        let name = kind.descriptor.displayName
-        let suffix = " Instruct"
-        return name.hasSuffix(suffix) ? String(name.dropLast(suffix.count)) : name
-    }
-
     /// The allow-list row's summary: “None yet”, a few names, or a count.
     static func shortcutsSummary(_ text: String) -> String {
         let names = SavedCommandStore.shortcutNames(from: text)
@@ -208,7 +201,7 @@ extension AppState {
     var calmCommandsModelLine: String {
         switch commandModeEngine {
         case .local(let kind):
-            var parts = [CalmCommandsText.modelName(kind)]
+            var parts = [CalmModelText.name(kind)]
             if !transcriptCleanup.isDownloaded(kind) {
                 parts.append("not downloaded")
             } else if !sharesAIModel {
@@ -242,32 +235,5 @@ extension AppState {
             .filter { !existing.contains(CommandInstruction.normalized($0.name)) }
             .map { SavedCommand(name: $0.name, instruction: $0.instruction) }
         savedCommands += starters
-    }
-
-    // MARK: Shortcut recording
-
-    /// Stop the dictation listener while the Commands page records a
-    /// shortcut, so the keys pressed only reach the recorder.
-    ///
-    /// - Returns: Whether the listener was running (pass it back to `endCommandShortcutCapture`).
-    func beginCommandShortcutCapture() -> Bool {
-        isCapturingShortcut = true
-        let wasListening = hotKeyManager.isListening
-        if wasListening { hotKeyManager.stopListening() }
-        return wasListening
-    }
-
-    /// Resume the dictation listener after recording.
-    func endCommandShortcutCapture(restartListener: Bool) {
-        isCapturingShortcut = false
-        guard restartListener else { return }
-        hotKeyManager.startListening(
-            keyCode: hotKeyCode,
-            mode: activationMode,
-            doubleTapThreshold: doubleTapThreshold,
-            safetyTimeout: Double(maxRecordingDuration) + 5.0,
-            modifiers: hotKeyModifiers
-        )
-        syncShortcutConfiguration()
     }
 }

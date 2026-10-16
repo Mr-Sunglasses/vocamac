@@ -140,7 +140,7 @@ final class CalmCommandsTests: XCTestCase {
         state.commandModeEngineStorage = CleanupModelKind.qwen3_4b_instruct_2507_q4_k_m.rawValue
         mocks.transcriptCleanup.downloadedKinds = [.qwen25_0_5b_q4_k_m]
 
-        XCTAssertEqual(state.calmCommandsModelLine, "Qwen 3 4B · not downloaded")
+        XCTAssertEqual(state.calmCommandsModelLine, "Qwen 3 4B Instruct · not downloaded")
     }
 
     func testModelLineForAModelOfItsOwn() {
@@ -148,7 +148,7 @@ final class CalmCommandsTests: XCTestCase {
         state.transcriptCleanupModel = CleanupModelKind.qwen25_0_5b_q4_k_m.rawValue
         state.commandModeEngineStorage = CleanupModelKind.qwen3_4b_instruct_2507_q4_k_m.rawValue
 
-        XCTAssertEqual(state.calmCommandsModelLine, "Qwen 3 4B · on this Mac")
+        XCTAssertEqual(state.calmCommandsModelLine, "Qwen 3 4B Instruct · on this Mac")
     }
 
     // MARK: Drafts
@@ -243,37 +243,6 @@ final class CalmCommandsTests: XCTestCase {
         XCTAssertFalse(state.savedCommands.contains { command in SavedCommand.starters.contains { $0.id == command.id } })
     }
 
-    // MARK: Shortcut capture
-
-    func testCapturePausesAndResumesTheListener() {
-        let (state, mocks) = AppState.makeTestState()
-        mocks.hotKeyManager.isListening = true
-
-        let wasListening = state.beginCommandShortcutCapture()
-
-        XCTAssertTrue(wasListening)
-        XCTAssertTrue(state.isCapturingShortcut)
-        XCTAssertFalse(mocks.hotKeyManager.isListening)
-
-        let starts = mocks.hotKeyManager.startListeningCallCount
-        state.endCommandShortcutCapture(restartListener: wasListening)
-
-        XCTAssertFalse(state.isCapturingShortcut)
-        XCTAssertEqual(mocks.hotKeyManager.startListeningCallCount, starts + 1)
-    }
-
-    func testCaptureLeavesAStoppedListenerStopped() {
-        let (state, mocks) = AppState.makeTestState()
-        mocks.hotKeyManager.isListening = false
-
-        let wasListening = state.beginCommandShortcutCapture()
-        let starts = mocks.hotKeyManager.startListeningCallCount
-        state.endCommandShortcutCapture(restartListener: wasListening)
-
-        XCTAssertFalse(wasListening)
-        XCTAssertEqual(mocks.hotKeyManager.startListeningCallCount, starts)
-    }
-
     // MARK: Copy
 
     func testHeroMessageFollowsThePreviewSetting() {
@@ -286,9 +255,10 @@ final class CalmCommandsTests: XCTestCase {
         XCTAssertEqual(CommandReviewMode.allCases.map(CalmCommandsText.reviewTitle), ["Never", "Long edits", "Always"])
     }
 
-    func testModelNameDropsTheInstructSuffix() {
-        XCTAssertEqual(CalmCommandsText.modelName(.ministral3_3b_q4_k_m), "Ministral 3 3B")
-        XCTAssertEqual(CalmCommandsText.modelName(.qwen25_0_5b_q4_k_m), "Qwen 2.5 0.5B")
+    func testWritingModelNamesMatchSettingsModels() {
+        XCTAssertEqual(CalmModelText.name(.ministral3_3b_q4_k_m), "Ministral 3 3B")
+        XCTAssertEqual(CalmModelText.name(.qwen25_0_5b_q4_k_m), "Qwen 2.5 0.5B")
+        XCTAssertEqual(CalmModelText.name(.qwen3_4b_instruct_2507_q4_k_m), "Qwen 3 4B Instruct")
     }
 
     func testShortcutsSummary() {

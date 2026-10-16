@@ -11,7 +11,9 @@ import SwiftUI
 // MARK: - Dialog container
 
 /// The dialog card: SF 17/650 title, optional SF 13 muted description,
-/// content, and a footer whose buttons sit on the right.
+/// content, and a footer whose buttons sit on the right. A dialog can
+/// replace the title block with its own header (the model details dialog
+/// puts a logo beside the name).
 ///
 /// ```swift
 /// CalmDialog("Clear all history?", description: "This deletes 1,284 dictations.", width: CalmMetrics.confirmDialogWidth) {
@@ -20,20 +22,25 @@ import SwiftUI
 ///     CalmDialogFooter(primaryTitle: "Clear history", primaryKind: .destructive) { clear() }
 /// }
 /// ```
-struct CalmDialog<Content: View, Footer: View>: View {
+struct CalmDialog<Header: View, Content: View, Footer: View>: View {
     let title: String
     var description: String?
     var width: CGFloat = CalmMetrics.dialogWidth
+    /// Replaces the title and description when set.
+    let header: Header?
     let content: Content
     let footer: Footer
 
+    /// A dialog with its own header. `title` is still what VoiceOver
+    /// announces for the dialog.
     init(
-        _ title: String, description: String? = nil, width: CGFloat = CalmMetrics.dialogWidth,
-        @ViewBuilder content: () -> Content, @ViewBuilder footer: () -> Footer
+        _ title: String, width: CGFloat = CalmMetrics.dialogWidth,
+        @ViewBuilder header: () -> Header, @ViewBuilder content: () -> Content, @ViewBuilder footer: () -> Footer
     ) {
         self.title = title
-        self.description = description
+        self.description = nil
         self.width = width
+        self.header = header()
         self.content = content()
         self.footer = footer()
     }
@@ -41,34 +48,57 @@ struct CalmDialog<Content: View, Footer: View>: View {
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: CalmMetrics.Radius.dialog, style: .continuous)
         VStack(alignment: .leading, spacing: CalmMetrics.dialogGap) {
-            VStack(alignment: .leading, spacing: 8) {
-                Text(title)
-                    .font(CalmFont.dialogTitle)
-                    .foregroundStyle(CalmColor.ink)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityAddTraits(.isHeader)
-                if let description {
-                    Text(description)
-                        .calmType(.description)
-                        .lineSpacing(3.5)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+            if let header {
+                header
+            } else {
+                titleBlock
             }
             content
             footer
         }
         .padding(CalmMetrics.dialogPadding)
         .frame(width: width, alignment: .leading)
-        .background(shape.fill(CalmColor.content))
+        // The shadow belongs to the card's shape only: on the whole dialog
+        // every field and button inside would cast one too.
+        .background(shape.fill(CalmColor.content).shadow(color: .black.opacity(0.22), radius: 30, y: 24))
         .overlay(shape.strokeBorder(CalmColor.line2, lineWidth: 1))
-        .shadow(color: .black.opacity(0.22), radius: 30, y: 24)
         .accessibilityElement(children: .contain)
         .accessibilityAddTraits(.isModal)
         .accessibilityLabel(title)
     }
+
+    private var titleBlock: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(CalmFont.dialogTitle)
+                .foregroundStyle(CalmColor.ink)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityAddTraits(.isHeader)
+            if let description {
+                Text(description)
+                    .calmType(.description)
+                    .lineSpacing(3.5)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
 }
 
-extension CalmDialog where Content == EmptyView {
+extension CalmDialog where Header == EmptyView {
+    init(
+        _ title: String, description: String? = nil, width: CGFloat = CalmMetrics.dialogWidth,
+        @ViewBuilder content: () -> Content, @ViewBuilder footer: () -> Footer
+    ) {
+        self.title = title
+        self.description = description
+        self.width = width
+        self.header = nil
+        self.content = content()
+        self.footer = footer()
+    }
+}
+
+extension CalmDialog where Header == EmptyView, Content == EmptyView {
     /// A confirmation: title, description and footer only.
     init(_ title: String, description: String? = nil, width: CGFloat = CalmMetrics.confirmDialogWidth, @ViewBuilder footer: () -> Footer) {
         self.init(title, description: description, width: width, content: { EmptyView() }, footer: footer)

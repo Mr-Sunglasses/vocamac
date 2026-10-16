@@ -142,9 +142,8 @@ struct CalmOverlayPreviewTile: View {
             }
         }
         .frame(width: 60, height: 20)
-        .background(Capsule().fill(Self.hud))
+        .background(Capsule().fill(Self.hud).shadow(color: .black.opacity(0.35), radius: 10, y: 8))
         .overlay(Capsule().strokeBorder(Color.white.opacity(0.09), lineWidth: 1))
-        .shadow(color: .black.opacity(0.35), radius: 10, y: 8)
     }
 
     private var panel: some View {
@@ -154,8 +153,7 @@ struct CalmOverlayPreviewTile: View {
         }
         .padding(8)
         .frame(width: 110, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Self.hud))
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Self.hud).shadow(color: .black.opacity(0.35), radius: 10, y: 8))
         .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(Color.white.opacity(0.09), lineWidth: 1))
-        .shadow(color: .black.opacity(0.35), radius: 10, y: 8)
     }
 }

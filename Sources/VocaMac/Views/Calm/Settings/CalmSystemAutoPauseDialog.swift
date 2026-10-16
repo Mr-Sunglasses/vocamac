@@ -65,7 +65,7 @@ struct CalmAutoPauseDialog: View {
                     CalmList {
                         ForEach(appState.autoPauseApps) { app in
                             CalmListRow(padding: .compact, alignment: .center, alwaysShowsActions: true) {
-                                CalmAppLetterTile(name: app.displayName)
+                                CalmAppTile(name: app.displayName)
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(app.displayName).font(CalmFont.body).foregroundStyle(CalmColor.ink)
                                     if let detail = app.bundleIdentifier ?? app.processName {
@@ -116,7 +116,7 @@ struct CalmAutoPauseDialog: View {
                         ForEach(candidates, id: \.self) { app in
                             Button { picked = app } label: {
                                 HStack(spacing: 12) {
-                                    CalmAppLetterTile(name: app.displayName)
+                                    CalmAppTile(name: app.displayName)
                                     Text(app.displayName).font(CalmFont.body).foregroundStyle(CalmColor.ink)
                                         .frame(maxWidth: .infinity, alignment: .leading)
                                     if picked == app {
@@ -170,19 +170,5 @@ struct CalmAutoPauseDialog: View {
         search = ""
         picked = nil
         step = .add
-    }
-}
-
-/// A 28-point tile with an app's first letter (Add app or website dialog).
-struct CalmAppLetterTile: View {
-    let name: String
-
-    var body: some View {
-        Text(name.first.map { String($0).uppercased() } ?? "?")
-            .font(.system(size: 12, weight: .bold))
-            .foregroundStyle(CalmColor.ink2)
-            .frame(width: 28, height: 28)
-            .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(CalmColor.panel2))
-            .accessibilityHidden(true)
     }
 }

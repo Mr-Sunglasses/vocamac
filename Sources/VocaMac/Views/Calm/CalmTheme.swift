@@ -485,6 +485,8 @@ enum CalmMetrics {
     static let segmentOptionHeight: CGFloat = 28
     static let fieldHeight: CGFloat = 36
     static let multilineFieldMinHeight: CGFloat = 88
+    /// Where a multi-line field stops growing and starts to scroll.
+    static let multilineFieldMaxHeight: CGFloat = 220
     static let keyCapHeight: CGFloat = 24
     static let keyCapInlineHeight: CGFloat = 21
     static let tagHeight: CGFloat = 22
