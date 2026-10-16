@@ -31,7 +31,7 @@ private struct CalmStylesToneGroup: View {
             CalmPanel {
                 CalmToggleRow(
                     "Format text for each app",
-                    description: "Off: every app gets the same text.",
+                    description: "When off, every app gets the same text.",
                     isOn: $appState.writingStyleEnabled
                 )
                 CalmToggleRow(
@@ -108,8 +108,10 @@ private struct CalmStylesTryItGroup: View {
                     }
                     VStack(alignment: .leading, spacing: 6) {
                         Text("VocaMac types").font(CalmFont.fieldLabel).foregroundStyle(CalmColor.ink)
+                        // The field's own font: in monospace the result
+                        // read as code next to the “You say” field.
                         Text(styledSample.isEmpty ? "—" : styledSample)
-                            .font(.system(size: 13, design: .monospaced))
+                            .font(CalmFont.field)
                             .foregroundStyle(CalmColor.ink)
                             .textSelection(.enabled)
                             .fixedSize(horizontal: false, vertical: true)
@@ -147,7 +149,7 @@ private struct CalmStylesTryItGroup: View {
                 CalmInlineNotice("The text is sent to your cleanup endpoint", tone: .info)
             }
             HStack(spacing: 10) {
-                Button(isRunning ? "Trying…" : "Try With All My Settings") { runFullPreview() }
+                Button(isRunning ? "Trying…" : "Try with all my settings") { runFullPreview() }
                     .calmButton(.secondary)
                     .disabled(isRunning || sample.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 if isRunning { CalmSpinner() }

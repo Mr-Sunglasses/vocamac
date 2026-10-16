@@ -211,6 +211,13 @@ struct CalmWritingModelsTab: View {
             } else if let selected, !picks.contains(where: { $0.model == selected }) {
                 CalmInUseRow(name: CalmModelText.name(selected))
             }
+            // Browse all belongs to the cards, as on the Speech to text tab.
+            CalmPanel {
+                CalmLinkRow(title: "Browse all \(CleanupModelKind.cleanupChoices.count) models") {
+                    navigator.modelsTab = .writing
+                    navigator.select(.allModels)
+                }
+            }
             CalmPanel {
                 commandModeRow
                 if appState.calmCommandModeChoice == .own || appState.calmCommandModeChoice == .onThisMac {
@@ -219,10 +226,8 @@ struct CalmWritingModelsTab: View {
                 if appState.suggestsSharingAIModel {
                     sharingSuggestion
                 }
-                CalmLinkRow(title: "Browse all \(CleanupModelKind.cleanupChoices.count) models") {
-                    navigator.modelsTab = .writing
-                    navigator.select(.allModels)
-                }
+            }
+            CalmPanel {
                 CalmRow("Where cleanup runs") {
                     if let problem = appState.cleanupEndpoint.validationProblem() {
                         CalmInlineNotice(problem, tone: .warning)
@@ -274,18 +279,27 @@ struct CalmWritingModelsTab: View {
     private var commandModeRow: some View {
         let options = appState.calmCommandModeOptions
         let provider = appState.cleanupEndpoint.provider
-        return CalmRow("Command Mode uses", description: commandModeNote) {
-            if options.count > 1 {
-                CalmSegmentedControl(
-                    selection: Binding(
-                        get: { appState.calmCommandModeChoice },
-                        set: { choice in Task { await appState.selectCalmCommandModeChoice(choice) } }
-                    ),
-                    options: options.map { CalmOption($0, $0.title(provider: provider)) },
-                    accessibilityLabel: "Command Mode uses"
-                )
-                .disabled(isDownloading)
+        // The choices sit under the note, not beside it: three labels like
+        // “Apple Intelligence” don't fit next to a two-line note and were
+        // truncated to “Apple Intel…”.
+        return CalmRow("Command Mode uses") {
+            VStack(alignment: .leading, spacing: 12) {
+                CalmRowDescription(text: commandModeNote)
+                if options.count > 1 {
+                    CalmSegmentedControl(
+                        selection: Binding(
+                            get: { appState.calmCommandModeChoice },
+                            set: { choice in Task { await appState.selectCalmCommandModeChoice(choice) } }
+                        ),
+                        options: options.map { CalmOption($0, $0.title(provider: provider)) },
+                        accessibilityLabel: "Command Mode uses"
+                    )
+                    .fixedSize()
+                    .disabled(isDownloading)
+                }
             }
+        } trailing: {
+            EmptyView()
         }
         .settingsTarget("command-mode-share", aliases: ["command-mode-model"])
     }

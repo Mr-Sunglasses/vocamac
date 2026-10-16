@@ -31,7 +31,8 @@ struct CalmDictionaryPage: View {
         CalmPage(.list, spacing: 22) {
             CalmPageHeader("Dictionary") {
                 Button {
-                    editor = .add(.word)
+                    // On the Replacements tab, add a replacement.
+                    editor = .add(filter == .replacements ? .replacement : .word)
                 } label: {
                     CalmButtonLabel("Add new", icon: .plus)
                 }
@@ -481,7 +482,7 @@ struct CalmVocabularyBoostRow: View {
         case .downloading:
             CalmRowDescription(text: "Downloading 98 MB…")
         case .ready:
-            CalmRowDescription(text: "On. Parakeet listens for your vocabulary.")
+            CalmRowDescription(text: "On. Parakeet listens for your vocabulary. Remove the 98 MB model to turn it off.")
         case .failed(let message):
             CalmInlineNotice("Download failed: \(message)", tone: .warning)
         }

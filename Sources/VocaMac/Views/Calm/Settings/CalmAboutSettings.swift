@@ -43,7 +43,7 @@ struct CalmAboutSettings: View {
                     }
                     readOnlyRow("Models on disk", value: appState.modelManager.diskUsageDescription())
                     CalmRow("Set up VocaMac again", description: "Walk through the first-launch setup") {
-                        Button("Set Up VocaMac…") {
+                        Button("Start setup") {
                             NotificationCenter.default.post(name: .showOnboarding, object: nil)
                         }
                         .calmButton(.secondary)
@@ -257,7 +257,9 @@ struct CalmAboutCredits: View {
 
     var body: some View {
         LazyVGrid(columns: columns, alignment: .leading, spacing: 4) {
-            ForEach(ModelCreator.allCases) { creator in
+            // Credits name the teams whose models VocaMac runs; the user's
+            // own server isn't one.
+            ForEach(ModelCreator.allCases.filter { $0 != .customEndpoint }) { creator in
                 CalmAboutCreditCell(creator: creator)
             }
         }

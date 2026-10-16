@@ -176,7 +176,8 @@ struct CalmCommandsPage: View {
 
     private func openWritingAI() {
         navigator.modelsTab = .writing
-        navigator.openSettings(.models, target: "command-mode-models")
+        // The Command Mode row, not the cleanup cards above it.
+        navigator.openSettings(.models, target: "command-mode-share")
     }
 }
 

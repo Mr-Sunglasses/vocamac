@@ -167,11 +167,10 @@ struct CalmAdvancedSettings: View {
             ) {
                 CalmTag(isLoaded ? "Loaded" : "Not loaded", tone: isLoaded ? .success : .neutral)
             }
-            if isLoaded {
-                if let estimate = estimatedModelRAM {
-                    readOnlyRow("Model needs about", value: estimate)
-                }
-                readOnlyRow("VocaMac is using", value: CalmAdvancedSummary.memory(ProcessMonitor.currentResidentMemoryMB()))
+            // What VocaMac uses now is under Resource usage, refreshed every
+            // 5 seconds; a second, unrefreshed reading here disagreed with it.
+            if isLoaded, let estimate = estimatedModelRAM {
+                readOnlyRow("Memory it needs", value: estimate)
             }
         }
     }
@@ -189,7 +188,7 @@ struct CalmAdvancedSettings: View {
 
     private var estimatedModelRAM: String? {
         guard let size = appState.currentModel?.size ?? ModelSize(rawValue: appState.selectedModelSize) else { return nil }
-        return String(format: "~%.1f GB", size.ramRequiredGB)
+        return String(format: "About %.1f GB", size.ramRequiredGB)
     }
 
     // MARK: Log actions
@@ -250,7 +249,9 @@ struct CalmGatewaySettings: View {
             CalmGroup("Status") {
                 VStack(alignment: .leading, spacing: 10) {
                     statusPanel
-                    if case .error = gateway.status, let message = gateway.lastErrorMessage {
+                    // The status row already says the error; repeat only a
+                    // different, newer one.
+                    if case .error(let shown) = gateway.status, let message = gateway.lastErrorMessage, message != shown {
                         CalmInlineNotice(message).padding(.leading, 2)
                     }
                 }
@@ -365,7 +366,7 @@ struct CalmGatewaySettings: View {
                     .disabled(!gateway.isLive)
             }
             CalmRow("Gateway logs", description: "Gateway keeps its own logs and settings in ~/.config/vocagateway") {
-                Button("Open Gateway Logs") { gateway.openGatewayLogs() }.calmButton(.secondary)
+                Button("Open logs") { gateway.openGatewayLogs() }.calmButton(.secondary)
             }
         }
     }

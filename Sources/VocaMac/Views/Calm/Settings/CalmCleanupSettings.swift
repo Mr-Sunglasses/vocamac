@@ -79,7 +79,7 @@ struct CalmCleanupSettings: View {
         let stored = appState.transcriptCleanupPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
         let isCustom = !stored.isEmpty
             && stored != TranscriptCleanup.defaultPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        return isCustom ? "Your own instructions" : "The built-in instructions"
+        return isCustom ? "Using your own instructions" : "Using the built-in instructions"
     }
 
     // MARK: Level
