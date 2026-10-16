@@ -192,7 +192,9 @@ final class CleanupLevelDisplayTests: XCTestCase {
         XCTAssertFalse(CleanupLevel.light.withoutSmartCleanup.contains("“Um”"))
         XCTAssertFalse(CleanupLevel.none.withoutSmartCleanup.contains("“Um”"))
         for level in CleanupLevel.allCases {
-            XCTAssertTrue(level.withoutSmartCleanup.contains("Formatting"))
+            // Formatting lives on the Styles page in v3.
+            XCTAssertTrue(level.withoutSmartCleanup.contains("Styles"))
+            XCTAssertFalse(level.withoutSmartCleanup.contains("Formatting"))
         }
     }
 }
