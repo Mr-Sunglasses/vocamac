@@ -113,6 +113,22 @@ enum OverlayLayout {
         )
     }
 
+    /// The visible card inside a panel frame, in screen coordinates: the
+    /// measured card at the top of its slot, at the slot's leading edge
+    /// next to the caret and centred at the top or bottom of the screen
+    /// (as `HandyOverlayView` lays it out). The whole slot until measured.
+    ///
+    /// Only this rectangle takes the pointer: the slot is as wide as the
+    /// widest pill, and the panel adds shadow room on every side.
+    static func visibleCardFrame(inPanel frame: CGRect, cardSize: CGSize, position: OverlayPosition) -> CGRect {
+        let slot = cardFrame(inPanel: frame)
+        guard cardSize.width > 0, cardSize.height > 0 else { return slot }
+        let width = min(cardSize.width, slot.width)
+        let height = min(cardSize.height, slot.height)
+        let x = position == .nearCursor ? slot.minX : slot.midX - width / 2
+        return CGRect(x: x, y: slot.maxY - height, width: width, height: height)
+    }
+
     /// Distance from the bottom of the visible frame (the top of the Dock)
     /// to the bottom of the card.
     static let bottomEdgeGap: CGFloat = 24
@@ -428,6 +444,11 @@ final class CursorOverlayManager {
     /// Dismisses a failure message; replaced by any later show or failure.
     private var failureDismissal: DispatchWorkItem?
 
+    /// Pointer-move monitors, installed while the overlay takes clicks, so
+    /// the panel only stops ignoring the mouse while the pointer is over
+    /// the visible card.
+    private var mouseMonitors: [Any] = []
+
     /// Maximum recording length, so the overlay can count down its last seconds.
     /// Nil shows no countdown.
     var recordingLimit: TimeInterval? {
@@ -649,9 +670,13 @@ final class CursorOverlayManager {
         // The pill is always dark glass; the appearance only matters to
         // anything else the panel might draw.
         hosting.appearance = nil
-        hosting.onPointerInside = { [weak self] inside in
-            guard let self, self.viewModel.isPointerInside != inside else { return }
-            self.viewModel.isPointerInside = inside && OverlayInteraction.acceptsClicks(in: self.viewModel.phase)
+        hosting.onPointerInside = { [weak self] _ in
+            guard let self, let panel = self.overlayPanel else { return }
+            self.updateMouseHandling(panel)
+        }
+        viewModel.onCardSizeChange = { [weak self] in
+            guard let self, let panel = self.overlayPanel else { return }
+            self.updateMouseHandling(panel)
         }
 
         let panel = NSPanel(
@@ -681,17 +706,59 @@ final class CursorOverlayManager {
         return panel
     }
 
+    /// Clicks pass through everywhere except the visible card, and only
+    /// while a dictation is under way; hover (Stop and Cancel) follows the
+    /// same rectangle. The transparent slot and shadow room never take the
+    /// pointer from the app underneath.
     private func updateMouseHandling(_ panel: NSPanel) {
-        let ignores = !OverlayInteraction.acceptsClicks(in: viewModel.phase)
-        if panel.ignoresMouseEvents != ignores { panel.ignoresMouseEvents = ignores }
-        if ignores, viewModel.isPointerInside { viewModel.isPointerInside = false }
+        let acceptsClicks = viewModel.isActive && OverlayInteraction.acceptsClicks(in: viewModel.phase)
+        let card = visibleCardFrame(of: panel)
+        let isOverCard = acceptsClicks && card.contains(NSEvent.mouseLocation)
+        if panel.ignoresMouseEvents == isOverCard { panel.ignoresMouseEvents = !isOverCard }
+        if viewModel.isPointerInside != isOverCard { viewModel.isPointerInside = isOverCard }
+        hostingView?.cardRectInWindow = card.offsetBy(dx: -panel.frame.minX, dy: -panel.frame.minY)
+        setMouseMonitoring(acceptsClicks)
+    }
+
+    /// The visible card in screen coordinates.
+    private func visibleCardFrame(of panel: NSPanel) -> CGRect {
+        OverlayLayout.visibleCardFrame(inPanel: panel.frame, cardSize: viewModel.cardSize, position: viewModel.position)
+    }
+
+    /// A panel that ignores the mouse gets no events, so pointer moves over
+    /// other apps say when the pointer reaches the card.
+    private func setMouseMonitoring(_ isOn: Bool) {
+        guard isOn == mouseMonitors.isEmpty else { return }
+        guard isOn else {
+            mouseMonitors.forEach(NSEvent.removeMonitor)
+            mouseMonitors.removeAll()
+            return
+        }
+        let events: NSEvent.EventTypeMask = [.mouseMoved, .leftMouseDragged]
+        // Both monitors run on the main thread.
+        if let global = NSEvent.addGlobalMonitorForEvents(matching: events, handler: { [weak self] _ in
+            MainActor.assumeIsolated { self?.pointerMoved() }
+        }) {
+            mouseMonitors.append(global)
+        }
+        if let local = NSEvent.addLocalMonitorForEvents(matching: events, handler: { [weak self] event in
+            MainActor.assumeIsolated { self?.pointerMoved() }
+            return event
+        }) {
+            mouseMonitors.append(local)
+        }
+    }
+
+    private func pointerMoved() {
+        guard let overlayPanel, overlayPanel.isVisible else { return }
+        updateMouseHandling(overlayPanel)
     }
 
     /// While the pointer is over the card the user is reaching for a
     /// button, so the panel holds still instead of following the caret or
     /// the mouse away from it.
     private func isPointerOver(_ panel: NSPanel) -> Bool {
-        panel.isVisible && OverlayLayout.cardFrame(inPanel: panel.frame).contains(NSEvent.mouseLocation)
+        panel.isVisible && visibleCardFrame(of: panel).contains(NSEvent.mouseLocation)
     }
 
     private func cancelFailureDismissal() {
@@ -718,6 +785,7 @@ final class CursorOverlayManager {
         let x = viewModel.position == .nearCursor ? old.minX : old.midX - size.width / 2
         panel.setFrame(NSRect(x: x, y: y, width: size.width, height: size.height), display: true)
         hostingView?.frame = NSRect(origin: .zero, size: size)
+        updateMouseHandling(panel)
     }
 
     private func positionPanel(_ panel: NSPanel, size: CGSize) {
@@ -750,6 +818,8 @@ final class CursorOverlayManager {
                 guard let self, self.isShowingRecordingSession, let panel = self.overlayPanel,
                       !self.isPointerOver(panel) else { return }
                 self.positionPanel(panel, size: self.overlaySize)
+                // The card may have moved under a pointer that stayed still.
+                self.updateMouseHandling(panel)
             }
         }
 
@@ -857,6 +927,13 @@ final class MicIndicatorViewModel: ObservableObject {
     @Published var stopHint: OverlayStopHint?
     /// The pointer is over the card; its Stop and Cancel buttons show.
     @Published var isPointerInside = false
+    /// The visible card's measured size (a pill is narrower than its slot).
+    /// Not published: only the overlay manager's pointer handling reads it.
+    var cardSize: CGSize = .zero {
+        didSet { if cardSize != oldValue { onCardSizeChange?() } }
+    }
+    /// Tells the manager the card changed size, to re-check the pointer.
+    var onCardSizeChange: (@MainActor () -> Void)?
     /// The overlay's Stop and Cancel buttons. Set once by AppState.
     var onStop: (@MainActor () -> Void)?
     var onCancel: (@MainActor () -> Void)?
@@ -1017,6 +1094,7 @@ struct HandyOverlayView: View {
         let insets = OverlayLayout.shadowInsets
 
         card
+            .onGeometryChange(for: CGSize.self) { $0.size } action: { viewModel.cardSize = $0 }
             .frame(width: slot.width, height: slot.height, alignment: cardAlignment)
             .padding(EdgeInsets(top: insets.top, leading: insets.left, bottom: insets.bottom, trailing: insets.right))
             .opacity(viewModel.isActive && hasEntered ? 1 : 0)
@@ -1510,6 +1588,10 @@ private struct OverlayLivePanel: View {
 final class OverlayHostingView: NSHostingView<HandyOverlayView> {
     var onPointerInside: ((Bool) -> Void)?
     private var pointerTracking: NSTrackingArea?
+    /// The visible card in window coordinates; hover is tracked over it alone.
+    var cardRectInWindow: NSRect? {
+        didSet { if cardRectInWindow != oldValue { updateTrackingAreas() } }
+    }
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
@@ -1519,11 +1601,12 @@ final class OverlayHostingView: NSHostingView<HandyOverlayView> {
         // The hosting view is flipped: the shadow room above the card is
         // the inset's top.
         let insets = OverlayLayout.shadowInsets
-        let card = NSRect(
+        let slot = NSRect(
             x: insets.left, y: isFlipped ? insets.top : insets.bottom,
             width: max(0, bounds.width - insets.left - insets.right),
             height: max(0, bounds.height - insets.top - insets.bottom)
         )
+        let card = cardRectInWindow.map { convert($0, from: nil) } ?? slot
         let area = NSTrackingArea(
             rect: card,
             options: [.mouseEnteredAndExited, .activeAlways],

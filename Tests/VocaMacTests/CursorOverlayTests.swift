@@ -87,6 +87,37 @@ final class OverlayLayoutTests: XCTestCase {
     }
 }
 
+// MARK: - Overlay Hit Area Tests
+
+final class OverlayHitAreaTests: XCTestCase {
+    /// Only the visible card takes the pointer: a measured pill is narrower
+    /// than its 340-point slot, and the panel adds shadow room around it.
+    func testVisibleCardIsTheMeasuredPillNotTheSlot() {
+        let panel = CGRect(origin: CGPoint(x: 100, y: 200), size: OverlayLayout.size(for: .minimal))
+        let slot = OverlayLayout.cardFrame(inPanel: panel)
+        let pill = CGSize(width: 150, height: OverlayLayout.pillHeight)
+
+        let nearCaret = OverlayLayout.visibleCardFrame(inPanel: panel, cardSize: pill, position: .nearCursor)
+        XCTAssertEqual(nearCaret, CGRect(x: slot.minX, y: slot.maxY - pill.height, width: 150, height: pill.height))
+        let top = OverlayLayout.visibleCardFrame(inPanel: panel, cardSize: pill, position: .top)
+        XCTAssertEqual(top.midX, slot.midX)
+        XCTAssertEqual(top.width, 150)
+
+        // Empty room beside the pill and the shadow margin don't count.
+        XCTAssertFalse(nearCaret.contains(CGPoint(x: slot.maxX - 5, y: slot.midY)))
+        XCTAssertFalse(nearCaret.contains(CGPoint(x: panel.minX + 5, y: panel.minY + 5)))
+        XCTAssertTrue(nearCaret.contains(CGPoint(x: nearCaret.midX, y: nearCaret.midY)))
+    }
+
+    func testUnmeasuredCardFallsBackToItsSlotAndNeverExceedsIt() {
+        let panel = CGRect(origin: .zero, size: OverlayLayout.size(for: .live))
+        let slot = OverlayLayout.cardFrame(inPanel: panel)
+        XCTAssertEqual(OverlayLayout.visibleCardFrame(inPanel: panel, cardSize: .zero, position: .bottom), slot)
+        let huge = OverlayLayout.visibleCardFrame(inPanel: panel, cardSize: CGSize(width: 2_000, height: 900), position: .bottom)
+        XCTAssertEqual(huge, slot)
+    }
+}
+
 // MARK: - Overlay Content Tests
 
 final class OverlayContentTests: XCTestCase {
