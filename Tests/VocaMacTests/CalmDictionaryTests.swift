@@ -73,6 +73,33 @@ final class CalmDictionaryTests: XCTestCase {
         XCTAssertEqual(DictionaryEditing.renaming("b", to: "C", in: ["a", "b", "c"]), ["a", "C"])
         XCTAssertEqual(DictionaryEditing.renaming("x", to: "y", in: ["a"]), ["a"])
         XCTAssertEqual(DictionaryEditing.renaming("a", to: "  ", in: ["a"]), ["a"])
+        // Commas separate words: “B, C” is two words in the old one's place,
+        // and an existing C is not repeated.
+        XCTAssertEqual(DictionaryEditing.renaming("a", to: "B, C", in: ["a", "c", "d"]), ["B", "C", "d"])
+        XCTAssertEqual(DictionaryEditing.renaming("a", to: "B\nb", in: ["a"]), ["B"])
+    }
+
+    /// Each word of “B, C” is checked, so renaming to it while C exists is
+    /// refused rather than creating a second C.
+    func testWordCheckSplitsOnCommasAndNewLines() {
+        let terms = ["A", "C"]
+        XCTAssertEqual(DictionaryEditing.checkWord("B, C", terms: terms, editing: "A"), .problem("“C” is already in your dictionary."))
+        XCTAssertEqual(DictionaryEditing.checkWord("B, D", terms: terms, editing: "A"), .valid)
+        XCTAssertEqual(DictionaryEditing.checkWord(" , \n", terms: terms), .incomplete)
+    }
+
+    @MainActor
+    func testStoredWordsNeverRepeatAfterAnEditWithACommaInIt() {
+        let (state, _) = AppState.makeTestState()
+        let saved = state.customVocabulary
+        defer { state.customVocabulary = saved }
+        state.setVocabularyTerms(["A", "C"])
+        state.renameVocabularyTerm("A", to: "B, C")
+        XCTAssertEqual(state.vocabularyTerms, ["B", "C"])
+        state.setVocabularyTerms(["X, Y", "y", "Z"])
+        XCTAssertEqual(state.vocabularyTerms, ["X", "Y", "Z"])
+        let ids = DictionaryEditing.items(terms: state.vocabularyTerms, replacements: [], filter: .all, query: "").map(\.id)
+        XCTAssertEqual(Set(ids).count, ids.count)
     }
 
     // MARK: - Replacement checks

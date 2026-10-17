@@ -103,14 +103,16 @@ enum DictionaryEditing {
     }
 
     /// Checks a vocabulary word. `editing` is the word being changed, which
-    /// may keep its spelling or change only its case.
+    /// may keep its spelling or change only its case. Commas and new lines
+    /// separate words in the stored list, so “B, C” is two words and each
+    /// is checked.
     static func checkWord(_ word: String, terms: [String], editing: String? = nil) -> DictionaryEntryCheck {
-        let trimmed = word.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return .incomplete }
-        let clashes = terms.contains { term in
-            term != editing && term.lowercased() == trimmed.lowercased()
+        let words = RecognitionHints.terms(from: word)
+        guard !words.isEmpty else { return .incomplete }
+        let clash = words.first { candidate in
+            terms.contains { $0 != editing && $0.lowercased() == candidate.lowercased() }
         }
-        return clashes ? .problem("“\(trimmed)” is already in your dictionary.") : .valid
+        return clash.map { .problem("“\($0)” is already in your dictionary.") } ?? .valid
     }
 
     /// Checks a replacement. A spoken form another replacement already
@@ -145,12 +147,15 @@ enum DictionaryEditing {
     /// `terms` with `old` changed to `new` in the same place. A different
     /// copy of `new` elsewhere is dropped so the list stays unique.
     static func renaming(_ old: String, to new: String, in terms: [String]) -> [String] {
-        let trimmed = new.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, let index = terms.firstIndex(of: old) else { return terms }
+        // “B, C” becomes two words in the old one's place.
+        let words = RecognitionHints.terms(from: new)
+        guard !words.isEmpty, let index = terms.firstIndex(of: old) else { return terms }
+        let lowered = Set(words.map { $0.lowercased() })
         var result = terms
-        result[index] = trimmed
+        result.replaceSubrange(index...index, with: words)
+        let placed = index..<(index + words.count)
         return result.enumerated()
-            .filter { $0.offset == index || $0.element.lowercased() != trimmed.lowercased() }
+            .filter { placed.contains($0.offset) || !lowered.contains($0.element.lowercased()) }
             .map(\.element)
     }
 

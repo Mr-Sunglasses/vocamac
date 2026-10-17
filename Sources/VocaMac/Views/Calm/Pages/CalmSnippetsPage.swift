@@ -48,6 +48,11 @@ struct CalmSnippetsPage: View {
         .calmDialog(item: $editor) { request in
             CalmSnippetEditor(request: request)
         }
+        // Deleting the last snippet hides the search button; leave search
+        // too, or the page stays without its card and with no way back.
+        .onChange(of: appState.snippets.isEmpty) { _, isEmpty in
+            if isEmpty, isSearching { closeSearch() }
+        }
     }
 
     // MARK: Search

@@ -5932,7 +5932,10 @@ extension AppState {
 
     func setVocabularyTerms(_ terms: [String]) {
         var seen = Set<String>()
+        // A comma or new line inside a term would read back as two terms
+        // (and could duplicate one already listed), so split them here.
         let cleaned = terms
+            .flatMap { RecognitionHints.vocabularyTerms(from: $0) }
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty && seen.insert($0.lowercased()).inserted }
         customVocabulary = cleaned.joined(separator: "\n")
