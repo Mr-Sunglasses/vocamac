@@ -328,6 +328,44 @@ final class CalmInsightsTests: XCTestCase {
         XCTAssertEqual(summary.longestDictationSeconds, 8)
     }
 
+    /// A reset and a new dictation the same day: history from earlier that
+    /// day, before the reset, must not bring the old best back.
+    @MainActor
+    func testResetKeepsSameDayHistoryFromBeforeIt() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("calm_stats_\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let when = try now
+        let morning = try XCTUnwrap(calendar.date(byAdding: .hour, value: -6, to: when))
+        let afternoon = try XCTUnwrap(calendar.date(byAdding: .minute, value: 30, to: when))
+        var clock = morning
+        let manager = StatsManager(statsFileURL: url, calendar: calendar, now: { clock })
+        manager.recordTranscription(VocaTranscription(
+            text: "a long one", duration: 1, detectedLanguage: "en", audioLengthSeconds: 252, modelUsed: .tiny, timestamp: morning
+        ))
+        clock = when
+        manager.resetStats()
+        XCTAssertEqual(manager.stats.resetDate, when)
+        clock = afternoon
+        manager.recordTranscription(VocaTranscription(
+            text: "short", duration: 1, detectedLanguage: "en", audioLengthSeconds: 8, modelUsed: .tiny, timestamp: afternoon
+        ))
+        manager.flushPendingSaves()
+
+        let history = [
+            DictationHistoryEntry(createdAt: morning, status: .completed, finalText: "a long one", modelID: "tiny", audioSeconds: 252),
+            DictationHistoryEntry(createdAt: afternoon, status: .completed, finalText: "short", modelID: "tiny", audioSeconds: 8),
+        ]
+        let summary = CalmInsightsSummary(stats: manager.stats, history: history, now: afternoon, calendar: calendar)
+        XCTAssertEqual(summary.longestDictationSeconds, 8, "The pre-reset best must not come back")
+
+        // The reset moment survives a save and reload; older stats have none.
+        let reloaded = StatsManager(statsFileURL: url, calendar: calendar, now: { afternoon })
+        XCTAssertEqual(reloaded.stats.resetDate, when)
+        reloaded.flushPendingSaves()
+        let old = try JSONDecoder().decode(UserStats.self, from: Data(#"{"totalWords": 1}"#.utf8))
+        XCTAssertNil(old.resetDate)
+    }
+
     /// With history off, its entries don't fill in bests.
     @MainActor
     func testSummaryIgnoresHistoryWhileItIsOff() async {

@@ -51,6 +51,12 @@ struct UserStats: Codable, Equatable {
     /// pasted, oldest first, at most `maxStopWaits`.
     var stopWaits: [StopWait] = []
 
+    /// When Reset All Statistics last ran, if it has. Personal bests filled
+    /// in from history count only entries after this moment, so a reset
+    /// isn't undone by dictations from earlier the same day. Absent from
+    /// stats saved before it, and from stats never reset.
+    var resetDate: Date?
+
     /// Calculated average Words Per Minute (WPM).
     /// Note: This is "words-per-minute-of-audio", dividing total words by total audio duration.
     var averageWPM: Double {
@@ -119,6 +125,7 @@ extension UserStats {
         let decodedStopWaits = (container.decodeLossily([LossyElement<StopWait>].self, forKey: .stopWaits) ?? [])
             .compactMap(\.value)
         stopWaits = Array(decodedStopWaits.filter(\.isValid).suffix(Self.maxStopWaits))
+        resetDate = container.decodeLossily(Date.self, forKey: .resetDate)
     }
 }
 

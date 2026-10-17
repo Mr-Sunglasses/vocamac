@@ -190,7 +190,7 @@ class StatsManager: StatsManaging, ObservableObject {
     }
 
     func resetStats() {
-        stats = UserStats(timeZoneIdentifier: statisticsTimeZone.identifier)
+        stats = UserStats(timeZoneIdentifier: statisticsTimeZone.identifier, resetDate: now())
         saveStats()
     }
 

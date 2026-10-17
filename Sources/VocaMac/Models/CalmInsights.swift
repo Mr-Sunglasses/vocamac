@@ -252,14 +252,16 @@ struct CalmInsightsSummary {
         biggestDayWords = biggest > 0 ? biggest : nil
 
         // History fills in dictations from before the stats tracked the
-        // longest one, but only those since the stats' first day: after
-        // Reset All Statistics, older history no longer counts.
+        // longest one, but only those since the stats' first day, and only
+        // those after the last Reset All Statistics: the first day alone
+        // would let a reset's earlier dictations that day count again.
         let firstStatsDay = (Array(stats.dailyWordCounts.keys) + Array(stats.dailyTranscriptionCounts.keys)).min()
         let longestInHistory = firstStatsDay.map { firstDay in
             history
-                .filter {
-                    $0.status == .completed && !$0.isCommandEdit && $0.audioSeconds.isFinite
-                        && CalmActivityCalendar.dayKey(for: $0.createdAt, calendar: calendar) >= firstDay
+                .filter { entry in
+                    entry.status == .completed && !entry.isCommandEdit && entry.audioSeconds.isFinite
+                        && CalmActivityCalendar.dayKey(for: entry.createdAt, calendar: calendar) >= firstDay
+                        && entry.createdAt >= (stats.resetDate ?? .distantPast)
                 }
                 .map(\.audioSeconds)
                 .max() ?? 0
