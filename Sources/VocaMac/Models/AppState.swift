@@ -345,6 +345,10 @@ final class AppState: ObservableObject {
     @Published var onboardingVerification = OnboardingVerification()
     /// Last Settings → Test Dictation result (shown in the sidebar footer; not injected).
     @Published var settingsTestResultText: String?
+    /// A Settings test dictation is still starting: its microphone may be
+    /// open while the speech model loads, before `isSettingsTestRecording`
+    /// turns true. Leaving the page then must still close it.
+    var isStartingSettingsTest = false
     @AppStorage("vocamac.scratchpad.text") var scratchpadText: String = ""
 
     /// Error message to display, if any

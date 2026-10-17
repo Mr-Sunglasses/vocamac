@@ -294,15 +294,23 @@ extension AppState {
         }
         guard !isDictatingOutsideSettingsTest else { return }
         settingsTestResultText = nil
-        guard appStatus == .idle, !isRecording else { return }
+        guard appStatus == .idle, !isRecording, !isStartingSettingsTest else { return }
+        isStartingSettingsTest = true
+        defer { isStartingSettingsTest = false }
         await startRecording(injectResult: false)
     }
 
     /// Stop a running test dictation when its row goes away (leaving
     /// General, closing Settings or the window), so the microphone doesn't
-    /// stay on. The result is kept for when the row comes back.
+    /// stay on. The result is kept for when the row comes back. A test
+    /// still waiting for its speech model (a cold start opens the
+    /// microphone first) is cancelled instead: the microphone closes now,
+    /// not when the load ends, and nothing is transcribed.
     func stopSettingsTestDictation() async {
-        guard isSettingsTestRecording else { return }
-        await stopRecordingAndTranscribe()
+        if isSettingsTestRecording {
+            await stopRecordingAndTranscribe()
+        } else if isStartingSettingsTest, !isCapturingAudio {
+            await cancelRecording()
+        }
     }
 }

@@ -327,4 +327,45 @@ final class CalmGeneralAppStateTests: XCTestCase {
         XCTAssertTrue(appState.isRecording, "An ordinary dictation is not the test's to stop")
         await appState.cancelRecording()
     }
+
+    /// On a cold start the test opens the microphone and waits for the
+    /// speech model before it counts as recording. Leaving General then
+    /// must still close the microphone, at once, and transcribe nothing.
+    func testLeavingGeneralWhileTheTestWaitsForTheModelClosesTheMicrophone() async {
+        let modelManager = MockModelManager()
+        modelManager.downloadedModels = [.tiny]
+        let whisperService = MockWhisperService()
+        whisperService.loadedModelName = nil
+        whisperService.isModelLoaded = false
+        whisperService.loadDelayNanoseconds = 1_000_000_000
+        let (appState, mocks) = AppState.makeTestState(modelManager: modelManager, whisperService: whisperService)
+        let originalModel = appState.selectedModelSize
+        defer { appState.selectedModelSize = originalModel }
+        appState.selectedModelSize = ModelSize.tiny.rawValue
+
+        let start = Task { await appState.toggleSettingsTestDictation() }
+        await waitUntil { mocks.audioEngine.isCurrentlyRecording }
+        XCTAssertTrue(mocks.audioEngine.isCurrentlyRecording)
+        XCTAssertFalse(appState.isSettingsTestRecording, "Not recording yet: the model is still loading")
+        XCTAssertTrue(appState.isStartingSettingsTest)
+
+        await appState.stopSettingsTestDictation()
+        await waitUntil { !mocks.audioEngine.isCurrentlyRecording }
+        XCTAssertFalse(mocks.audioEngine.isCurrentlyRecording, "The microphone must close before the load ends")
+        XCTAssertFalse(mocks.whisperService.isModelLoaded, "Closed while the model was still loading")
+
+        await start.value
+        XCTAssertFalse(appState.isStartingSettingsTest)
+        XCTAssertFalse(appState.isRecording)
+        XCTAssertFalse(mocks.audioEngine.isCurrentlyRecording)
+        XCTAssertNil(appState.settingsTestResultText)
+        XCTAssertEqual(mocks.textInjector.injectCallCount, 0)
+    }
+
+    private func waitUntil(_ condition: () -> Bool) async {
+        let deadline = Date().addingTimeInterval(2)
+        while !condition(), Date() < deadline {
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+    }
 }
