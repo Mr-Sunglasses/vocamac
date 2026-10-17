@@ -145,9 +145,12 @@ struct CalmGeneralSettings: View {
     private func recorderDialog(for target: CalmShortcutTarget) -> some View {
         switch target {
         case .dictationKey:
+            // Opens showing the current key, so changing only “Start by” or
+            // the double-tap speed can be saved; click the key box to record.
             CalmShortcutRecorderDialog(
                 target: target, current: dictationCombo,
-                mode: appState.activationMode, threshold: appState.doubleTapThreshold
+                mode: appState.activationMode, threshold: appState.doubleTapThreshold,
+                startsWaiting: false
             )
         case .handsFree, .pasteLast, .commandMode:
             CalmShortcutRecorderDialog(target: target, current: target.action.flatMap { appState.shortcut(for: $0) })
@@ -208,6 +211,9 @@ struct CalmTestDictationRow: View {
             }
             .calmButton(appState.isPracticeRecording ? .primary : .secondary)
             .disabled(!appState.canToggleSettingsTestDictation)
+        }
+        .onDisappear {
+            Task { @MainActor in await appState.stopSettingsTestDictation() }
         }
     }
 

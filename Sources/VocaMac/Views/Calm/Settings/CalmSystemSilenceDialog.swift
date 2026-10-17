@@ -67,14 +67,20 @@ struct CalmSilenceDialog: View {
 
 /// A short numeric field in the Calm field style (h36 r9, content fill,
 /// 1 pt line2; ink and the focus halo while editing).
+///
+/// The value is committed as you type: a formatted `TextField` only commits
+/// on Return or focus loss, and Return presses the dialog's Done first, so
+/// the typed number was lost when the dialog closed.
 struct CalmNumberField: View {
     @Binding var value: Double
     let label: String
     var focus: FocusState<Bool>.Binding
 
+    @State private var text = ""
+
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: CalmMetrics.Radius.field, style: .continuous)
-        TextField("", value: $value, format: .number.precision(.fractionLength(0...1)))
+        TextField("", text: $text)
             .textFieldStyle(.plain)
             .font(CalmFont.field)
             .foregroundStyle(CalmColor.ink)
@@ -87,5 +93,27 @@ struct CalmNumberField: View {
             .overlay(shape.strokeBorder(focus.wrappedValue ? CalmColor.ink : CalmColor.line2, lineWidth: 1))
             .calmFieldFocusRing(focus.wrappedValue, radius: CalmMetrics.Radius.field)
             .accessibilityLabel(label)
+            .onAppear { text = Self.format(value) }
+            .onChange(of: text) { _, newText in
+                if let number = Self.parse(newText), number != value { value = number }
+            }
+            // Show the stored (clamped) value once editing ends.
+            .onChange(of: focus.wrappedValue) { _, focused in if !focused { text = Self.format(value) } }
+            .onChange(of: value) { _, newValue in if !focus.wrappedValue { text = Self.format(newValue) } }
+            .onSubmit { text = Self.format(value) }
+    }
+
+    /// “2.5”, with at most one decimal, in the user's locale.
+    static func format(_ value: Double, locale: Locale = .current) -> String {
+        value.formatted(.number.precision(.fractionLength(0...1)).grouping(.never).locale(locale))
+    }
+
+    /// The number typed, or nil while it isn't one yet (empty, “2.”).
+    static func parse(_ text: String, locale: Locale = .current) -> Double? {
+        let trimmed = text.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty, let number = try? Double(trimmed, format: .number.locale(locale)), number.isFinite else {
+            return nil
+        }
+        return number
     }
 }

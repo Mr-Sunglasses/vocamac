@@ -113,8 +113,10 @@ final class SettingsWindowManager: ObservableObject {
             forName: NSWindow.willCloseNotification,
             object: window,
             queue: .main
-        ) { [weak self] _ in
+        ) { [weak self, weak appState] _ in
             MainActor.assumeIsolated {
+                // A test dictation started in General stops with the window.
+                if let appState { Task { @MainActor in await appState.stopSettingsTestDictation() } }
                 guard let self else { return }
                 self.settingsWindow = nil
                 if let observer = self.closeObserver {

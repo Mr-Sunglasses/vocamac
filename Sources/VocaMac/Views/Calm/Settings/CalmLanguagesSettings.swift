@@ -13,6 +13,9 @@ struct CalmLanguagesSettings: View {
     @Environment(CalmNavigator.self) private var navigator: CalmNavigator?
 
     @State private var isAddingLanguage = false
+    /// “Switch model” picks through the same flow as Models, so its cards
+    /// show the download and any failure.
+    @State private var flow = CalmSpeechPickFlow()
 
     var body: some View {
         CalmPage(.sheet) {
@@ -30,6 +33,7 @@ struct CalmLanguagesSettings: View {
         .onChange(of: appState.selectedLanguage) {
             Task { @MainActor in await appState.languageDidChange() }
         }
+        .calmSpeechPickDialogs(flow)
     }
 
     // MARK: You speak
@@ -80,10 +84,12 @@ struct CalmLanguagesSettings: View {
     }
 
     /// “Switch model” picks the suggestion and opens Models, where the
-    /// download and switch show.
+    /// download and switch show. A pick that needs a question first (an
+    /// experimental model, stopping another download) asks it here.
     private func switchModel(to suggestion: ModelSize?) {
         if let suggestion {
-            Task { @MainActor in await appState.switchSpeechModel(to: suggestion) }
+            flow.pick(suggestion, appState: appState)
+            guard flow.prompt == nil, !flow.showsServer else { return }
         }
         navigator?.modelsTab = .speech
         navigator?.select(.models)

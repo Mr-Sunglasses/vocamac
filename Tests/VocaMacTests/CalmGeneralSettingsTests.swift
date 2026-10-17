@@ -101,6 +101,21 @@ final class CalmSettingsSummaryTests: XCTestCase {
                        "Medium sensitivity · stops after 2 s of quiet")
     }
 
+    /// The Silence dialog's seconds field commits what is typed as it is
+    /// typed, in the user's locale; half-typed text is not a number yet.
+    func testNumberFieldParsesAndFormatsInTheLocale() {
+        let english = Locale(identifier: "en_US")
+        let german = Locale(identifier: "de_DE")
+        XCTAssertEqual(CalmNumberField.parse("2.5", locale: english), 2.5)
+        XCTAssertEqual(CalmNumberField.parse(" 12 ", locale: english), 12)
+        XCTAssertEqual(CalmNumberField.parse("2,5", locale: german), 2.5)
+        XCTAssertNil(CalmNumberField.parse("", locale: english))
+        XCTAssertNil(CalmNumberField.parse("abc", locale: english))
+        XCTAssertEqual(CalmNumberField.format(2.5, locale: english), "2.5")
+        XCTAssertEqual(CalmNumberField.format(2.5, locale: german), "2,5")
+        XCTAssertEqual(CalmNumberField.format(300, locale: english), "300")
+    }
+
     func testAutoPauseSummary() {
         XCTAssertEqual(CalmSettingsSummary.autoPause(isEnabled: false, appNames: ["Steam"]), "Off")
         XCTAssertEqual(CalmSettingsSummary.autoPause(isEnabled: true, appNames: []), "On · no apps yet")
@@ -293,5 +308,23 @@ final class CalmGeneralAppStateTests: XCTestCase {
         await appState.toggleSettingsTestDictation()
         XCTAssertEqual(appState.settingsTestResultText, "kept", "A dictation elsewhere must not be touched")
         appState.isRecording = false
+    }
+
+    /// Leaving General (or closing the window) stops a test dictation, and
+    /// only that: an ordinary dictation keeps going.
+    func testLeavingGeneralStopsOnlyATestDictation() async {
+        let (appState, _) = AppState.makeTestState()
+        await appState.toggleSettingsTestDictation()
+        XCTAssertTrue(appState.isSettingsTestRecording)
+        await appState.stopSettingsTestDictation()
+        XCTAssertFalse(appState.isPracticeRecording)
+        XCTAssertFalse(appState.isRecording)
+
+        await appState.startRecording()
+        XCTAssertTrue(appState.isRecording)
+        XCTAssertFalse(appState.isSettingsTestRecording)
+        await appState.stopSettingsTestDictation()
+        XCTAssertTrue(appState.isRecording, "An ordinary dictation is not the test's to stop")
+        await appState.cancelRecording()
     }
 }

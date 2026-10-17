@@ -219,16 +219,6 @@ extension AppState {
         return CalmSettingsSummary.languages(spoken: fit.spoken, modelName: fit.modelName, missing: fit.missing)
     }
 
-    /// Switch to `size`: download it first when it isn't on this Mac. The
-    /// current model keeps working until the new one is ready.
-    func switchSpeechModel(to size: ModelSize) async {
-        if availableModels.first(where: { $0.size == size })?.isDownloaded != true {
-            await downloadModel(size)
-        }
-        guard availableModels.first(where: { $0.size == size })?.isDownloaded == true else { return }
-        await loadModel(size)
-    }
-
     // MARK: Shortcut recording
 
     /// Stop the dictation listener while a shortcut is recorded, so the
@@ -306,5 +296,13 @@ extension AppState {
         settingsTestResultText = nil
         guard appStatus == .idle, !isRecording else { return }
         await startRecording(injectResult: false)
+    }
+
+    /// Stop a running test dictation when its row goes away (leaving
+    /// General, closing Settings or the window), so the microphone doesn't
+    /// stay on. The result is kept for when the row comes back.
+    func stopSettingsTestDictation() async {
+        guard isSettingsTestRecording else { return }
+        await stopRecordingAndTranscribe()
     }
 }

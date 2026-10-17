@@ -271,6 +271,12 @@ final class AppState: ObservableObject {
         isCapturingAudio && !recordingInjectsResult && activeCommandTarget == nil
     }
 
+    /// Whether the practice recording is Settings › General's Test
+    /// dictation (not the Scratchpad's).
+    var isSettingsTestRecording: Bool {
+        isPracticeRecording && nonInjectedOutputDestination == .settingsTest
+    }
+
     private var recordingTranscription: RecordingTranscription?
     private var finishingTranscription: RecordingTranscription?
     /// Cleanups of finished pieces, run while recording ("Process while
