@@ -206,8 +206,9 @@ struct CalmSpeechServerDialog: View {
         model = configuration.model
     }
 
+    /// The key first: if Keychain refuses it, nothing is saved, so the
+    /// server in use never points at an address without its key.
     private func save() {
-        appState.speechEndpoint = draft
         let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         if !key.isEmpty {
             do {
@@ -217,6 +218,7 @@ struct CalmSpeechServerDialog: View {
                 return
             }
         }
+        appState.speechEndpoint = draft
         if !isInUse {
             CalmModelPicker.shared.startSpeech(.customEndpoint, cancelling: nil, appState: appState)
         }

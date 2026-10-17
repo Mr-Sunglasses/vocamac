@@ -123,8 +123,42 @@ final class CalmModelPicksTests: XCTestCase {
     func testWritingLightestMovesOverWhenRecommendedTakesIt() {
         // Below 16 GB the suggestion is the 0.5B model, so Lightest shows the next one.
         let picks = CalmModelPicks.writing(memoryGB: 8)
-        XCTAssertEqual(picks.map(\.model), [.qwen25_0_5b_q4_k_m, .qwen3_0_6b_q4_k_m, .qwen3_4b_instruct_2507_q4_k_m])
+        XCTAssertEqual(picks.map(\.model).prefix(2), [.qwen25_0_5b_q4_k_m, .qwen3_0_6b_q4_k_m])
         XCTAssertEqual(picks[1].isRunnerUp, true)
+    }
+
+    /// No card offers a model that needs more than its share of memory:
+    /// on 8 GB the 4B and 7B models (and Ministral 3B) are left out.
+    func testWritingPicksFitTheMacsMemory() {
+        let small = CalmModelPicks.writing(memoryGB: 8)
+        XCTAssertEqual(small.map(\.model), [.qwen25_0_5b_q4_k_m, .qwen3_0_6b_q4_k_m, .qwen25_1_5b_q4_k_m])
+        XCTAssertEqual(small.last?.slot, .bestQuality)
+        for memory in [8, 16, 24, 64] {
+            for pick in CalmModelPicks.writing(memoryGB: memory) {
+                XCTAssertLessThanOrEqual(
+                    pick.model.descriptor.ramRequiredGB, Double(memory) * CalmModelPicks.writingMemoryShare, "\(memory) GB: \(pick.model)"
+                )
+            }
+        }
+        // 24 GB has room for the 7B model, but Qwen 3 4B is still the best pick.
+        XCTAssertEqual(CalmModelPicks.writing(memoryGB: 24).last?.model, .qwen3_4b_instruct_2507_q4_k_m)
+    }
+
+    /// Qwen 3 4B turned German and French dictation into English, so it is
+    /// never offered to someone who speaks another language; Ministral 3B
+    /// (which keeps them) is Best quality instead.
+    func testWritingPicksAvoidAModelThatTranslatesOtherLanguages() {
+        for languages in [["en", "de"], ["fr"], ["es", "en"], ["ja"]] {
+            let picks = CalmModelPicks.writing(memoryGB: 32, languages: languages)
+            XCTAssertFalse(picks.contains { $0.model == .qwen3_4b_instruct_2507_q4_k_m }, "\(languages)")
+            XCTAssertTrue(picks.contains { $0.model == .ministral3_3b_q4_k_m }, "\(languages)")
+        }
+        let english = CalmModelPicks.writing(memoryGB: 32, languages: ["en"])
+        XCTAssertEqual(english.first { $0.slot == .bestQuality }?.model, .qwen3_4b_instruct_2507_q4_k_m)
+        // Below 16 GB, Ministral is the Best quality card for German.
+        let german = CalmModelPicks.writing(memoryGB: 12, languages: ["de"])
+        XCTAssertEqual(german.first { $0.slot == .bestQuality }?.model, .ministral3_3b_q4_k_m)
+        XCTAssertFalse(german.first { $0.slot == .bestQuality }?.isRunnerUp ?? true)
     }
 
     // MARK: - Pick steps

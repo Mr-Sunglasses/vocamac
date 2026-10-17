@@ -70,19 +70,25 @@ final class CalmModelPicker {
 
     /// Put `kind` to work for `role`, downloading it first when needed.
     /// Picking a model on this Mac while cleanup runs on a server brings
-    /// cleanup back to this Mac.
+    /// cleanup back to this Mac once the model is downloaded and loaded.
     func startWriting(_ kind: CleanupModelKind, role: CalmWritingRole, cancelling other: CleanupModelKind?, appState: AppState) {
         if other != nil { cancelWritingDownload(appState: appState) }
         failedWriting = nil
         cancelledWriting.remove(kind)
         let isForCleanup = role != .commandMode
         if isForCleanup { pendingWriting = kind } else { pendingCommandMode = kind }
-        let wasOnServer = role != .commandMode && !appState.cleanupEndpoint.isLocal
-        if wasOnServer { appState.calmRunCleanupOnThisMac() }
+        let movesFromServer = isForCleanup && !appState.cleanupEndpoint.isLocal
         Task { @MainActor [weak self] in
-            if role == .cleanupOnly, appState.sharesAIModel { await appState.setSharesAIModel(false) }
-            await appState.useAIModel(kind, for: role.aiRole)
-            if wasOnServer { await appState.syncTranscriptCleanup() }
+            // Only `.cleanup` may move both while they share a model: a
+            // Command-Mode-only or cleanup-only pick must not change the other.
+            if role != .cleanup, appState.sharesAIModel { await appState.setSharesAIModel(false) }
+            if movesFromServer {
+                await appState.calmMoveCleanupToThisMac(kind, for: role.aiRole) { [weak self] in
+                    self?.pendingWriting == kind
+                }
+            } else {
+                await appState.useAIModel(kind, for: role.aiRole)
+            }
             guard let self else { return }
             if isForCleanup {
                 guard self.pendingWriting == kind else { return }

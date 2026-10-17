@@ -903,8 +903,12 @@ final class MockTranscriptCleanup: TranscriptCleaning, ObservableObject {
         downloadedKinds.contains(kind)
     }
 
+    /// Runs inside `download` before it finishes, to look at the app mid-download.
+    var onDownload: (() async -> Void)?
+
     func download(_ kind: CleanupModelKind) async {
         downloadCallCount += 1
+        await onDownload?()
         if downloadSucceeds {
             downloadedKinds.insert(kind)
             modelState = .idle

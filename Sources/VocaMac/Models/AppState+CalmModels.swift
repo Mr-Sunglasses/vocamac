@@ -304,7 +304,9 @@ struct CalmModelPick<Model: Hashable>: Hashable {
 ///   rather than the larger Parakeet Ultra.
 /// - Writing AI: Recommended = the model suggested for this Mac's memory
 ///   (Ministral 3 3B from 16 GB) · Lightest = Qwen 2.5 0.5B · Best quality =
-///   Qwen 3 4B Instruct.
+///   Qwen 3 4B Instruct, or Ministral 3 3B when the user speaks a language
+///   besides English (Qwen 3 4B translated German and French dictation into
+///   English). Only models that fit `writingMemoryShare` of the memory.
 /// - When a slot's choice is already in an earlier card, the slot shows its
 ///   next best.
 enum CalmModelPicks {
@@ -366,14 +368,31 @@ enum CalmModelPicks {
         }
     }
 
-    /// The three Writing AI cards, in order.
-    static func writing(memoryGB: Int) -> [CalmModelPick<CleanupModelKind>] {
-        let recommended = CleanupModelCatalog.suggestion(memoryGB: memoryGB).cleanup
+    /// The most of the Mac's memory a writing card's model may need: it
+    /// stays loaded beside the speech model and the user's apps.
+    static let writingMemoryShare = 0.3
+
+    /// Writing models that turned other languages into English instead of
+    /// cleaning them up (AGENTS.md: Qwen 3 4B with German and French).
+    static let translatesIntoEnglish: Set<CleanupModelKind> = [.qwen3_4b_instruct_2507_q4_k_m]
+
+    /// The three Writing AI cards, in order, for this Mac's memory and the
+    /// languages the user speaks.
+    static func writing(memoryGB: Int, languages: [String] = []) -> [CalmModelPick<CleanupModelKind>] {
+        let speaksOtherLanguages = languages.contains { $0 != "auto" && $0 != "en" }
+        let isOffered: (CleanupModelKind) -> Bool = { kind in
+            kind.descriptor.ramRequiredGB <= Double(memoryGB) * writingMemoryShare
+                && !(speaksOtherLanguages && translatesIntoEnglish.contains(kind))
+        }
+        let suggested = CleanupModelCatalog.suggestion(memoryGB: memoryGB).cleanup
         let all = CleanupModelKind.cleanupChoices
+        let bestQuality: [CleanupModelKind] = speaksOtherLanguages
+            ? [.ministral3_3b_q4_k_m, .qwen25_7b_q4_k_m, .qwen25_1_5b_q4_k_m]
+            : [.qwen3_4b_instruct_2507_q4_k_m, .qwen25_7b_q4_k_m, .ministral3_3b_q4_k_m, .qwen25_1_5b_q4_k_m]
         let rankings: [(CalmPickSlot, [CleanupModelKind])] = [
-            (.recommended, [recommended] + all.filter { $0 != recommended }),
-            (.lightest, [.qwen25_0_5b_q4_k_m, .qwen3_0_6b_q4_k_m, .qwen25_1_5b_q4_k_m, .ministral3_3b_q4_k_m]),
-            (.bestQuality, [.qwen3_4b_instruct_2507_q4_k_m, .qwen25_7b_q4_k_m, .ministral3_3b_q4_k_m, .qwen25_1_5b_q4_k_m]),
+            (.recommended, ([suggested] + all.filter { $0 != suggested }).filter(isOffered)),
+            (.lightest, [.qwen25_0_5b_q4_k_m, .qwen3_0_6b_q4_k_m, .qwen25_1_5b_q4_k_m, .ministral3_3b_q4_k_m].filter(isOffered)),
+            (.bestQuality, bestQuality.filter(isOffered)),
         ]
         return fill(rankings)
     }
@@ -576,7 +595,7 @@ extension AppState {
 
     /// The three Writing AI cards for this Mac.
     var calmWritingPicks: [CalmModelPick<CleanupModelKind>] {
-        CalmModelPicks.writing(memoryGB: calmMemoryGB)
+        CalmModelPicks.writing(memoryGB: calmMemoryGB, languages: spokenLanguages)
     }
 
     /// The speech model the engine has loaded, whichever way it reports it.
@@ -659,6 +678,48 @@ extension AppState {
         var configuration = cleanupEndpoint
         configuration.provider = .local
         cleanupEndpoint = configuration
+    }
+
+    /// Bring Smart Cleanup back to this Mac with `kind`. The server keeps
+    /// cleaning while `kind` downloads and loads; only then does cleanup
+    /// switch, so dictations are never left uncleaned meanwhile and a failed
+    /// download keeps the server. Command Mode set to the server moves to
+    /// `kind` (or Apple Intelligence when `kind` can't edit), since the
+    /// server setting stops applying.
+    ///
+    /// - Parameter isWanted: Checked after each wait; false (a newer pick,
+    ///   a cancel) leaves everything as it was.
+    /// - Returns: Whether cleanup now runs on this Mac with `kind`.
+    @discardableResult
+    func calmMoveCleanupToThisMac(
+        _ kind: CleanupModelKind, for role: AIModelRole, isWanted: () -> Bool = { true }
+    ) async -> Bool {
+        guard !cleanupEndpoint.isLocal else {
+            await useAIModel(kind, for: role)
+            return true
+        }
+        if !transcriptCleanup.isDownloaded(kind) {
+            await transcriptCleanup.download(kind)
+            guard isWanted(), transcriptCleanup.isDownloaded(kind) else { return false }
+        }
+        if transcriptCleanupEnabled {
+            await transcriptCleanup.load(kind)
+            guard isWanted(), transcriptCleanup.loadedKind == kind else { return false }
+        }
+        // Read before the switch: once cleanup is local, the server choice
+        // no longer reads as `.endpoint`.
+        let commandModeWasOnServer = commandModeEngine == .endpoint
+        calmRunCleanupOnThisMac()
+        if commandModeWasOnServer {
+            if kind.supportsCommandMode {
+                commandModeEngine = .local(kind)
+            } else if appleIntelligenceAvailable() {
+                commandModeEngine = .appleIntelligence
+            }
+        }
+        // Cleanup is local now, so this loads and warms `kind` as usual.
+        await useAIModel(kind, for: role)
+        return true
     }
 
     /// Dismiss the download or delete error the Models pages show.
