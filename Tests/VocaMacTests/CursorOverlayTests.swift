@@ -99,6 +99,34 @@ final class OverlayContentTests: XCTestCase {
         XCTAssertFalse(OverlayStopHint.hold(key: "F5").isHandsFree)
         XCTAssertTrue(OverlayStopHint.doubleTap(key: "F5").isHandsFree)
         XCTAssertTrue(OverlayStopHint.handsFree(shortcut: nil).isHandsFree)
+        XCTAssertEqual(OverlayStopHint.press(key: "Right ⌥").instruction, "Press Right ⌥ to type")
+        XCTAssertEqual(OverlayStopHint.commandHold.instruction, "Let go to apply")
+        XCTAssertEqual(OverlayStopHint.commandPress(shortcut: "⌃⌥E").instruction, "Press ⌃⌥E to apply")
+        XCTAssertFalse(OverlayStopHint.commandHold.isHandsFree)
+        XCTAssertTrue(OverlayStopHint.commandPress(shortcut: nil).isHandsFree)
+    }
+
+    /// The finish hint follows how the session started: the key, the mouse
+    /// button, something else (a deep link), hands-free, or Command Mode
+    /// held versus quick-pressed.
+    func testStopHintIsDerivedFromHowTheSessionStarted() {
+        func hint(
+            command: (isKeyHeld: Bool, shortcut: String?)? = nil, handsFree: Bool = false,
+            trigger: DictationTrigger, mode: ActivationMode = .pushToTalk
+        ) -> OverlayStopHint {
+            OverlayStopHint.resolve(
+                commandMode: command, isHandsFreeSession: handsFree, handsFreeShortcut: "⌃⌥H",
+                trigger: trigger, mode: mode, dictationKey: "Right ⌥"
+            )
+        }
+        XCTAssertEqual(hint(trigger: .dictationKey), .hold(key: "Right ⌥"))
+        XCTAssertEqual(hint(trigger: .mouseButton), .hold(key: "the mouse button"))
+        XCTAssertEqual(hint(trigger: .other), .press(key: "Right ⌥"))
+        XCTAssertEqual(hint(trigger: .other, mode: .doubleTapToggle), .doubleTap(key: "Right ⌥"))
+        XCTAssertEqual(hint(trigger: .mouseButton, mode: .doubleTapToggle), .doubleTap(key: "the mouse button"))
+        XCTAssertEqual(hint(handsFree: true, trigger: .dictationKey), .handsFree(shortcut: "⌃⌥H"))
+        XCTAssertEqual(hint(command: (true, "⌃⌥E"), trigger: .other), .commandHold)
+        XCTAssertEqual(hint(command: (false, "⌃⌥E"), handsFree: true, trigger: .other), .commandPress(shortcut: "⌃⌥E"))
     }
 
     func testClipboardFallbackIsANeutralCopiedNotice() {

@@ -257,6 +257,7 @@ final class MockHotKeyManager: HotKeyMonitoring, HotKeyShortcutMonitoring {
     var onShortcutReleased: ((HotKeyShortcutAction) -> Void)?
     var onCancel: (() -> Void)?
     var shortcuts: [HotKeyShortcutAction: HotKeyCombo] = [:]
+    var lastStartWasMouseButton = false
     var isCancelKeyArmed = false
     var mouseTriggerButton = 0
 

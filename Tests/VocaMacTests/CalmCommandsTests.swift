@@ -57,6 +57,24 @@ final class CalmCommandsTests: XCTestCase {
         XCTAssertEqual(state.shortcut(for: .commandMode), controlOptionE)
     }
 
+    /// Saved commands belong to Command Mode: turning it off takes their
+    /// shortcuts off the listener too, and turning it on puts them back.
+    func testSavedCommandShortcutsFollowCommandMode() {
+        let (state, mocks) = AppState.makeTestState()
+        state.setShortcut(controlOptionE, for: .commandMode)
+        let saved = SavedCommand(name: "Shorter", instruction: "Make it shorter", shortcut: suggestedE.storageString)
+        state.savedCommands = [saved]
+        XCTAssertEqual(mocks.hotKeyManager.shortcuts[.savedCommand(saved.id)], suggestedE)
+
+        state.setCommandModeOn(false, defaults: defaults)
+        XCTAssertNil(mocks.hotKeyManager.shortcuts[.savedCommand(saved.id)])
+        XCTAssertNil(mocks.hotKeyManager.shortcuts[.commandMode])
+
+        state.setCommandModeOn(true, defaults: defaults)
+        XCTAssertEqual(mocks.hotKeyManager.shortcuts[.savedCommand(saved.id)], suggestedE)
+        XCTAssertEqual(state.shortcut(for: .savedCommand(saved.id)), suggestedE, "the command keeps its keys")
+    }
+
     func testTurningOnWithNothingRememberedUsesTheSuggestion() {
         let (state, _) = AppState.makeTestState()
 

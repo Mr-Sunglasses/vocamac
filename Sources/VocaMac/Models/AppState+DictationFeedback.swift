@@ -117,14 +117,17 @@ extension AppState {
     /// Hands-free label. The hands-free shortcut (and the menu) keep
     /// recording until pressed again, whatever the activation mode.
     var overlayStopHint: OverlayStopHint {
-        if isHandsFreeSession {
-            return .handsFree(shortcut: shortcut(for: .handsFreeToggle).map { CalmKeyCaps.compactText(for: $0) })
-        }
-        let key = CalmKeyCaps.compactText(for: HotKeyCombo(keyCode: hotKeyCode, modifiers: hotKeyModifiers))
-        switch activationMode {
-        case .pushToTalk: return .hold(key: key)
-        case .doubleTapToggle: return .doubleTap(key: key)
-        }
+        OverlayStopHint.resolve(
+            commandMode: commandModeSession == nil ? nil : (
+                isKeyHeld: isCommandModeKeyHeld,
+                shortcut: shortcut(for: .commandMode).map { CalmKeyCaps.compactText(for: $0) }
+            ),
+            isHandsFreeSession: isHandsFreeSession,
+            handsFreeShortcut: shortcut(for: .handsFreeToggle).map { CalmKeyCaps.compactText(for: $0) },
+            trigger: dictationTrigger,
+            mode: activationMode,
+            dictationKey: CalmKeyCaps.compactText(for: HotKeyCombo(keyCode: hotKeyCode, modifiers: hotKeyModifiers))
+        )
     }
 
     // MARK: - Menu Bar

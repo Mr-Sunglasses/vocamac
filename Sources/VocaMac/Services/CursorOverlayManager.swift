@@ -269,11 +269,28 @@ enum OverlayStopHint: Equatable, Sendable {
     /// The hands-free shortcut (or the menu): pressing it again types it.
     /// Nil when no shortcut is set.
     case handsFree(shortcut: String?)
+    /// Started without holding anything (a deep link, the menu) in push to
+    /// talk: pressing the dictation key types it.
+    case press(key: String)
+    /// Command Mode while its shortcut is held: letting go applies the edit.
+    case commandHold
+    /// Command Mode after a quick press: pressing the shortcut again applies it.
+    case commandPress(shortcut: String?)
 
     /// The recording carries on after the key is let go.
     var isHandsFree: Bool {
-        if case .hold = self { return false }
-        return true
+        switch self {
+        case .hold, .commandHold: return false
+        default: return true
+        }
+    }
+
+    /// Whether this is a Command Mode hint (“to apply”, not “to type”).
+    var isCommandMode: Bool {
+        switch self {
+        case .commandHold, .commandPress: return true
+        default: return false
+        }
     }
 
     /// What ends this dictation and types it, if there is a key to name.
@@ -281,10 +298,47 @@ enum OverlayStopHint: Equatable, Sendable {
         switch self {
         case .hold(let key): return "Let go of \(key) to type"
         case .doubleTap(let key): return "Double-tap \(key) to type"
-        case .handsFree(let shortcut?): return "Press \(shortcut) to type"
+        case .handsFree(let shortcut?), .press(let shortcut): return "Press \(shortcut) to type"
         case .handsFree(nil): return nil
+        case .commandHold: return "Let go to apply"
+        case .commandPress(let shortcut?): return "Press \(shortcut) to apply"
+        case .commandPress(nil): return nil
         }
     }
+
+    /// The hint for a dictation, from how it actually started.
+    ///
+    /// - Parameters:
+    ///   - commandMode: For a Command Mode session, whether its shortcut is
+    ///     still held and the shortcut's keys; nil for a dictation.
+    ///   - trigger: What started a dictation that isn't hands-free.
+    static func resolve(
+        commandMode: (isKeyHeld: Bool, shortcut: String?)?,
+        isHandsFreeSession: Bool, handsFreeShortcut: String?,
+        trigger: DictationTrigger, mode: ActivationMode, dictationKey: String
+    ) -> OverlayStopHint {
+        if let commandMode {
+            return commandMode.isKeyHeld ? .commandHold : .commandPress(shortcut: commandMode.shortcut)
+        }
+        if isHandsFreeSession { return .handsFree(shortcut: handsFreeShortcut) }
+        // The mouse button works like the key, so it is named instead.
+        let key = trigger == .mouseButton ? "the mouse button" : dictationKey
+        switch (mode, trigger) {
+        case (.pushToTalk, .other): return .press(key: dictationKey)
+        case (.pushToTalk, _): return .hold(key: key)
+        case (.doubleTapToggle, _): return .doubleTap(key: key)
+        }
+    }
+}
+
+/// What started a dictation, so the overlay names the right way to end it.
+enum DictationTrigger: Equatable, Sendable {
+    /// The dictation key.
+    case dictationKey
+    /// The mouse button set to work like the dictation key.
+    case mouseButton
+    /// Anything else: a deep link, the menu, a test dictation.
+    case other
 }
 
 extension CalmKeyCaps {
@@ -1205,7 +1259,12 @@ enum OverlayCopy {
         } else if viewModel.isLoadingSpeechModel {
             parts.append("Speak now — loading speech model…")
         } else if viewModel.isCommandMode {
-            parts.append("Let go to apply")
+            // Held: letting go applies. After a quick press: press again.
+            if let hint = viewModel.stopHint, hint.isCommandMode {
+                if let instruction = hint.instruction { parts.append(instruction) }
+            } else {
+                parts.append("Let go to apply")
+            }
         } else if let instruction = viewModel.stopHint?.instruction {
             parts.append(instruction)
         }

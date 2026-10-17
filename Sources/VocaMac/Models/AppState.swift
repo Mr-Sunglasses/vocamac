@@ -659,6 +659,7 @@ final class AppState: ObservableObject {
         let outputDestination: ScratchpadOutputDestination
         let isHandsFree: Bool
         let verifiesShortcut: Bool
+        let trigger: DictationTrigger
     }
     private var queuedRecordingStart: QueuedRecordingStart?
 
@@ -927,6 +928,15 @@ final class AppState: ObservableObject {
     /// The edit a review panel is holding until it is approved.
     private var pendingReviewEdit: PendingCommandEdit?
     private var commandModePressStartedAt: Date?
+
+    /// Whether the Command Mode shortcut is still held from the press that
+    /// started the session (false after a quick press, which needs a second).
+    var isCommandModeKeyHeld: Bool { commandModePressStartedAt != nil }
+
+    /// What started the dictation being set up, for the overlay's finish
+    /// hint: set around a start by the dictation key or mouse button (and a
+    /// queued one), `.other` otherwise.
+    var dictationTrigger: DictationTrigger = .other
     /// Engine chosen when the current Command Mode session began.
     private var activeCommandEngine: CommandModeEngine?
     /// App whose selection is being edited, for the history entry.
@@ -2226,7 +2236,8 @@ final class AppState: ObservableObject {
                     injectResult: injectResult,
                     outputDestination: outputDestination,
                     isHandsFree: isHandsFreeSession,
-                    verifiesShortcut: verifiesShortcut
+                    verifiesShortcut: verifiesShortcut,
+                    trigger: dictationTrigger
                 )
                 VocaLogger.info(.appState, "Dictation requested while the previous one is still finishing — starting when it's delivered")
                 // Push to talk speaks while the key is down; toggle-style
@@ -3814,6 +3825,8 @@ final class AppState: ObservableObject {
         let releasedAt = earlyCapture?.releasedAtSampleCount
         VocaLogger.info(.appState, "Previous dictation delivered — starting the queued one")
         if queued.isHandsFree { isHandsFreeSession = true }
+        dictationTrigger = queued.trigger
+        defer { dictationTrigger = .other }
         await startRecording(
             injectResult: queued.injectResult, outputDestination: queued.outputDestination,
             verifiesShortcut: queued.verifiesShortcut
@@ -4897,10 +4910,13 @@ extension AppState {
         if let combo = HotKeyCombo(storageString: handsFreeShortcut) {
             shortcuts[.handsFreeToggle] = combo
         }
-        if let combo = HotKeyCombo(storageString: commandModeShortcut) {
-            shortcuts[.commandMode] = combo
+        let commandMode = HotKeyCombo(storageString: commandModeShortcut)
+        if let commandMode {
+            shortcuts[.commandMode] = commandMode
         }
-        for command in savedCommands where command.isUsable {
+        // Saved commands are part of Command Mode: while it is off (no
+        // shortcut), their shortcuts are off too. Turning it on restores them.
+        for command in savedCommands where command.isUsable && commandMode != nil {
             if let combo = HotKeyCombo(storageString: command.shortcut) {
                 shortcuts[.savedCommand(command.id)] = combo
             }
@@ -4991,6 +5007,8 @@ extension AppState {
         // and ended the command before any audio could exist.
         guard Date().timeIntervalSince(startedAt) >= commandModeHoldThreshold else {
             VocaLogger.debug(.appState, "Command Mode quick press — waiting for a second press")
+            // The overlay said “Let go to apply”; now it takes a second press.
+            cursorOverlay.setStopHint(overlayStopHint)
             return
         }
 
@@ -5703,7 +5721,8 @@ extension AppState {
 
     /// Run a saved command on the current selection.
     func runSavedCommand(_ id: UUID) async {
-        guard let command = savedCommands.first(where: { $0.id == id }), command.isUsable else { return }
+        guard isCommandModeOn,
+              let command = savedCommands.first(where: { $0.id == id }), command.isUsable else { return }
         await runCommand(instruction: command.instruction)
     }
 

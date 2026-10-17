@@ -127,6 +127,9 @@ protocol HotKeyShortcutMonitoring: AnyObject {
     func updateShortcuts(_ shortcuts: [HotKeyShortcutAction: HotKeyCombo])
     func setCancelKeyArmed(_ armed: Bool)
     func updateMouseTrigger(button: Int)
+    /// Whether the last `onRecordingStart` came from the mouse trigger
+    /// button rather than the key. Read on the main thread.
+    var lastStartWasMouseButton: Bool { get }
 }
 
 extension HotKeyManager: HotKeyShortcutMonitoring {}
