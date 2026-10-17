@@ -82,6 +82,7 @@ struct CalmAutoPauseDialog: View {
                             }
                         }
                     }
+                    .calmDialogScrollingList()
                 }
             }
             .calmDisabledByParent(!appState.autoPauseEnabled)

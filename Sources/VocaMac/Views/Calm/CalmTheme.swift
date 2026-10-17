@@ -475,6 +475,10 @@ enum CalmMetrics {
     static let confirmDialogWidth: CGFloat = 400
     static let dialogPadding: CGFloat = 24
     static let dialogGap: CGFloat = 18
+    /// The least space between a dialog and the window's edges.
+    static let dialogWindowMargin: CGFloat = 24
+    /// The tallest a list inside a dialog grows before it scrolls.
+    static let dialogListMaxHeight: CGFloat = 300
 
     // MARK: Controls
 

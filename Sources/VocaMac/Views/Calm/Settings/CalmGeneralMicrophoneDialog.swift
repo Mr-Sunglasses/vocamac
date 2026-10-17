@@ -59,7 +59,8 @@ struct CalmMicrophoneDialog: View {
     // MARK: Devices
 
     private var deviceList: some View {
-        VStack(spacing: 0) {
+        let shape = RoundedRectangle(cornerRadius: CalmMetrics.Radius.panel, style: .continuous)
+        return VStack(spacing: 0) {
             if isSelectedUnavailable {
                 deviceRow(id: appState.selectedAudioDeviceID, name: selectedName, detail: "Not connected", isOn: true) {}
                     .disabled(true)
@@ -75,8 +76,9 @@ struct CalmMicrophoneDialog: View {
                 }
             }
         }
-        .calmPanelBackground()
-        .clipShape(RoundedRectangle(cornerRadius: CalmMetrics.Radius.panel, style: .continuous))
+        .calmDialogScrollingList(maxHeight: 280)
+        .background(shape.fill(CalmColor.panel))
+        .clipShape(shape)
     }
 
     private func deviceRow(

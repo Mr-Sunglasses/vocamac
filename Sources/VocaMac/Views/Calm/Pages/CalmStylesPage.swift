@@ -102,6 +102,7 @@ struct CalmStylesPage: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
+                .calmDialogScrollingList(maxHeight: 220)
             } footer: {
                 CalmDialogFooter(primaryTitle: pending.total > 1 ? "Apply to all \(pending.total) apps" : "Apply") {
                     appState.calmApplyStyle(pending.style, to: pending.group, includingOtherStyles: true)

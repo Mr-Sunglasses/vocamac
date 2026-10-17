@@ -4,7 +4,8 @@
 // Small modal dialogs (Dialogs board): 440 wide (520 for lists), r14,
 // padding 24, gap 18, centred over the whole window with the scrim. They
 // render inside the window, above the Settings sheet when it is open, so
-// no extra NSWindow is involved.
+// no extra NSWindow is involved. A dialog never grows past the window: its
+// content scrolls between the title and the footer instead.
 
 import SwiftUI
 
@@ -53,7 +54,9 @@ struct CalmDialog<Header: View, Content: View, Footer: View>: View {
             } else {
                 titleBlock
             }
-            content
+            if !(content is EmptyView) {
+                fittedContent
+            }
             footer
         }
         .padding(CalmMetrics.dialogPadding)
@@ -65,6 +68,29 @@ struct CalmDialog<Header: View, Content: View, Footer: View>: View {
         .accessibilityElement(children: .contain)
         .accessibilityAddTraits(.isModal)
         .accessibilityLabel(title)
+    }
+
+    /// The content as laid out, or, when the dialog would be taller than
+    /// the window, scrolling between the fixed title and footer so every
+    /// row and the footer's buttons stay reachable.
+    private var fittedContent: some View {
+        ViewThatFits(in: .vertical) {
+            contentStack
+            ScrollView(.vertical) {
+                // Room for focus rings, which the scroll view would clip.
+                contentStack.padding(Self.focusRingRoom)
+            }
+            .padding(-Self.focusRingRoom)
+        }
+    }
+
+    private static var focusRingRoom: CGFloat { 4 }
+
+    private var contentStack: some View {
+        VStack(alignment: .leading, spacing: CalmMetrics.dialogGap) {
+            content
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var titleBlock: some View {
@@ -190,6 +216,18 @@ extension CalmDialogFooter where Leading == EmptyView {
             cancelTitle: cancelTitle, onCancel: onCancel, dismissesOnPrimary: dismissesOnPrimary,
             onPrimary: onPrimary
         ) { EmptyView() }
+    }
+}
+
+// MARK: - Lists in dialogs
+
+extension View {
+    /// A list inside a dialog: its own height while short, scrolling past
+    /// `maxHeight`, so a long one leaves the rest of the dialog in view.
+    func calmDialogScrollingList(maxHeight: CGFloat = CalmMetrics.dialogListMaxHeight) -> some View {
+        ScrollView(.vertical) { self }
+            .frame(maxHeight: maxHeight)
+            .fixedSize(horizontal: false, vertical: true)
     }
 }
 
@@ -322,6 +360,9 @@ private struct CalmDialogLayer: View {
                     .transition(.opacity)
                     .accessibilityHidden(true)
                 entry.content
+                    // Keeps a tall dialog inside the window: `CalmDialog`
+                    // scrolls its content when this is too short for it.
+                    .padding(CalmMetrics.dialogWindowMargin)
                     .environment(\.calmDismissDialog, CalmDismissDialogAction(action: entry.dismiss))
                     .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.98)))
                     .id(entry.id)
