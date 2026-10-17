@@ -388,10 +388,10 @@ enum CalmSidebarStatus: Equatable {
             return .needsAccess(message: "Accessibility is off, so VocaMac can’t type for you.")
         case .preparingModel:
             let name = inputs.preparingModelName ?? inputs.modelName
-            let percent = inputs.downloadProgress.map { " · \(percent($0))" } ?? ""
+            let percentSuffix = inputs.downloadProgress.map { " · \(Self.percent($0))" } ?? ""
             return .loadingModel(
                 title: inputs.isDownloading ? "Downloading model" : "Loading model",
-                detail: name.map { inputs.isDownloading ? $0 + percent : $0 },
+                detail: name.map { inputs.isDownloading ? $0 + percentSuffix : $0 },
                 progress: inputs.downloadProgress
             )
         case .needsModel:
