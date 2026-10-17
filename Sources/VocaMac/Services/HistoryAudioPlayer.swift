@@ -24,7 +24,11 @@ final class HistoryAudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegat
         do {
             let player = try AVAudioPlayer(contentsOf: url)
             player.delegate = self
-            player.play()
+            // Only show “Stop audio” once playback has really started.
+            guard player.play() else {
+                VocaLogger.warning(.history, "Could not start playing recording")
+                return
+            }
             self.player = player
             playingURL = url
         } catch {
@@ -39,6 +43,25 @@ final class HistoryAudioPlayer: NSObject, ObservableObject, AVAudioPlayerDelegat
     }
 
     nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
-        Task { @MainActor in self.stop() }
+        let finished = ObjectIdentifier(player)
+        Task { @MainActor in self.stop(ifPlaying: finished) }
+    }
+
+    /// A damaged recording stops mid-way without finishing; reset so the
+    /// row doesn't stay on “Stop audio”.
+    nonisolated func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
+        let failed = ObjectIdentifier(player)
+        let message = error?.localizedDescription ?? "unknown error"
+        Task { @MainActor in
+            VocaLogger.warning(.history, "Recording stopped on a decode error: \(message)")
+            self.stop(ifPlaying: failed)
+        }
+    }
+
+    /// Stops only if `player` is still the one playing, so a late callback
+    /// from an earlier recording can't stop the next one.
+    private func stop(ifPlaying player: ObjectIdentifier) {
+        guard let current = self.player, ObjectIdentifier(current) == player else { return }
+        stop()
     }
 }

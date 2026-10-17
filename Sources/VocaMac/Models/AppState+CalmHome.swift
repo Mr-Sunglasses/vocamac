@@ -7,6 +7,16 @@
 
 import Foundation
 
+/// Everything the Insights summary, heatmap and app shares are computed
+/// from. Equal inputs give equal results, so pages compute them once per change.
+struct CalmInsightsInputs: Equatable {
+    let stats: UserStats
+    let historyRevision: Int
+    let historyEnabled: Bool
+    /// The start of today: the heatmap and streak move on at midnight.
+    let today: Date
+}
+
 extension AppState {
     /// The Command Mode shortcut as key-cap labels, or nil when none is set.
     var commandModeShortcutCaps: [String]? {
@@ -34,13 +44,24 @@ extension AppState {
         CalmActivityCalendar.statsCalendar(for: statsManager.stats)
     }
 
-    /// Totals, streak and bests for Home and Insights.
+    /// Totals, streak and bests for Home and Insights. History only fills
+    /// in bests while it is on.
     func insightsSummary(now: Date = Date()) -> CalmInsightsSummary {
         CalmInsightsSummary(
             stats: statsManager.stats,
-            history: historyStore.entries,
+            history: historyEnabled ? historyStore.entries : [],
             now: now,
             calendar: statsCalendar
+        )
+    }
+
+    /// What `insightsSummary()` depends on, for pages that cache it.
+    var insightsInputs: CalmInsightsInputs {
+        CalmInsightsInputs(
+            stats: statsManager.stats,
+            historyRevision: historyStore.revision,
+            historyEnabled: historyEnabled,
+            today: statsCalendar.startOfDay(for: Date())
         )
     }
 

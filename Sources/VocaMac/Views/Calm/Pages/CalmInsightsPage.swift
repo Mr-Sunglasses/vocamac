@@ -20,6 +20,15 @@ struct CalmInsightsPage: View {
     /// the state it was scheduled for.
     @State private var shareStateToken = 0
     @State private var sharePickerAnchor = CalmSharePickerAnchor()
+    /// The summary, app shares and heatmap days, recomputed only when the
+    /// stats, history or day change (not on every redraw).
+    @State private var memo = CalmMemo<CalmInsightsInputs, Computed>()
+
+    private struct Computed {
+        let summary: CalmInsightsSummary
+        let apps: [CalmAppShare]
+        let days: [CalmActivityDay]
+    }
 
     /// What the last share did, shown as a line under the header.
     private enum ShareState: Equatable {
@@ -30,8 +39,15 @@ struct CalmInsightsPage: View {
     }
 
     var body: some View {
-        let summary = appState.insightsSummary()
-        let apps = appState.historyEnabled ? CalmAppShare.top(from: appState.historyStore.entries) : []
+        let computed = memo.value(for: appState.insightsInputs) {
+            Computed(
+                summary: appState.insightsSummary(),
+                apps: appState.historyEnabled ? CalmAppShare.top(from: appState.historyStore.entries) : [],
+                days: CalmActivityCalendar.heatmapDays(stats: appState.statsManager.stats, calendar: appState.statsCalendar)
+            )
+        }
+        let summary = computed.summary
+        let apps = computed.apps
         CalmPage(.list, spacing: 20) {
             VStack(alignment: .leading, spacing: 10) {
                 CalmPageHeader("Insights") {
@@ -55,7 +71,7 @@ struct CalmInsightsPage: View {
             totals(summary)
                 .settingsTarget("stats")
 
-            CalmStreakPanel(summary: summary, metric: metric)
+            CalmStreakPanel(summary: summary, days: computed.days, metric: metric)
 
             bottomRow(summary: summary, apps: apps)
         }
@@ -85,7 +101,8 @@ struct CalmInsightsPage: View {
                 value: CalmFormat.number(summary.wordsPerMinute), label: "words a minute",
                 note: summary.speedNote ?? "Your speaking speed"
             )
-            CalmStatCard(value: CalmFormat.number(summary.yearWords), label: "words this year", note: yearNote)
+            // The 53-week grid, not the calendar year.
+            CalmStatCard(value: CalmFormat.number(summary.yearWords), label: "words in the past year", note: yearNote)
             CalmStatCard(
                 value: CalmFormat.saved(summary.savedSeconds), label: "saved",
                 note: "Compared with typing at \(Int(CalmInsightsSummary.typingWPM)) wpm"
@@ -255,11 +272,14 @@ struct CalmInsightsPage: View {
 /// heatmap, the selected day's detail line and the legend.
 private struct CalmStreakPanel: View {
     let summary: CalmInsightsSummary
+    /// The heatmap's days, oldest first (`CalmActivityCalendar.heatmapDays`).
+    let days: [CalmActivityDay]
     let metric: CalmInsightsMetric
 
     @EnvironmentObject private var appState: AppState
-    /// The clicked day; nil means today.
-    @State private var selectedIndex: Int?
+    /// The clicked day's key; nil means today. A key, not a grid index,
+    /// so the selection stays on its day when a new week starts.
+    @State private var selectedKey: String?
     @State private var hoveredIndex: Int?
     @State private var availableWidth: CGFloat = 800
 
@@ -271,9 +291,8 @@ private struct CalmStreakPanel: View {
     var body: some View {
         let calendar = appState.statsCalendar
         let stats = appState.statsManager.stats
-        let days = CalmActivityCalendar.heatmapDays(stats: stats, calendar: calendar)
         let todayIndex = days.lastIndex { !$0.isFuture } ?? max(0, days.count - 1)
-        let selected = min(selectedIndex ?? todayIndex, max(0, days.count - 1))
+        let selected = selectedKey.flatMap { key in days.firstIndex { $0.key == key } } ?? todayIndex
         let shown = hoveredIndex.flatMap { days.indices.contains($0) && !days[$0].isFuture ? $0 : nil } ?? selected
         VStack(alignment: .leading, spacing: 14) {
             header
@@ -407,7 +426,7 @@ private struct CalmStreakPanel: View {
                 .onTapGesture { point in
                     guard let index = index(at: point, step: step, offset: offset, count: days.count),
                           !days[index].isFuture else { return }
-                    selectedIndex = index == todayIndex ? nil : index
+                    select(index, in: days, todayIndex: todayIndex)
                 }
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(columns < allColumns
@@ -421,7 +440,7 @@ private struct CalmStreakPanel: View {
                     case .decrement: next = max(offset, selected - 1)
                     @unknown default: return
                     }
-                    selectedIndex = next == todayIndex ? nil : next
+                    select(next, in: days, todayIndex: todayIndex)
                 }
             }
         }
@@ -432,6 +451,11 @@ private struct CalmStreakPanel: View {
             // The panel's inner width; the grid may use the overhang beyond it.
             if width > 0, abs(width - availableWidth) > 0.5 { availableWidth = width }
         }
+    }
+
+    private func select(_ index: Int, in days: [CalmActivityDay], todayIndex: Int) {
+        guard days.indices.contains(index) else { return }
+        selectedKey = index == todayIndex ? nil : days[index].key
     }
 
     private func index(at point: CGPoint, step: CGFloat, offset: Int, count: Int) -> Int? {

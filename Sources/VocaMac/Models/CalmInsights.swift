@@ -251,10 +251,19 @@ struct CalmInsightsSummary {
         let biggest = stats.dailyWordCounts.values.max() ?? 0
         biggestDayWords = biggest > 0 ? biggest : nil
 
-        let longestInHistory = history
-            .filter { $0.status == .completed && !$0.isCommandEdit && $0.audioSeconds.isFinite }
-            .map(\.audioSeconds)
-            .max() ?? 0
+        // History fills in dictations from before the stats tracked the
+        // longest one, but only those since the stats' first day: after
+        // Reset All Statistics, older history no longer counts.
+        let firstStatsDay = (Array(stats.dailyWordCounts.keys) + Array(stats.dailyTranscriptionCounts.keys)).min()
+        let longestInHistory = firstStatsDay.map { firstDay in
+            history
+                .filter {
+                    $0.status == .completed && !$0.isCommandEdit && $0.audioSeconds.isFinite
+                        && CalmActivityCalendar.dayKey(for: $0.createdAt, calendar: calendar) >= firstDay
+                }
+                .map(\.audioSeconds)
+                .max() ?? 0
+        } ?? 0
         let longest = max(stats.longestDictationSeconds, longestInHistory)
         longestDictationSeconds = longest > 0 ? longest : nil
 
@@ -265,9 +274,10 @@ struct CalmInsightsSummary {
         medianStopWaitWithoutProcessing = withProcessing == nil ? nil : withoutProcessing
     }
 
-    /// “About 3× faster than typing”, or nil before the first dictation.
+    /// “About 3× faster than typing”, or nil before the first dictation
+    /// and when speaking is slower than typing (nothing true to boast).
     var speedNote: String? {
-        guard let ratio = timesFasterThanTyping else { return nil }
+        guard let ratio = timesFasterThanTyping, ratio >= 0.9 else { return nil }
         if ratio < 1.1 { return "About as fast as typing" }
         let shown = ratio >= 2 ? String(Int(ratio.rounded())) : String(format: "%.1f", ratio)
         return "About \(shown)× faster than typing"
@@ -319,7 +329,7 @@ struct CalmAppShare: Hashable, Identifiable {
 /// The Home feed's dictations for one day.
 struct CalmFeedDay: Identifiable {
     let day: Date
-    let entries: [DictationHistoryEntry]
+    private(set) var entries: [DictationHistoryEntry]
 
     var id: Date { day }
 
@@ -329,7 +339,8 @@ struct CalmFeedDay: Identifiable {
         for entry in entries {
             let day = calendar.startOfDay(for: entry.createdAt)
             if let last = groups.last, last.day == day {
-                groups[groups.count - 1] = CalmFeedDay(day: day, entries: last.entries + [entry])
+                // Append in place: rebuilding the group copied its entries every time.
+                groups[groups.count - 1].entries.append(entry)
             } else {
                 groups.append(CalmFeedDay(day: day, entries: [entry]))
             }

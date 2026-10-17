@@ -4574,7 +4574,7 @@ final class AppState: ObservableObject {
             translate: translatesSpeech,
             vocabulary: recognitionHintVocabulary
         )
-        statsManager.recordTranscription(result)
+        statsManager.recordTranscription(result, isDictation: false)
         lastTranscription = result
         return result
     }
@@ -4610,7 +4610,7 @@ final class AppState: ObservableObject {
             vocabulary: recognitionHintVocabulary
         )
         try Task.checkCancellation()
-        statsManager.recordTranscription(result)
+        statsManager.recordTranscription(result, isDictation: false)
         lastTranscription = result
         return result
     }

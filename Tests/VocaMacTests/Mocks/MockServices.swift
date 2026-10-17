@@ -723,8 +723,12 @@ final class MockStatsManager: StatsManaging, ObservableObject {
         objectWillChange.eraseToAnyPublisher()
     }
 
-    func recordTranscription(_ transcription: VocaTranscription) {
+    /// The `isDictation` flag of each recorded transcription, in order.
+    var recordedIsDictation: [Bool] = []
+
+    func recordTranscription(_ transcription: VocaTranscription, isDictation: Bool) {
         recordCallCount += 1
+        recordedIsDictation.append(isDictation)
     }
 
     var recordedStopWaits: [StopWait] = []

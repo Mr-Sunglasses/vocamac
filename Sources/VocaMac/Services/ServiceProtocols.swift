@@ -367,7 +367,10 @@ extension TextInjecting {
 protocol StatsManaging: AnyObject {
     var stats: UserStats { get }
     var objectWillChangePublisher: AnyPublisher<Void, Never> { get }
-    func recordTranscription(_ transcription: VocaTranscription)
+    /// Count a finished transcription. `isDictation` is false for file
+    /// and meeting transcriptions: they count toward words and totals, but
+    /// not toward the day's speaking time or the longest dictation.
+    func recordTranscription(_ transcription: VocaTranscription, isDictation: Bool)
     /// Remember how long a dictation took to paste after stop.
     func recordStopWait(_ wait: StopWait)
     func refreshCurrentStreak()
@@ -376,6 +379,11 @@ protocol StatsManaging: AnyObject {
 }
 
 extension StatsManaging {
+    /// Count a finished dictation.
+    func recordTranscription(_ transcription: VocaTranscription) {
+        recordTranscription(transcription, isDictation: true)
+    }
+
     func recordStopWait(_ wait: StopWait) {}
     func refreshCurrentStreak() {}
     func flushPendingSaves() {}

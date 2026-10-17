@@ -82,6 +82,28 @@ final class CalmInsightsTests: XCTestCase {
         manager.flushPendingSaves()
     }
 
+    /// File and meeting transcriptions count toward words and totals, but
+    /// not toward the day's speaking time or the longest dictation.
+    @MainActor
+    func testFileAndMeetingTranscriptionsAreNotDictations() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("calm_stats_\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let manager = StatsManager(statsFileURL: url, calendar: calendar, now: { (try? self.now) ?? Date() })
+        let when = try now
+        manager.recordTranscription(VocaTranscription(
+            text: "one two three", duration: 1, detectedLanguage: "en", audioLengthSeconds: 20, modelUsed: .tiny, timestamp: when
+        ))
+        manager.recordTranscription(VocaTranscription(
+            text: "a long meeting", duration: 1, detectedLanguage: "en", audioLengthSeconds: 3_600, modelUsed: .tiny, timestamp: when
+        ), isDictation: false)
+        let today = try key(0, from: when)
+        XCTAssertEqual(manager.stats.dailyAudioSeconds[today], 20)
+        XCTAssertEqual(manager.stats.longestDictationSeconds, 20)
+        XCTAssertEqual(manager.stats.totalWords, 6)
+        XCTAssertEqual(manager.stats.totalTranscriptions, 2)
+        manager.flushPendingSaves()
+    }
+
     /// The heatmap reads 371 days back; nothing may prune them.
     @MainActor
     func testDailyBucketsOlderThanAYearSurviveRecordAndReload() throws {
@@ -255,22 +277,27 @@ final class CalmInsightsTests: XCTestCase {
             stats.totalAudioDurationSeconds = 60
             return CalmInsightsSummary(stats: stats, now: try now, calendar: calendar).speedNote
         }
+        XCTAssertNil(try note(wpm: 20), "Slower than typing is not “as fast”")
+        XCTAssertNil(try note(wpm: 35))
+        XCTAssertEqual(try note(wpm: 37), "About as fast as typing")
         XCTAssertEqual(try note(wpm: 42), "About as fast as typing")
         XCTAssertEqual(try note(wpm: 60), "About 1.5× faster than typing")
         XCTAssertEqual(try note(wpm: 120), "About 3× faster than typing")
     }
 
     func testLongestDictationFallsBackToHistoryAndWaitsSplitByProcessing() throws {
+        let when = try now
         var stats = UserStats()
+        stats.dailyWordCounts = [try key(3, from: when): 12]
         stats.recordStopWait(StopWait(seconds: 0.3, audioSeconds: 4, processedWhileSpeaking: true))
         stats.recordStopWait(StopWait(seconds: 0.5, audioSeconds: 20, processedWhileSpeaking: true))
         stats.recordStopWait(StopWait(seconds: 0.7, audioSeconds: 30, processedWhileSpeaking: true))
         stats.recordStopWait(StopWait(seconds: 2.0, audioSeconds: 40, processedWhileSpeaking: false))
         let history = [
-            DictationHistoryEntry(status: .completed, finalText: "hi", modelID: "tiny", audioSeconds: 252),
-            DictationHistoryEntry(status: .failed, modelID: "tiny", audioSeconds: 900),
+            DictationHistoryEntry(createdAt: when, status: .completed, finalText: "hi", modelID: "tiny", audioSeconds: 252),
+            DictationHistoryEntry(createdAt: when, status: .failed, modelID: "tiny", audioSeconds: 900),
         ]
-        let summary = CalmInsightsSummary(stats: stats, history: history, now: try now, calendar: calendar)
+        let summary = CalmInsightsSummary(stats: stats, history: history, now: when, calendar: calendar)
         XCTAssertEqual(summary.longestDictationSeconds, 252, "Only finished dictations count")
         XCTAssertEqual(summary.fastestStopWaitSeconds, 0.3)
         XCTAssertEqual(try XCTUnwrap(summary.medianStopWait).seconds, 0.6, accuracy: 0.0001)
@@ -282,6 +309,58 @@ final class CalmInsightsTests: XCTestCase {
         let single = CalmInsightsSummary(stats: onlyWithout, now: try now, calendar: calendar)
         XCTAssertEqual(single.medianStopWait?.seconds, 1.5)
         XCTAssertNil(single.medianStopWaitWithoutProcessing, "One median shows as the plain row")
+    }
+
+    /// After Reset All Statistics the stats start again, so history from
+    /// before the reset no longer fills in the longest dictation.
+    func testLongestDictationIgnoresHistoryFromBeforeTheStats() throws {
+        let when = try now
+        let older = try XCTUnwrap(calendar.date(byAdding: .day, value: -10, to: when))
+        let history = [DictationHistoryEntry(createdAt: older, status: .completed, finalText: "hi", modelID: "tiny", audioSeconds: 252)]
+
+        let reset = CalmInsightsSummary(stats: UserStats(), history: history, now: when, calendar: calendar)
+        XCTAssertNil(reset.longestDictationSeconds)
+
+        var restarted = UserStats()
+        restarted.dailyWordCounts = [try key(0, from: when): 5]
+        restarted.longestDictationSeconds = 8
+        let summary = CalmInsightsSummary(stats: restarted, history: history, now: when, calendar: calendar)
+        XCTAssertEqual(summary.longestDictationSeconds, 8)
+    }
+
+    /// With history off, its entries don't fill in bests.
+    @MainActor
+    func testSummaryIgnoresHistoryWhileItIsOff() async {
+        let (appState, mocks) = AppState.makeTestState()
+        mocks.statsManager.stats.dailyWordCounts = ["2000-01-01": 3]
+        let id = await appState.historyStore.begin(audio: nil, target: nil, modelID: "tiny", language: "en", audioSeconds: 30)
+        appState.historyStore.complete(id, rawText: "hi", finalText: "hi", summary: nil, language: "en", transcriptionSeconds: 0.1, keepAudio: false)
+        appState.historyEnabled = true
+        XCTAssertNotNil(appState.insightsSummary().longestDictationSeconds)
+        appState.historyEnabled = false
+        XCTAssertNil(appState.insightsSummary().longestDictationSeconds)
+    }
+
+    /// Pages cache the summary and feed: computed once per change of their
+    /// inputs, and history's revision moves with every change to it.
+    @MainActor
+    func testCachedResultsRecomputeOnlyWhenInputsChange() async {
+        let memo = CalmMemo<Int, Int>()
+        var computed = 0
+        XCTAssertEqual(memo.value(for: 1) { computed += 1; return 10 }, 10)
+        XCTAssertEqual(memo.value(for: 1) { computed += 1; return 11 }, 10)
+        XCTAssertEqual(computed, 1)
+        XCTAssertEqual(memo.value(for: 2) { computed += 1; return 20 }, 20)
+        XCTAssertEqual(computed, 2)
+
+        let (appState, mocks) = AppState.makeTestState()
+        let before = appState.insightsInputs
+        XCTAssertEqual(appState.insightsInputs, before)
+        _ = await appState.historyStore.begin(audio: nil, target: nil, modelID: "tiny", language: "en", audioSeconds: 3)
+        XCTAssertNotEqual(appState.insightsInputs.historyRevision, before.historyRevision)
+        let afterHistory = appState.insightsInputs
+        mocks.statsManager.stats.totalWords = 4
+        XCTAssertNotEqual(appState.insightsInputs, afterHistory)
     }
 
     // MARK: - Where you dictate

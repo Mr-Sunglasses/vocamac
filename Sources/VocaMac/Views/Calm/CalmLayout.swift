@@ -1273,3 +1273,22 @@ struct CalmHeatLegend: View {
         .accessibilityHidden(true)
     }
 }
+
+// MARK: - Cached results
+
+/// Remembers one computed value until its inputs change, so a page can
+/// read an expensive result (stats summary, heatmap, history search) in
+/// `body` without recomputing it on every redraw. Hold it in `@State`;
+/// it is not observed, so reading it never triggers a redraw.
+@MainActor
+final class CalmMemo<Key: Equatable, Value> {
+    private var cached: (key: Key, value: Value)?
+
+    /// The value for `key`, computed only when `key` differs from last time.
+    func value(for key: Key, compute: () -> Value) -> Value {
+        if let cached, cached.key == key { return cached.value }
+        let value = compute()
+        cached = (key, value)
+        return value
+    }
+}

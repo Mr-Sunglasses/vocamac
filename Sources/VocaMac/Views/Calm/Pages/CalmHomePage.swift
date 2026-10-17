@@ -89,11 +89,19 @@ private struct CalmHomeFeed: View {
 
     @EnvironmentObject private var appState: AppState
     @Environment(CalmNavigator.self) private var navigator
+    /// The search and day grouping, redone only when history or the query
+    /// changes, not on every AppState change.
+    @State private var memo = CalmMemo<FeedKey, [CalmFeedDay]>()
 
-    private var entries: [DictationHistoryEntry] { appState.historyStore.search(query) }
+    private struct FeedKey: Equatable {
+        let historyRevision: Int
+        let query: String
+    }
 
     var body: some View {
-        let entries = entries
+        let days = memo.value(for: FeedKey(historyRevision: appState.historyStore.revision, query: query)) {
+            CalmFeedDay.groups(appState.historyStore.search(query))
+        }
         VStack(alignment: .leading, spacing: 22) {
             if appState.historyStore.hasUnsavedChanges {
                 CalmPanel {
@@ -115,11 +123,11 @@ private struct CalmHomeFeed: View {
                     }
                 }
             }
-            if entries.isEmpty {
+            if days.isEmpty {
                 emptyState
             } else {
                 LazyVStack(alignment: .leading, spacing: 22) {
-                    ForEach(CalmFeedDay.groups(entries)) { day in
+                    ForEach(days) { day in
                         CalmDaySection(CalmDaySection<EmptyView>.caption(for: day.day)) {
                             CalmList {
                                 ForEach(day.entries) { entry in
@@ -444,14 +452,19 @@ private struct CalmCommandEditTag: View {
 private struct CalmHomeSideColumn: View {
     @EnvironmentObject private var appState: AppState
     @Environment(CalmNavigator.self) private var navigator
+    /// The summary and streak week, recomputed only when the stats,
+    /// history or day change.
+    @State private var memo = CalmMemo<CalmInsightsInputs, (summary: CalmInsightsSummary, week: [CalmStreakDay])>()
 
     var body: some View {
-        let summary = appState.insightsSummary()
-        let calendar = appState.statsCalendar
-        let week = CalmActivityCalendar.streakWeek(
-            CalmActivityCalendar.lastSevenDays(stats: appState.statsManager.stats, calendar: calendar),
-            calendar: calendar
-        )
+        let (summary, week) = memo.value(for: appState.insightsInputs) {
+            let calendar = appState.statsCalendar
+            let week = CalmActivityCalendar.streakWeek(
+                CalmActivityCalendar.lastSevenDays(stats: appState.statsManager.stats, calendar: calendar),
+                calendar: calendar
+            )
+            return (appState.insightsSummary(), week)
+        }
         VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 16) {
                 CalmBigNumber(value: CalmFormat.number(summary.lifetimeWords), unit: summary.lifetimeWords == 1 ? "word" : "words")
