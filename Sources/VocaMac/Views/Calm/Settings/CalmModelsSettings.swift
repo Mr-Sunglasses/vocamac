@@ -329,18 +329,28 @@ struct CalmWritingModelsTab: View {
 
     private var commandModeModelRow: some View {
         let current = appState.calmCommandModeLocalCandidate
+        let isMissing = !appState.transcriptCleanup.isDownloaded(current)
         return CalmRow("Model for Command Mode", description: commandModeModelNote(current)) {
-            CalmDropdown(
-                selection: Binding(
-                    get: { current },
-                    set: { kind in flow.pick(kind, role: .commandMode, appState: appState) }
-                ),
-                options: CleanupModelKind.commandModeChoices.map { kind in
-                    let downloaded = appState.transcriptCleanup.isDownloaded(kind)
-                    return CalmOption(kind, CalmModelText.name(kind) + (downloaded ? "" : " — download \(CalmModelText.downloadSize(kind))"))
+            HStack(spacing: 8) {
+                // The dropdown can't re-pick the model it shows, so a
+                // missing one gets its own way to download.
+                if isMissing && !isDownloading {
+                    Button("Download") { flow.pick(current, role: .commandMode, appState: appState) }
+                        .calmButton(.secondary)
+                        .help("Download \(CalmModelText.name(current)) (\(CalmModelText.downloadSize(current))) for Command Mode")
                 }
-            )
-            .disabled(isDownloading)
+                CalmDropdown(
+                    selection: Binding(
+                        get: { current },
+                        set: { kind in flow.pick(kind, role: .commandMode, appState: appState) }
+                    ),
+                    options: CleanupModelKind.commandModeChoices.map { kind in
+                        let downloaded = appState.transcriptCleanup.isDownloaded(kind)
+                        return CalmOption(kind, CalmModelText.name(kind) + (downloaded ? "" : " — download \(CalmModelText.downloadSize(kind))"))
+                    }
+                )
+                .disabled(isDownloading)
+            }
         }
     }
 
@@ -349,7 +359,7 @@ struct CalmWritingModelsTab: View {
             return "Downloading \(CalmModelText.name(active)) · \(Int((progress * 100).rounded()))%"
         }
         if !appState.transcriptCleanup.isDownloaded(kind) {
-            return "Not downloaded yet. Downloads \(CalmModelText.downloadSize(kind)) when picked."
+            return "Not downloaded yet (\(CalmModelText.downloadSize(kind))). Command Mode can’t edit until it is."
         }
         return nil
     }
@@ -397,13 +407,13 @@ struct CalmWritingModelMenu: View {
     var body: some View {
         let downloaded = appState.transcriptCleanup.isDownloaded(kind)
         Button { flow.pick(kind, appState: appState) } label: { Label("Use this model", systemImage: "checkmark") }
-            .disabled(appState.calmCleanupModelInUse == kind && downloaded)
+            .disabled(CalmWritingPickFlow.isInUse(kind, role: .cleanup, appState: appState))
         if appState.sharesAIModel, kind.supportsCommandMode {
             Button { flow.pick(kind, role: .cleanupOnly, appState: appState) } label: {
                 Label("Use for Smart Cleanup only", systemImage: "sparkles")
             }
         }
-        if kind.supportsCommandMode, appState.commandModeEngine != .local(kind) || appState.sharesAIModel {
+        if kind.supportsCommandMode, !CalmWritingPickFlow.isInUse(kind, role: .commandMode, appState: appState) {
             Button { flow.pick(kind, role: .commandMode, appState: appState) } label: {
                 Label("Use for Command Mode only", systemImage: "wand.and.stars")
             }

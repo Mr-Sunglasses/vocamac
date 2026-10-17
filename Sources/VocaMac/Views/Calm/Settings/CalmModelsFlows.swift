@@ -143,14 +143,9 @@ final class CalmWritingPickFlow {
 
     /// Pick `kind` for `role`, asking first when another download is past half way.
     func pick(_ kind: CleanupModelKind, role: CalmWritingRole = .cleanup, appState: AppState, confirmedStop: Bool = false) {
-        let isInUse: Bool
-        switch role {
-        case .cleanup: isInUse = appState.calmCleanupModelInUse == kind && appState.transcriptCleanup.isDownloaded(kind)
-        case .cleanupOnly: isInUse = appState.calmCleanupModelInUse == kind && !appState.sharesAIModel
-        case .commandMode: isInUse = appState.commandModeEngine == .local(kind) && !appState.sharesAIModel
-        }
         switch CalmModelPicks.writingStep(
-            for: kind, state: appState.transcriptCleanup.modelState, isInUse: isInUse, confirmedStop: confirmedStop
+            for: kind, state: appState.transcriptCleanup.modelState,
+            isInUse: Self.isInUse(kind, role: role, appState: appState), confirmedStop: confirmedStop
         ) {
         case .nothing:
             return
@@ -163,6 +158,18 @@ final class CalmWritingPickFlow {
 
     func afterDismiss(_ action: @escaping @MainActor () -> Void) {
         Task { @MainActor in action() }
+    }
+
+    /// Whether picking `kind` for `role` has nothing left to do: that job
+    /// already runs it and its file is on this Mac. A configured model that
+    /// isn't downloaded is not in use, so picking it downloads it.
+    static func isInUse(_ kind: CleanupModelKind, role: CalmWritingRole, appState: AppState) -> Bool {
+        guard appState.transcriptCleanup.isDownloaded(kind) else { return false }
+        switch role {
+        case .cleanup: return appState.calmCleanupModelInUse == kind
+        case .cleanupOnly: return appState.calmCleanupModelInUse == kind && !appState.sharesAIModel
+        case .commandMode: return appState.commandModeEngine == .local(kind) && !appState.sharesAIModel
+        }
     }
 
     /// Never offered for a model either feature is using.

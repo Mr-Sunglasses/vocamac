@@ -302,6 +302,36 @@ final class CalmModelPicksTests: XCTestCase {
         XCTAssertEqual(appState.calmCommandModeChoice, .own)
     }
 
+    /// With separate models, the Command Mode model configured but not on
+    /// this Mac is not "in use": picking it again must download it.
+    @MainActor
+    func testAMissingCommandModeModelIsNotInUse() {
+        let cleanup = MockTranscriptCleanup()
+        cleanup.downloadedKinds = [.ministral3_3b_q4_k_m]
+        let (appState, _) = AppState.makeTestState(transcriptCleanup: cleanup)
+        appState.selectedCleanupModelKind = .ministral3_3b_q4_k_m
+        appState.commandModeEngine = .local(.qwen25_1_5b_q4_k_m)
+        XCTAssertFalse(appState.sharesAIModel)
+
+        let missing = CleanupModelKind.qwen25_1_5b_q4_k_m
+        XCTAssertFalse(CalmWritingPickFlow.isInUse(missing, role: .commandMode, appState: appState))
+        XCTAssertEqual(
+            CalmModelPicks.writingStep(
+                for: missing, state: .idle,
+                isInUse: CalmWritingPickFlow.isInUse(missing, role: .commandMode, appState: appState)
+            ),
+            .start(cancelling: nil)
+        )
+
+        cleanup.downloadedKinds.insert(missing)
+        XCTAssertTrue(CalmWritingPickFlow.isInUse(missing, role: .commandMode, appState: appState))
+        XCTAssertTrue(CalmWritingPickFlow.isInUse(.ministral3_3b_q4_k_m, role: .cleanup, appState: appState))
+
+        cleanup.downloadedKinds.remove(.ministral3_3b_q4_k_m)
+        XCTAssertFalse(CalmWritingPickFlow.isInUse(.ministral3_3b_q4_k_m, role: .cleanup, appState: appState))
+        XCTAssertFalse(CalmWritingPickFlow.isInUse(.ministral3_3b_q4_k_m, role: .cleanupOnly, appState: appState))
+    }
+
     @MainActor
     func testRunningCleanupOnThisMacAgain() {
         let (appState, _) = AppState.makeTestState()
