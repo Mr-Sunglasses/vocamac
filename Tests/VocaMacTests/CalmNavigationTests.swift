@@ -111,6 +111,28 @@ final class CalmNavigatorTests: XCTestCase {
         XCTAssertEqual(navigator.mainPage, .snippets)
         XCTAssertEqual(navigator.searchTarget, "snippets")
     }
+
+    /// A result's hint belongs to the page it opened; leaving that page
+    /// (another menu page, the back link, closing the sheet) clears it.
+    func testSearchHintClearsWhenLeavingItsPage() throws {
+        let navigator = CalmNavigator()
+        let entry = try XCTUnwrap(SettingsSearchIndex.entries.first { $0.id == "gateway-docker" })
+        XCTAssertNotNil(entry.navigationHint)
+
+        navigator.open(entry)
+        XCTAssertEqual(navigator.settingsDestination, .gateway)
+        XCTAssertNotNil(navigator.searchHint)
+        navigator.goBack()
+        XCTAssertNil(navigator.searchHint)
+
+        navigator.open(entry)
+        navigator.select(.system)
+        XCTAssertNil(navigator.searchHint)
+
+        navigator.open(entry)
+        navigator.closeSettings()
+        XCTAssertNil(navigator.searchHint)
+    }
 }
 
 final class CalmNavigationMappingTests: XCTestCase {

@@ -420,8 +420,9 @@ enum CalmMetrics {
 
     /// The window opens at this content size.
     static let windowDefaultSize = SettingsWindowGeometry.defaultContentSize
-    /// Smallest content size: the 1000 × 680 Settings sheet still fits inside.
-    static let windowMinSize = SettingsWindowGeometry.minimumContentSize
+    /// Smallest content size the layout supports; the window's real minimum
+    /// is larger on a screen with room (`SettingsWindowGeometry`).
+    static let windowMinSize = SettingsWindowGeometry.smallestContentSize
     static let sidebarWidth: CGFloat = 224
     static let sidebarPadding = EdgeInsets(top: 16, leading: 12, bottom: 14, trailing: 12)
     /// Space kept above the brand for the window's traffic lights.
@@ -449,7 +450,8 @@ enum CalmMetrics {
 
     // MARK: Settings sheet
 
-    static let sheetSize = CGSize(width: 1000, height: 680)
+    /// The sheet's size in a roomy window; it shrinks to fit a smaller one.
+    static let sheetSize = SettingsWindowGeometry.sheetSize
     static let sheetMenuWidth: CGFloat = 236
     static let sheetMenuPadding = EdgeInsets(top: 24, leading: 14, bottom: 16, trailing: 14)
     static let sheetBodyPadding = EdgeInsets(top: 40, leading: 48, bottom: 40, trailing: 48)

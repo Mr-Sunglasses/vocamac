@@ -37,6 +37,12 @@ struct CalmWindowView: View {
                     .layoutPriority(1)
                 contentArea
             }
+            // Behind the Settings sheet, Tab and full keyboard access stay
+            // in the sheet: the sidebar and page don't take focus or
+            // VoiceOver. The scrim already dims them.
+            .disabled(navigator.isSettingsPresented)
+            .environment(\.calmDimsWhenDisabled, false)
+            .accessibilityHidden(navigator.isSettingsPresented)
             if navigator.isSettingsPresented {
                 settingsLayer
                     .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.98)))
@@ -88,27 +94,34 @@ struct CalmWindowView: View {
             }
             .padding(.vertical, CalmMetrics.contentInset)
             .padding(.trailing, CalmMetrics.contentInset)
-            .accessibilityHidden(navigator.isSettingsPresented)
     }
 
     private var settingsLayer: some View {
-        ZStack {
-            CalmColor.scrim
-                .contentShape(Rectangle())
-                .onTapGesture { navigator.closeSettings() }
-                .accessibilityHidden(true)
-            CalmSettingsSheet(isDialogPresented: isDialogPresented, isSearchFocused: $isSearchFocused)
+        GeometryReader { proxy in
+            ZStack {
+                CalmColor.scrim
+                    .contentShape(Rectangle())
+                    .onTapGesture { navigator.closeSettings() }
+                    .accessibilityHidden(true)
+                // 1000 × 680, or smaller in a window too small for that.
+                CalmSettingsSheet(
+                    size: SettingsWindowGeometry.sheetSize(in: proxy.size),
+                    isDialogPresented: isDialogPresented, isSearchFocused: $isSearchFocused
+                )
+            }
         }
     }
 
     /// Window-wide shortcuts: ⌘, opens Settings, ⌘F focuses its search.
+    /// Neither works while a dialog is up.
     private var shortcuts: some View {
         ZStack {
             Button("Settings") { navigator.openSettings() }
                 .keyboardShortcut(",", modifiers: .command)
+                .disabled(isDialogPresented)
             Button("Search Settings") { isSearchFocused = true }
                 .keyboardShortcut("f", modifiers: .command)
-                .disabled(!navigator.isSettingsPresented)
+                .disabled(!navigator.isSettingsPresented || isDialogPresented)
         }
         .opacity(0)
         .frame(width: 0, height: 0)
@@ -612,9 +625,11 @@ struct CalmListeningBars: View {
 
 // MARK: - Settings sheet
 
-/// The Settings sheet: 1000 × 680, r16, a 236-wide menu on frame with the
-/// search field on top, and the page body on content.
+/// The Settings sheet: 1000 × 680 (smaller in a small window), r16, a
+/// 236-wide menu on frame with the search field on top, and the page body
+/// on content.
 struct CalmSettingsSheet: View {
+    var size: CGSize = CalmMetrics.sheetSize
     let isDialogPresented: Bool
     var isSearchFocused: FocusState<Bool>.Binding
 
@@ -631,7 +646,7 @@ struct CalmSettingsSheet: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 .background(CalmColor.content)
         }
-        .frame(width: CalmMetrics.sheetSize.width, height: CalmMetrics.sheetSize.height)
+        .frame(width: size.width, height: size.height)
         .clipShape(shape)
         .overlay(shape.strokeBorder(CalmColor.line2, lineWidth: 1))
         .background(shape.fill(CalmColor.content).shadow(color: .black.opacity(0.28), radius: 40, y: 30))
@@ -658,7 +673,9 @@ struct CalmSettingsSheet: View {
                 CalmIcon(.close, size: 16)
             }
             .calmIconButton()
-            .keyboardShortcut(isDialogPresented ? nil : .cancelAction)
+            // While the search field has text, Esc clears it first (the
+            // field's own exit command); a dialog takes Esc for itself.
+            .keyboardShortcut(isDialogPresented || !navigator.settingsSearchText.isEmpty ? nil : .cancelAction)
             .padding(14)
             .accessibilityLabel("Close settings")
         }

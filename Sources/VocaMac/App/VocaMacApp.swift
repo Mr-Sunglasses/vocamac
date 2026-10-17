@@ -81,12 +81,14 @@ final class SettingsWindowManager: ObservableObject {
         let hostingController = NSHostingController(rootView: windowView)
         hostingController.sizingOptions = []
         window.contentViewController = hostingController
-        // The Settings sheet (1000 × 680) must fit inside the smallest window.
-        window.contentMinSize = SettingsWindowGeometry.minimumContentSize
+        // Room for the Settings sheet (1000 × 680), clamped to a small
+        // screen; the sheet shrinks with a window smaller than that.
+        let visibleFrame = NSScreen.main?.visibleFrame
+        window.contentMinSize = SettingsWindowGeometry.minimumContentSize(forVisibleFrame: visibleFrame)
         // With automatic hosting sizing disabled, attaching the controller
         // can collapse the initial window to its 1-point intrinsic width.
         // Establish the default again before applying a saved frame.
-        window.setContentSize(SettingsWindowGeometry.openingContentSize(forVisibleFrame: NSScreen.main?.visibleFrame))
+        window.setContentSize(SettingsWindowGeometry.openingContentSize(forVisibleFrame: visibleFrame))
         window.autorecalculatesKeyViewLoop = true
         if !window.setFrameUsingName(SettingsWindowGeometry.frameAutosaveName) { window.center() }
         restoreUsableFrame(window)
@@ -156,8 +158,9 @@ final class SettingsWindowManager: ObservableObject {
     /// earlier display configuration before making the window visible.
     private func restoreUsableFrame(_ window: NSWindow) {
         let screens = NSScreen.screens.map(\.visibleFrame)
+        let screen = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame
+        window.contentMinSize = SettingsWindowGeometry.minimumContentSize(forVisibleFrame: screen)
         if SettingsWindowGeometry.needsReset(window.frame, screens: screens) {
-            let screen = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame
             window.setContentSize(SettingsWindowGeometry.openingContentSize(forVisibleFrame: screen))
             window.center()
         }
@@ -436,8 +439,12 @@ struct VocaMacApp: App {
                     }
                     await appState.handleDeepLink(link)
                     switch link {
-                    case .history, .settings:
+                    case .history:
                         settingsManager.open(appState: appState)
+                    case .settings:
+                        // Open the Settings sheet, not whichever sidebar page
+                        // the window last showed.
+                        settingsManager.open(appState: appState, page: .dictation)
                     case .transcribeFile:
                         fileTranscriptionManager.open(appState: appState)
                     case .scratchpad:

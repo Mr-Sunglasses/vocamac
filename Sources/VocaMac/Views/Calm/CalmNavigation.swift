@@ -332,12 +332,14 @@ final class CalmNavigator {
     func closeSettings() {
         isSettingsPresented = false
         settingsSearchText = ""
+        searchHint = nil
     }
 
     /// Go to a Settings page inside the open sheet. Menu pages reset the
     /// back stack; sub-pages remember where they were opened from.
     func select(_ destination: CalmSettingsDestination) {
         settingsSearchText = ""
+        searchHint = nil
         guard destination != settingsDestination else { return }
         if destination.isSubPage {
             settingsBackStack.append(settingsDestination)
@@ -350,6 +352,7 @@ final class CalmNavigator {
     /// Follow a sub-page's back link.
     func goBack() {
         guard let back = backDestination else { return }
+        searchHint = nil
         if !settingsBackStack.isEmpty { settingsBackStack.removeLast() }
         settingsDestination = back
     }

@@ -23,12 +23,37 @@ final class SettingsWindowGeometryTests: XCTestCase {
         XCTAssertTrue(SettingsWindowGeometry.needsReset(CGRect(x: 300, y: 200, width: 860, height: 658), screens: [screen]))
     }
 
-    func testSettingsSheetFitsTheSmallestWindow() {
+    func testSettingsSheetFitsTheSmallestWindowOnARoomyScreen() {
         let minimum = SettingsWindowGeometry.minimumContentSize
         XCTAssertGreaterThanOrEqual(minimum.width, CalmMetrics.sheetSize.width + 2 * CalmMetrics.Space.s40)
         XCTAssertGreaterThanOrEqual(minimum.height, CalmMetrics.sheetSize.height + 2 * 30)
+        XCTAssertEqual(SettingsWindowGeometry.sheetSize(in: minimum), CalmMetrics.sheetSize)
         XCTAssertGreaterThanOrEqual(SettingsWindowGeometry.defaultContentSize.width, minimum.width)
         XCTAssertGreaterThanOrEqual(SettingsWindowGeometry.defaultContentSize.height, minimum.height)
+    }
+
+    /// A 13" laptop at a larger-text scaling has about 1024 × 640 visible:
+    /// the minimum and the opening size fit the screen, and the sheet
+    /// shrinks to keep its margin inside the smaller window.
+    func testSmallScreenClampsTheMinimumAndShrinksTheSheet() {
+        let laptop = CGRect(x: 0, y: 0, width: 1024, height: 640)
+        let minimum = SettingsWindowGeometry.minimumContentSize(forVisibleFrame: laptop)
+        XCTAssertLessThanOrEqual(minimum.width, laptop.width)
+        XCTAssertLessThanOrEqual(minimum.height, laptop.height)
+        let opening = SettingsWindowGeometry.openingContentSize(forVisibleFrame: laptop)
+        XCTAssertLessThanOrEqual(opening.width, laptop.width)
+        XCTAssertLessThanOrEqual(opening.height, laptop.height)
+        XCTAssertFalse(SettingsWindowGeometry.needsReset(CGRect(origin: laptop.origin, size: opening), screens: [laptop]))
+
+        let sheet = SettingsWindowGeometry.sheetSize(in: minimum)
+        XCTAssertLessThan(sheet.height, CalmMetrics.sheetSize.height)
+        XCTAssertEqual(sheet.width, minimum.width - 2 * SettingsWindowGeometry.sheetMargin.width)
+        XCTAssertEqual(sheet.height, minimum.height - 2 * SettingsWindowGeometry.sheetMargin.height)
+        // On a roomy screen the minimum is the full one.
+        XCTAssertEqual(SettingsWindowGeometry.minimumContentSize(forVisibleFrame: screen), SettingsWindowGeometry.minimumContentSize)
+        // Never below what the layout supports, however small the screen.
+        let tiny = SettingsWindowGeometry.minimumContentSize(forVisibleFrame: CGRect(x: 0, y: 0, width: 640, height: 400))
+        XCTAssertEqual(tiny, SettingsWindowGeometry.smallestContentSize)
     }
 
     func testDisconnectedDisplayIsRejected() {
@@ -61,7 +86,7 @@ final class SettingsWindowGeometryTests: XCTestCase {
         XCTAssertEqual(small.width, 1200)
         XCTAssertEqual(small.height, 740)
         let tiny = SettingsWindowGeometry.openingContentSize(forVisibleFrame: CGRect(x: 0, y: 0, width: 1024, height: 640))
-        XCTAssertEqual(tiny, SettingsWindowGeometry.minimumContentSize)
+        XCTAssertEqual(tiny, CGSize(width: 1024, height: 640))
         // A size it opens at is never one the frame check would reset.
         let frame = CGRect(origin: CGPoint(x: 40, y: 0), size: small)
         XCTAssertFalse(SettingsWindowGeometry.needsReset(frame, screens: [CGRect(x: 0, y: 0, width: 1280, height: 775)]))
