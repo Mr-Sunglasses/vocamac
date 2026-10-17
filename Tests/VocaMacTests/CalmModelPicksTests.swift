@@ -182,6 +182,8 @@ final class CalmModelPicksTests: XCTestCase {
         XCTAssertEqual(CalmModelText.variant(.parakeetV3), "Multilingual")
         XCTAssertEqual(CalmModelText.name(.largeV3LatestCompact), "Whisper Large v3 Latest")
         XCTAssertEqual(CalmModelText.variant(.tiny), "Built in")
+        XCTAssertNil(CalmModelText.variant(.tiny, isBundled: false))
+        XCTAssertEqual(CalmModelText.variant(.parakeetV3, isBundled: false), "Multilingual")
         for size in ModelSize.allCases {
             XCTAssertFalse(CalmModelText.name(size).contains("("), "\(size)")
         }

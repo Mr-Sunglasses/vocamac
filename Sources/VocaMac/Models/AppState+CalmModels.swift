@@ -44,9 +44,12 @@ enum CalmModelText {
     }
 
     /// The muted word after the name, when two models would otherwise read the same.
-    static func variant(_ size: ModelSize) -> String? {
+    /// `isBundled`: whether this build ships the model (Tiny is bundled
+    /// only in release builds; a dev build saying “Built in” next to
+    /// “Not downloaded” contradicts itself).
+    static func variant(_ size: ModelSize, isBundled: Bool = true) -> String? {
         switch size {
-        case .tiny: return "Built in"
+        case .tiny: return isBundled ? "Built in" : nil
         case .medium: return "Legacy"
         case .largeV3Latest, .largeV3LatestTurbo: return "Full precision"
         case .largeV3Turbo: return "Original"

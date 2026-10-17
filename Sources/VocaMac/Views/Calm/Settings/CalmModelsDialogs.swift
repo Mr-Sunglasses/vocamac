@@ -74,9 +74,10 @@ extension CalmModelDetailsDialog {
         if model?.isSupported == false {
             facts.append(("On this Mac", "Not verified on this chip. It may fail to load or run slower."))
         }
+        let variant: String? = CalmModelText.variant(size, isBundled: appState.modelManager.bundledModelFolder(for: size) != nil)
         self.init(
             logo: CalmLogoName(engine: size.engine),
-            name: CalmModelText.name(size) + (CalmModelText.variant(size).map { " \($0)" } ?? ""),
+            name: [CalmModelText.name(size), variant].compactMap { $0 }.joined(separator: " "),
             origin: CalmModelText.origin(size),
             facts: facts,
             canUse: model.map { !$0.isActive && $0.downloadProgress == nil && !$0.isLoading } ?? false,

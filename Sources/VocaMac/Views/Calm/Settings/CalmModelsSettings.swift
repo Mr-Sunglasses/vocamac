@@ -549,7 +549,7 @@ struct CalmAllSpeechModels: View {
             )
             let modelRow = CalmModelRow(
                 name: CalmModelText.name(size),
-                variant: CalmModelText.variant(size),
+                variant: CalmModelText.variant(size, isBundled: appState.modelManager.bundledModelFolder(for: size) != nil),
                 meta: CalmModelText.meta(size, systemLanguages: appState.appleSpeechLanguages),
                 warning: CalmModelText.misfit(size, spoken: spoken, systemLanguages: appState.appleSpeechLanguages),
                 tag: model.isSupported ? nil : "Experimental",
