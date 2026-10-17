@@ -178,6 +178,11 @@ struct CalmStyleGroupStore: Codable, Equatable {
         styles[group.rawValue] = style.rawValue
     }
 
+    /// Drop group choices for rules that no longer exist.
+    mutating func prune(keepingKeys liveKeys: Set<String>) {
+        assignments = assignments.filter { liveKeys.contains($0.key) }
+    }
+
     /// Decode a stored payload; anything unreadable is an empty store.
     static func decode(_ json: String?) -> CalmStyleGroupStore {
         guard let data = json?.data(using: .utf8),
@@ -304,13 +309,50 @@ enum CalmAppCandidates {
 // MARK: - AppState
 
 extension AppState {
-    /// The Styles page's stored group choices.
+    /// The Styles page's stored group choices. Saving drops choices for
+    /// rules that are gone, unless a removal can still be undone (its rule
+    /// must come back in the same tab).
     var calmStyleGroupStore: CalmStyleGroupStore {
         get { CalmStyleGroupStore.decode(UserDefaults.standard.string(forKey: CalmStyleGroupStore.defaultsKey)) }
         set {
-            UserDefaults.standard.set(newValue.encodedJSON(), forKey: CalmStyleGroupStore.defaultsKey)
+            var store = newValue
+            if undoCenter.current == nil { store.prune(keepingKeys: calmLiveStyleGroupKeys) }
+            UserDefaults.standard.set(store.encodedJSON(), forKey: CalmStyleGroupStore.defaultsKey)
             objectWillChange.send()
         }
+    }
+
+    /// Store keys of the app and website rules that exist now.
+    private var calmLiveStyleGroupKeys: Set<String> {
+        Set(writingStyleBindings.map { CalmStyleGroupStore.appKey($0.id) }
+            + websiteStyleBindings.map { CalmStyleGroupStore.websiteKey($0.id) })
+    }
+
+    /// Drop group choices left behind by removed rules (see `calmStyleGroupStore`).
+    func calmPruneStyleGroups() {
+        let store = calmStyleGroupStore
+        var pruned = store
+        pruned.prune(keepingKeys: calmLiveStyleGroupKeys)
+        if pruned != store, undoCenter.current == nil { calmStyleGroupStore = pruned }
+    }
+
+    /// Forget where these app rules were put, so rules re-added by Set Up My
+    /// Apps or an import land in the tab the catalog or their style picks.
+    func calmResetStyleGroups(forApps ids: [String]) {
+        var store = calmStyleGroupStore
+        let keys = Set(ids.map(CalmStyleGroupStore.appKey))
+        let before = store.assignments.count
+        store.assignments = store.assignments.filter { !keys.contains($0.key) }
+        if store.assignments.count != before { calmStyleGroupStore = store }
+    }
+
+    /// Keep a rule in the tab it shows under now, so a new style doesn't
+    /// move it to another tab.
+    private func calmPin(_ group: CalmStyleGroup, key: String) {
+        var store = calmStyleGroupStore
+        guard store.group(forKey: key) != group else { return }
+        store.assign(group, toKey: key)
+        calmStyleGroupStore = store
     }
 
     /// The tab an app rule shows under: where it was put, else where the
@@ -374,16 +416,42 @@ extension AppState {
         }
     }
 
-    /// Apps in `group` whose customized formatting picking `style` would reset.
-    func calmCustomizedApps(in group: CalmStyleGroup, switchingTo style: WritingStyle) -> [AppStyleBinding] {
-        calmApps(in: group).filter { $0.style != style && $0.hasCustomRules }
+    /// Apps and websites in `group` that chose a style of their own: not
+    /// the group's current style, and not `style`. Picking a card leaves
+    /// them alone unless the user confirms applying it to all.
+    func calmOtherStyleMembers(
+        in group: CalmStyleGroup, besides style: WritingStyle
+    ) -> (apps: [AppStyleBinding], websites: [WebsiteStyleBinding]) {
+        let current = calmStyle(for: group)
+        return (
+            calmApps(in: group).filter { $0.style != current && $0.style != style },
+            calmWebsites(in: group).filter { $0.style != current && $0.style != style }
+        )
     }
 
-    /// Pick a group's card: the group, and every app and website in it, uses
-    /// `style`. Each app's formatting goes back to the style's own; tone and
-    /// AI cleanup choices are kept. Everything else also sets the default style.
-    func calmApplyStyle(_ style: WritingStyle, to group: CalmStyleGroup) {
+    /// Apps in `group` whose customized formatting picking `style` would
+    /// reset: those following the group's current style, or every app in
+    /// the group when `includingOtherStyles`.
+    func calmCustomizedApps(
+        in group: CalmStyleGroup, switchingTo style: WritingStyle, includingOtherStyles: Bool = false
+    ) -> [AppStyleBinding] {
+        let current = calmStyle(for: group)
+        return calmApps(in: group).filter {
+            $0.style != style && $0.hasCustomRules && (includingOtherStyles || $0.style == current)
+        }
+    }
+
+    /// Pick a group's card: the group uses `style` for new apps, and so do
+    /// the apps and websites that used its previous style. Apps with a
+    /// style of their own keep it unless `includingOtherStyles`; that change
+    /// can be undone. A changed app's formatting goes back to the style's
+    /// own; tone and AI cleanup choices are kept. Everything else also sets
+    /// the default style.
+    func calmApplyStyle(_ style: WritingStyle, to group: CalmStyleGroup, includingOtherStyles: Bool = false) {
+        let previous = calmStyle(for: group)
         var store = calmStyleGroupStore
+        let storeBefore = store
+        let defaultBefore = writingStyleDefault
         let apps = calmApps(in: group)
         let websites = calmWebsites(in: group)
         if group == .everythingElse {
@@ -396,20 +464,23 @@ extension AppState {
         for site in websites { store.assign(group, toKey: CalmStyleGroupStore.websiteKey(site.id)) }
         calmStyleGroupStore = store
 
-        let appIDs = Set(apps.map(\.id))
-        if apps.contains(where: { $0.style != style }) {
+        func follows(_ memberStyle: WritingStyle) -> Bool {
+            memberStyle != style && (includingOtherStyles || memberStyle == previous)
+        }
+        let changedApps = apps.filter { follows($0.style) }
+        let changedSites = websites.filter { follows($0.style) }
+        let appIDs = Set(changedApps.map(\.id))
+        if !appIDs.isEmpty {
             writingStyleBindings = writingStyleBindings.map { binding in
                 guard appIDs.contains(binding.id) else { return binding }
                 var updated = binding
-                if updated.style != style {
-                    updated.style = style
-                    updated.ruleOverrides = nil
-                }
+                updated.style = style
+                updated.ruleOverrides = nil
                 return updated
             }
         }
-        let siteIDs = Set(websites.map(\.id))
-        if websites.contains(where: { $0.style != style }) {
+        let siteIDs = Set(changedSites.map(\.id))
+        if !siteIDs.isEmpty {
             websiteStyleBindings = websiteStyleBindings.map { site in
                 guard siteIDs.contains(site.id) else { return site }
                 var updated = site
@@ -418,6 +489,24 @@ extension AppState {
             }
         }
         VocaLogger.info(.appState, "Styles: \(group.rawValue) now uses \(style.rawValue)")
+
+        guard includingOtherStyles, !changedApps.isEmpty || !changedSites.isEmpty else { return }
+        let count = changedApps.count + changedSites.count
+        undoCenter.offer("\(style.displayName) for \(count) app\(count == 1 ? "" : "s")") { [weak self] in
+            self?.calmRestore(apps: changedApps, websites: changedSites, store: storeBefore, defaultStyle: defaultBefore)
+        }
+    }
+
+    /// Put rules (still present) and the group choices back as they were.
+    private func calmRestore(
+        apps: [AppStyleBinding], websites: [WebsiteStyleBinding], store: CalmStyleGroupStore, defaultStyle: WritingStyle
+    ) {
+        let appsByID = Dictionary(apps.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let sitesByID = Dictionary(websites.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        writingStyleBindings = writingStyleBindings.map { appsByID[$0.id] ?? $0 }
+        websiteStyleBindings = websiteStyleBindings.map { sitesByID[$0.id] ?? $0 }
+        writingStyleDefault = defaultStyle
+        calmStyleGroupStore = store
     }
 
     /// Change one app's style. Its formatting goes back to the new style's own.
@@ -429,29 +518,49 @@ extension AppState {
         }
     }
 
-    /// Edit one app rule in place.
+    /// Edit one app rule in place. A style change pins the rule to the tab
+    /// it shows under, so it doesn't jump to another tab.
     func calmUpdateApp(_ id: String, _ mutate: (inout AppStyleBinding) -> Void) {
         var bindings = writingStyleBindings
         guard let index = bindings.firstIndex(where: { $0.id == id }) else { return }
+        let before = bindings[index]
         mutate(&bindings[index])
+        if bindings[index].style != before.style {
+            calmPin(calmStyleGroup(of: before), key: CalmStyleGroupStore.appKey(before.id))
+        }
         writingStyleBindings = bindings
     }
 
-    /// Edit one website rule in place.
+    /// Edit one website rule in place. A style change pins the rule to the
+    /// tab it shows under.
     func calmUpdateWebsite(_ id: UUID, _ mutate: (inout WebsiteStyleBinding) -> Void) {
         var rules = websiteStyleBindings
         guard let index = rules.firstIndex(where: { $0.id == id }) else { return }
+        let before = rules[index]
         mutate(&rules[index])
+        if rules[index].style != before.style {
+            calmPin(calmStyleGroup(of: before), key: CalmStyleGroupStore.websiteKey(before.id))
+        }
         websiteStyleBindings = rules
     }
 
-    /// Add an app to a group with the group's style, replacing any rule the
-    /// app already had (wherever it was). Known apps keep their suggested tone.
+    /// Add an app to a group with the group's style. An app that already
+    /// has a rule (in another tab) keeps it: the rule moves to this group
+    /// and only its style changes, so its tone, cleanup, prompt, overrides
+    /// and paused state stay. Known apps keep their suggested tone.
     @discardableResult
     func calmAddApp(_ snapshot: RunningAppSnapshot, to group: CalmStyleGroup) -> AppStyleBinding {
         let style = calmStyle(for: group)
         var bindings = writingStyleBindings
-        bindings.removeAll { $0.matches(snapshot) }
+        if let index = bindings.firstIndex(where: { $0.matches(snapshot) }) {
+            bindings[index].style = style
+            let moved = bindings[index]
+            writingStyleBindings = bindings
+            var store = calmStyleGroupStore
+            store.assign(group, toKey: CalmStyleGroupStore.appKey(moved.id))
+            calmStyleGroupStore = store
+            return moved
+        }
         var binding: AppStyleBinding
         if let suggestion = WritingStyleCatalog.suggestion(matching: snapshot) {
             binding = suggestion.binding
@@ -473,15 +582,21 @@ extension AppState {
     }
 
     /// Add a website to a group with the group's style. Returns nil when the
-    /// text is not a usable address. A rule for the same host is replaced.
+    /// text is not a usable address. A rule for the same host moves here
+    /// and keeps everything but its style.
     @discardableResult
     func calmAddWebsite(_ text: String, to group: CalmStyleGroup) -> WebsiteStyleBinding? {
         let host = CalmWebsiteHost.normalized(text)
         guard !host.isEmpty else { return nil }
-        let rule = WebsiteStyleBinding(hostPattern: host, displayName: host, style: calmStyle(for: group))
+        var rule = WebsiteStyleBinding(hostPattern: host, displayName: host, style: calmStyle(for: group))
         var rules = websiteStyleBindings
-        rules.removeAll { WebsiteStyleBinding.sharesHost($0, rule) }
-        rules.append(rule)
+        if let index = rules.firstIndex(where: { WebsiteStyleBinding.sharesHost($0, rule) }) {
+            // Move the existing rule here; only its style changes.
+            rules[index].style = rule.style
+            rule = rules[index]
+        } else {
+            rules.append(rule)
+        }
         websiteStyleBindings = rules
 
         var store = calmStyleGroupStore

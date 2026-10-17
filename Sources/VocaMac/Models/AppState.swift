@@ -2036,6 +2036,10 @@ final class AppState: ObservableObject {
             return 0
         }
         writingStyleBindings = merged
+        // A re-added app goes to the tab its catalog entry picks, not one it
+        // was pinned to before it was removed.
+        let existingIDs = Set(existing.map(\.id))
+        calmResetStyleGroups(forApps: merged.map(\.id).filter { !existingIDs.contains($0) })
         let added = merged.count - existing.count
         VocaLogger.info(.appState, "Added \(added) suggested writing style rule(s)")
         return added

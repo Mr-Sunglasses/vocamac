@@ -23,6 +23,7 @@ struct CalmStylesPage: View {
     @State private var customizing: AppStyleBinding?
     @State private var editingWebsite: WebsiteStyleBinding?
     @State private var pendingGroupStyle: CalmStylesPendingGroupStyle?
+    @State private var pendingApplyToAll: CalmStylesPendingApplyToAll?
     @State private var pendingAppStyle: CalmStylesPendingAppStyle?
     @State private var isConfirmingRemoveAll = false
     @State private var notice: CalmStylesNotice?
@@ -65,6 +66,7 @@ struct CalmStylesPage: View {
             if target == "default-writing-style" { storedTab = CalmStyleGroup.everythingElse.rawValue }
         }
         .onChange(of: storedTab) { notice = nil }
+        .onAppear { appState.calmPruneStyleGroups() }
         .calmDialog(item: $addingTo) { group in
             CalmStylesAddDialog(group: group) { message in notice = CalmStylesNotice(message, tone: .success) }
         }
@@ -82,6 +84,28 @@ struct CalmStylesPage: View {
             ) {
                 CalmDialogFooter(primaryTitle: "Switch and reset formatting", primaryKind: .destructive) {
                     appState.calmApplyStyle(pending.style, to: pending.group)
+                    noteOtherStyles(in: pending.group, style: pending.style)
+                }
+            }
+        }
+        .calmDialog(item: $pendingApplyToAll) { pending in
+            CalmDialog(
+                "Use \(pending.style.displayName) for every app in \(pending.group.title)?",
+                description: "These keep their own style unless you apply \(pending.style.displayName) to all. "
+                    + "Customized formatting goes back to \(pending.style.displayName)’s. Tone and AI cleanup settings are kept."
+            ) {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(pending.members, id: \.self) { member in
+                        Text(member)
+                            .font(CalmFont.control)
+                            .foregroundStyle(CalmColor.ink)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+            } footer: {
+                CalmDialogFooter(primaryTitle: pending.total > 1 ? "Apply to all \(pending.total) apps" : "Apply") {
+                    appState.calmApplyStyle(pending.style, to: pending.group, includingOtherStyles: true)
+                    notice = nil
                 }
             }
         }
@@ -184,12 +208,27 @@ struct CalmStylesPage: View {
         .accessibilityLabel("Style for \(group.title)")
     }
 
-    /// Pick a card, confirming first when it would reset customized apps.
+    /// Pick a card. A new style applies to the group and to the apps that
+    /// used its previous one (confirming first when that resets customized
+    /// apps); apps with a style of their own keep it. Picking the chosen
+    /// card again offers to apply it to those apps too.
     private func pick(_ style: WritingStyle) {
-        guard style != appState.calmStyle(for: group) || hasStragglers(for: style) else { return }
+        let group = group
+        if style == appState.calmStyle(for: group) {
+            let others = appState.calmOtherStyleMembers(in: group, besides: style)
+            guard !others.apps.isEmpty || !others.websites.isEmpty else { return }
+            pendingApplyToAll = CalmStylesPendingApplyToAll(
+                group: group, style: style,
+                members: others.apps.map { "\($0.displayName) · \($0.style.displayName)" }
+                    + others.websites.map { "\($0.displayName) · \($0.style.displayName)" },
+                total: appState.calmApps(in: group).count + appState.calmWebsites(in: group).count
+            )
+            return
+        }
         let customized = appState.calmCustomizedApps(in: group, switchingTo: style)
         if customized.isEmpty {
             appState.calmApplyStyle(style, to: group)
+            noteOtherStyles(in: group, style: style)
         } else {
             pendingGroupStyle = CalmStylesPendingGroupStyle(
                 group: group, style: style, customizedNames: customized.map(\.displayName)
@@ -197,10 +236,16 @@ struct CalmStylesPage: View {
         }
     }
 
-    /// Whether some app or website in the group uses another style than `style`.
-    private func hasStragglers(for style: WritingStyle) -> Bool {
-        appState.calmApps(in: group).contains { $0.style != style }
-            || appState.calmWebsites(in: group).contains { $0.style != style }
+    /// After a pick, say which apps kept a style of their own and how to change them.
+    private func noteOtherStyles(in group: CalmStyleGroup, style: WritingStyle) {
+        let others = appState.calmOtherStyleMembers(in: group, besides: style)
+        let names = others.apps.map(\.displayName) + others.websites.map(\.displayName)
+        guard !names.isEmpty else { return }
+        notice = CalmStylesNotice(
+            "\(Self.nameList(names)) \(names.count == 1 ? "keeps its" : "keep their") own style. "
+                + "Click \(style.displayName) again to use it for all.",
+            tone: .info
+        )
     }
 
     // MARK: Used in
@@ -408,6 +453,8 @@ struct CalmStylesPage: View {
             bindings.removeAll { $0.id == rule.id }
         }
         appState.writingStyleBindings = bindings + imported
+        // Imported rules show where the catalog or their style puts them.
+        appState.calmResetStyleGroups(forApps: imported.map(\.id))
         notice = CalmStylesNotice("Imported \(imported.count) app(s).", tone: .success)
     }
 }
@@ -433,6 +480,18 @@ struct CalmStylesPendingGroupStyle: Identifiable {
     let style: WritingStyle
     let customizedNames: [String]
     var id: String { "\(group.rawValue).\(style.rawValue)" }
+}
+
+/// Picking the chosen card again: apply its style to the apps that have
+/// their own, after “Apply to all”.
+struct CalmStylesPendingApplyToAll: Identifiable {
+    let group: CalmStyleGroup
+    let style: WritingStyle
+    /// “Discord · Slack” for each app or website that will change.
+    let members: [String]
+    /// Every app and website in the group.
+    let total: Int
+    var id: String { "\(group.rawValue).\(style.rawValue).all" }
 }
 
 /// One app's new style waiting for “Switch and reset formatting”.
