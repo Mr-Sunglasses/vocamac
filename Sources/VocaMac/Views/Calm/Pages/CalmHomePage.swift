@@ -131,7 +131,7 @@ private struct CalmHomeFeed: View {
         let source = source
         let shownCount = min(limit, source.entries.count)
         let days = memo.value(for: FeedKey(historyRevision: store.revision, resultsToken: source.resultsToken, limit: limit)) {
-            CalmFeedDay.groups(Array(source.entries.prefix(limit)))
+            CalmFeedDay.page(source.entries, limit: limit)
         }
         let retryingID = appState.retryingHistoryEntryID
         VStack(alignment: .leading, spacing: 22) {

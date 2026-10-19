@@ -346,6 +346,14 @@ struct CalmFeedDay: Identifiable {
     var id: Date { day }
 
     /// History entries (newest first) grouped by the day they were made.
+    /// What Home shows before the user scrolls further: the newest `limit`
+    /// entries of `entries` (newest first), grouped by day. Only these are
+    /// turned into rows, so the feed's cost stays the same however long the
+    /// history is.
+    static func page(_ entries: [DictationHistoryEntry], limit: Int, calendar: Calendar = .current) -> [CalmFeedDay] {
+        groups(Array(entries.prefix(max(0, limit))), calendar: calendar)
+    }
+
     static func groups(_ entries: [DictationHistoryEntry], calendar: Calendar = .current) -> [CalmFeedDay] {
         var groups: [CalmFeedDay] = []
         for entry in entries {

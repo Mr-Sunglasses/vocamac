@@ -7,11 +7,12 @@
 // (layout plus a full draw), so the numbers include SwiftUI's body,
 // layout and drawing work, not just model code.
 //
-// The thresholds are deliberately loose, about three times what an M1 Pro
-// measures in a debug build, so CI runners don't flake; they catch a
+// Wall-clock timings depend on the machine, so like the dictation
+// benchmarks these run only on request: set VOCAMAC_PERF_REPORT to a file
+// path and the table of timings is appended there. The thresholds catch a
 // regression back to work that grows with the data (a feed or list that
-// builds every row, a dialog that rebuilds its list per row). Set
-// VOCAMAC_PERF_REPORT=1 to print the table of timings.
+// builds every row, a dialog that rebuilds its list per row). CI checks
+// paging itself with `CalmFeedPagingTests`, which doesn't time anything.
 
 import AppKit
 import SwiftUI
@@ -28,9 +29,18 @@ final class CalmPerformanceTests: XCTestCase {
     /// The most a first render of a page may take, in ms.
     private static let firstRenderBudget = 300.0
 
+    /// The report file, or a skip when the benchmark wasn't asked for.
+    private static func reportPath() throws -> String {
+        guard let path = ProcessInfo.processInfo.environment["VOCAMAC_PERF_REPORT"], !path.isEmpty else {
+            throw XCTSkip("Set VOCAMAC_PERF_REPORT to a file path to run the timing benchmarks")
+        }
+        return path
+    }
+
     // MARK: - Tests
 
     func testInteractionsStayFastWithLargeState() throws {
+        let reportPath = try Self.reportPath()
         let fixture = try CalmPerfFixture(historyCount: 5_000)
         defer { fixture.tearDown() }
         var report = Report()
@@ -91,20 +101,21 @@ final class CalmPerformanceTests: XCTestCase {
         })
         UserDefaults.standard.removeObject(forKey: "vocamac.tests.perf.unrelated")
 
-        report.printIfAsked(title: "Interactions, 5,000 history entries")
+        report.write(to: reportPath, title: "Interactions, 5,000 history entries")
         for (label, timing) in report.rows {
             XCTAssertLessThan(timing.update, Self.interactionBudget, "\(label) took \(Int(timing.update)) ms")
         }
     }
 
     func testFirstRenderOfEachPageWithLargeState() throws {
+        let reportPath = try Self.reportPath()
         var report = Report()
         for page in CalmMainPage.allCases {
             let fixture = try CalmPerfFixture(historyCount: 5_000, page: page)
             defer { fixture.tearDown() }
             report.add("First render: \(page.title)", fixture.time(settling: false) {})
         }
-        report.printIfAsked(title: "First render, 5,000 history entries")
+        report.write(to: reportPath, title: "First render, 5,000 history entries")
         for (label, timing) in report.rows {
             XCTAssertLessThan(timing.update, Self.firstRenderBudget, "\(label) took \(Int(timing.update)) ms")
         }
@@ -113,6 +124,7 @@ final class CalmPerformanceTests: XCTestCase {
     /// Home's first render barely depends on how much history there is:
     /// the feed builds only the rows on its first page.
     func testHomeFirstRenderDoesNotGrowWithHistory() throws {
+        let reportPath = try Self.reportPath()
         var report = Report()
         for count in [50, 500, 5_000] {
             let fixture = try CalmPerfFixture(historyCount: count, page: .insights)
@@ -120,7 +132,7 @@ final class CalmPerformanceTests: XCTestCase {
             fixture.render()
             report.add("Home first render, \(count) entries", fixture.time { fixture.navigator.show(.home) })
         }
-        report.printIfAsked(title: "Home first render by history size")
+        report.write(to: reportPath, title: "Home first render by history size")
         let small = report.rows[0].timing.update
         let large = report.rows[2].timing.update
         XCTAssertLessThan(large, Self.firstRenderBudget)
@@ -131,6 +143,7 @@ final class CalmPerformanceTests: XCTestCase {
 
     /// Search over 5,000 entries doesn't block typing.
     func testHomeSearchStaysFast() throws {
+        _ = try Self.reportPath()
         let fixture = try CalmPerfFixture(historyCount: 5_000)
         defer { fixture.tearDown() }
         let store = fixture.appState.historyStore
@@ -402,13 +415,21 @@ private struct Report {
         rows.append((label, timing))
     }
 
-    func printIfAsked(title: String) {
-        guard ProcessInfo.processInfo.environment["VOCAMAC_PERF_REPORT"] != nil else { return }
+    /// Appends the table to the report file.
+    func write(to path: String, title: String) {
         var lines = ["", "== \(title) ==", "step".padding(toLength: 44, withPad: " ", startingAt: 0) + "  update ms  raster ms"]
         for (label, timing) in rows {
             lines.append(label.padding(toLength: 44, withPad: " ", startingAt: 0)
                 + String(format: "%11.1f%11.1f", timing.update, timing.raster))
         }
-        print(lines.joined(separator: "\n"))
+        let text = lines.joined(separator: "\n") + "\n"
+        let url = URL(fileURLWithPath: path)
+        if let handle = try? FileHandle(forWritingTo: url) {
+            handle.seekToEndOfFile()
+            handle.write(Data(text.utf8))
+            try? handle.close()
+        } else {
+            try? text.write(to: url, atomically: true, encoding: .utf8)
+        }
     }
 }
