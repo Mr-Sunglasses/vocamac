@@ -222,24 +222,14 @@ struct CalmLogo: View {
     }
 }
 
-/// The five-bar VocaMac mark on an accent tile.
-///
-/// `CalmBrandMark(size: 28)` is the sidebar brand (r8, glyph 17, stroke 2.2);
-/// `CalmBrandMark(size: 72)` is the About identity (r18, glyph 40, stroke 2).
+/// The VocaMac logo (the mic mark) wherever the window shows the brand:
+/// `CalmBrandMark(size: 28)` in the sidebar, `CalmBrandMark(size: 72)` on
+/// About. It draws the same bundled logo as the rest of the app, so the
+/// window and the app icon match.
 struct CalmBrandMark: View {
     var size: CGFloat = 28
 
-    private var glyph: CGFloat { size >= 60 ? size * 40 / 72 : size * 17 / 28 }
-    private var stroke: CGFloat { size >= 60 ? 2 : 2.2 }
-    private var radius: CGFloat { size >= 60 ? size * 18 / 72 : size * 8 / 28 }
-
     var body: some View {
-        CalmGridShape.brandMark
-            .stroke(style: StrokeStyle(lineWidth: stroke * glyph / 22, lineCap: .round, lineJoin: .round))
-            .foregroundStyle(CalmColor.content)
-            .frame(width: glyph, height: glyph)
-            .frame(width: size, height: size)
-            .background(RoundedRectangle(cornerRadius: radius, style: .continuous).fill(CalmColor.accent))
-            .accessibilityHidden(true)
+        BrandLogoView(size: size)
     }
 }
