@@ -141,6 +141,13 @@ final class DictationHistoryStore: ObservableObject {
 
     /// Entries whose text or app name contains every word of `query`.
     func search(_ query: String) -> [DictationHistoryEntry] {
+        Self.entries(entries, matching: query)
+    }
+
+    /// The entries in `entries` whose text or app name contains every word
+    /// of `query`, in order. Touches nothing else, so a long history can be
+    /// searched off the main thread.
+    nonisolated static func entries(_ entries: [DictationHistoryEntry], matching query: String) -> [DictationHistoryEntry] {
         let words = query.lowercased()
             .components(separatedBy: .whitespacesAndNewlines)
             .filter { !$0.isEmpty }

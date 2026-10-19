@@ -462,6 +462,8 @@ struct CalmAllSpeechModels: View {
     @State private var search = ""
     @State private var onlyMine = true
     @State private var flow = CalmSpeechPickFlow()
+    /// Measured off the main thread when the page opens.
+    @State private var modelsOnDisk: String?
 
     private var picker: CalmModelPicker { .shared }
 
@@ -493,7 +495,7 @@ struct CalmAllSpeechModels: View {
             } else {
                 list(groups, spoken: spoken, selected: selected)
             }
-            Text("Models download from Hugging Face and stay on this Mac · \(appState.modelManager.diskUsageDescription()) used")
+            Text("Models download from Hugging Face and stay on this Mac" + (modelsOnDisk.map { " · \($0) used" } ?? ""))
                 .font(CalmFont.note)
                 .foregroundStyle(CalmColor.muted)
         }
@@ -501,6 +503,7 @@ struct CalmAllSpeechModels: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .calmSpeechPickDialogs(flow)
         .task { await appState.refreshAppleSpeechLanguages() }
+        .task { modelsOnDisk = await appState.calmModelsDiskUsage() }
         .onChange(of: appState.requestedSpeechModelSearch, initial: true) { _, request in
             guard let request else { return }
             search = request
@@ -521,11 +524,8 @@ struct CalmAllSpeechModels: View {
         let shape = RoundedRectangle(cornerRadius: CalmMetrics.Radius.panel, style: .continuous)
         return ScrollViewReader { proxy in
             // Hug short lists; scroll inside the panel when they run long.
-            ViewThatFits(in: .vertical) {
-                rows(groups, spoken: spoken, selected: selected)
-                ScrollView { rows(groups, spoken: spoken, selected: selected) }
-                    .scrollContentBackground(.hidden)
-            }
+            CalmFittingScrollView { rows(groups, spoken: spoken, selected: selected) }
+                .scrollContentBackground(.hidden)
             .task(id: searchTarget) {
                 guard searchTarget == "custom-endpoint" else { return }
                 do { try await Task.sleep(for: .milliseconds(150)) } catch { return }
@@ -609,12 +609,9 @@ struct CalmAllWritingModels: View {
                 CalmNoResults(message: "No models match “\(search)”.") { search = "" }
                     .calmPanelBackground()
             } else {
-                ViewThatFits(in: .vertical) {
-                    family(kinds, selected: selected)
-                    ScrollView { family(kinds, selected: selected) }
-                        .scrollContentBackground(.hidden)
-                }
-                .calmPanelBackground()
+                CalmFittingScrollView { family(kinds, selected: selected) }
+                    .scrollContentBackground(.hidden)
+                    .calmPanelBackground()
                 .clipShape(RoundedRectangle(cornerRadius: CalmMetrics.Radius.panel, style: .continuous))
             }
             Text("Models download from Hugging Face and stay on this Mac. Smart Cleanup and Command Mode can share one.")

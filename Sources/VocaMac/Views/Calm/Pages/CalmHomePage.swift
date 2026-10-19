@@ -10,8 +10,6 @@ import SwiftUI
 
 /// Home: the dictation feed (old History page) and the side card.
 struct CalmHomePage: View {
-    @EnvironmentObject private var appState: AppState
-    @Environment(CalmNavigator.self) private var navigator
     @ObservedObject private var player = HistoryAudioPlayer.shared
 
     @State private var isSearching = false
@@ -82,6 +80,11 @@ struct CalmHomePage: View {
 
 /// The feed column: an unsaved-changes notice, a history-off notice, then
 /// the day groups, or an empty state.
+///
+/// History can hold thousands of dictations, so the feed shows the newest
+/// `CalmPaging.pageSize` and adds a page each time the user scrolls near
+/// the end; rows are made only as they scroll into view. Search runs off
+/// the main thread once typing pauses, and its results page the same way.
 private struct CalmHomeFeed: View {
     let query: String
     @ObservedObject var player: HistoryAudioPlayer
@@ -89,21 +92,50 @@ private struct CalmHomeFeed: View {
 
     @EnvironmentObject private var appState: AppState
     @Environment(CalmNavigator.self) private var navigator
-    /// The search and day grouping, redone only when history or the query
-    /// changes, not on every AppState change.
+    /// How many entries (or search results) are shown.
+    @State private var limit = CalmPaging.pageSize
+    /// The last finished search.
+    @State private var results = CalmFeedSearchResults()
+    /// The shown entries grouped by day, regrouped only when history, the
+    /// results or the number shown change, not on every AppState change.
     @State private var memo = CalmMemo<FeedKey, [CalmFeedDay]>()
 
     private struct FeedKey: Equatable {
         let historyRevision: Int
+        let resultsToken: Int?
+        let limit: Int
+    }
+
+    private struct SearchKey: Equatable {
         let query: String
+        let historyRevision: Int
+    }
+
+    /// The entries to show, newest first: all of history, or the results
+    /// of the last search while one is typed (the previous results stay up
+    /// until the next search finishes).
+    private var source: (entries: [DictationHistoryEntry], resultsToken: Int?) {
+        if query.isEmpty || results.query.isEmpty {
+            return (appState.historyStore.entries, nil)
+        }
+        return (results.entries, results.token)
+    }
+
+    /// The search for the current query and history has finished.
+    private var isSearchCurrent: Bool {
+        results.query == query && results.historyRevision == appState.historyStore.revision
     }
 
     var body: some View {
-        let days = memo.value(for: FeedKey(historyRevision: appState.historyStore.revision, query: query)) {
-            CalmFeedDay.groups(appState.historyStore.search(query))
+        let store = appState.historyStore
+        let source = source
+        let shownCount = min(limit, source.entries.count)
+        let days = memo.value(for: FeedKey(historyRevision: store.revision, resultsToken: source.resultsToken, limit: limit)) {
+            CalmFeedDay.groups(Array(source.entries.prefix(limit)))
         }
+        let retryingID = appState.retryingHistoryEntryID
         VStack(alignment: .leading, spacing: 22) {
-            if appState.historyStore.hasUnsavedChanges {
+            if store.hasUnsavedChanges {
                 CalmPanel {
                     CalmStatusRow(
                         "Recent changes aren’t saved yet",
@@ -112,7 +144,7 @@ private struct CalmHomeFeed: View {
                     ) { EmptyView() }
                 }
             }
-            if !appState.historyEnabled, !appState.historyStore.entries.isEmpty {
+            if !appState.historyEnabled, !store.entries.isEmpty {
                 CalmPanel {
                     CalmStatusRow(
                         "History is off",
@@ -123,22 +155,50 @@ private struct CalmHomeFeed: View {
                     }
                 }
             }
-            if days.isEmpty {
+            if days.isEmpty, query.isEmpty || isSearchCurrent {
                 emptyState
             } else {
                 LazyVStack(alignment: .leading, spacing: 22) {
                     ForEach(days) { day in
                         CalmDaySection(CalmDaySection<EmptyView>.caption(for: day.day)) {
-                            CalmList {
-                                ForEach(day.entries) { entry in
-                                    CalmFeedRow(entry: entry, player: player)
-                                }
+                            CalmLazyList(day.entries) { entry in
+                                CalmFeedRow(
+                                    entry: entry,
+                                    audioURL: entry.hasAudio ? store.audioURL(for: entry) : nil,
+                                    playingURL: player.playingURL,
+                                    retryingID: retryingID,
+                                    appState: appState
+                                )
+                                .equatable()
                             }
                         }
+                    }
+                    if shownCount < source.entries.count {
+                        CalmLoadMoreTrigger(token: limit) { limit += CalmPaging.pageSize }
                     }
                 }
             }
         }
+        .task(id: SearchKey(query: query, historyRevision: store.revision)) {
+            await search(query, revision: store.revision)
+        }
+        .onChange(of: query) { limit = CalmPaging.pageSize }
+    }
+
+    /// Search history for `query` once typing pauses, off the main thread.
+    private func search(_ query: String, revision: Int) async {
+        guard !query.isEmpty else {
+            if !results.query.isEmpty { results = CalmFeedSearchResults(token: results.token + 1) }
+            return
+        }
+        // A key typed within the pause cancels this task before it searches.
+        do { try await Task.sleep(for: .milliseconds(150)) } catch { return }
+        let entries = appState.historyStore.entries
+        let found = await Task.detached(priority: .userInitiated) {
+            DictationHistoryStore.entries(entries, matching: query)
+        }.value
+        guard !Task.isCancelled else { return }
+        results = CalmFeedSearchResults(query: query, historyRevision: revision, entries: found, token: results.token + 1)
     }
 
     @ViewBuilder
@@ -178,15 +238,31 @@ private struct CalmHomeFeed: View {
     }
 }
 
+/// The Home feed's last finished search.
+private struct CalmFeedSearchResults {
+    var query = ""
+    var historyRevision = -1
+    var entries: [DictationHistoryEntry] = []
+    /// Changes with every new result, so the feed regroups.
+    var token = 0
+}
+
 // MARK: - Feed row
 
 /// One dictation: time and app on the left, the text (three lines, then
 /// Show more), its tags, and on hover a copy button and a more menu.
-private struct CalmFeedRow: View {
+///
+/// It reads everything it shows from its inputs rather than observing
+/// `AppState`, and compares equal while they are unchanged, so an
+/// unrelated AppState change doesn't redraw every row in the feed.
+private struct CalmFeedRow: View, Equatable {
     let entry: DictationHistoryEntry
-    @ObservedObject var player: HistoryAudioPlayer
+    let audioURL: URL?
+    let playingURL: URL?
+    let retryingID: UUID?
+    /// For the row's actions only; the row doesn't observe it.
+    let appState: AppState
 
-    @EnvironmentObject private var appState: AppState
     @State private var isExpanded = false
     @State private var isClamped = false
     @State private var showsOriginal = false
@@ -194,10 +270,20 @@ private struct CalmFeedRow: View {
 
     /// Lines shown before “Show more”.
     private static let clampLines = 3
+    /// Text this short fits in three lines at the narrowest the feed gets,
+    /// so it needs no measuring to know Show more isn't needed.
+    private static let unclampableLength = 80
+    /// Longer than three lines can hold at 14 points in a 450-point column,
+    /// even in the narrowest glyphs (about 3 points each).
+    private static let clampedLength = 450
 
-    private var isRetrying: Bool { appState.retryingHistoryEntryID == entry.id }
-    private var audioURL: URL? { entry.hasAudio ? appState.historyStore.audioURL(for: entry) : nil }
-    private var isPlaying: Bool { audioURL != nil && player.playingURL == audioURL }
+    private var isRetrying: Bool { retryingID == entry.id }
+    private var isPlaying: Bool { audioURL != nil && playingURL == audioURL }
+
+    nonisolated static func == (lhs: CalmFeedRow, rhs: CalmFeedRow) -> Bool {
+        lhs.entry == rhs.entry && lhs.audioURL == rhs.audioURL && lhs.retryingID == rhs.retryingID
+            && (lhs.playingURL == lhs.audioURL) == (rhs.playingURL == rhs.audioURL)
+    }
 
     var body: some View {
         CalmListRow {
@@ -246,7 +332,14 @@ private struct CalmFeedRow: View {
                 .font(CalmFont.body)
                 .foregroundStyle(CalmColor.muted)
                 .fixedSize(horizontal: false, vertical: true)
+        } else if Self.cannotClamp(entry.displayText) {
+            Text(entry.displayText)
+                .calmType(.body)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
         } else {
+            let mustClamp = Self.mustClamp(entry.displayText)
             VStack(alignment: .leading, spacing: 6) {
                 Text(entry.displayText)
                     .calmType(.body)
@@ -258,17 +351,20 @@ private struct CalmFeedRow: View {
                         clampedHeight = shown
                     }
                     .background(alignment: .topLeading) {
-                        // The full text, unseen, to tell whether the clamp cut anything.
-                        Text(entry.displayText)
-                            .calmType(.body)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .hidden()
-                            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { full in
-                                fullHeight = full
-                            }
-                            .accessibilityHidden(true)
+                        // The full text, unseen, to tell whether the clamp cut
+                        // anything. Text that long is cut for sure.
+                        if !mustClamp {
+                            Text(entry.displayText)
+                                .calmType(.body)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .hidden()
+                                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { full in
+                                    fullHeight = full
+                                }
+                                .accessibilityHidden(true)
+                        }
                     }
-                if isClamped || isExpanded {
+                if isClamped || isExpanded || mustClamp {
                     Button(isExpanded ? "Show less" : "Show more") { isExpanded.toggle() }
                         .calmLink()
                         .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
@@ -281,6 +377,20 @@ private struct CalmFeedRow: View {
 
     @State private var fullHeight: CGFloat = 0
     @State private var clampedHeight: CGFloat = 0
+
+    /// One short line of text can't run past three lines however narrow
+    /// the window, so it skips the hidden full-height copy the clamp check
+    /// lays out for every longer row.
+    static func cannotClamp(_ text: String) -> Bool {
+        text.count <= unclampableLength && !text.contains(where: \.isNewline)
+    }
+
+    /// Text that runs past three lines even at the widest the feed gets
+    /// (about 450 points) set in the narrowest glyphs, or that has three
+    /// line breaks, is always clamped and needs no measuring either.
+    static func mustClamp(_ text: String) -> Bool {
+        text.count > clampedLength || text.reduce(0) { $0 + ($1.isNewline ? 1 : 0) } >= clampLines
+    }
 
     private func updateClamp() {
         guard !isExpanded else { return }
@@ -392,7 +502,7 @@ private struct CalmFeedRow: View {
             }
             if let audioURL {
                 Divider()
-                Button { player.toggle(audioURL) } label: {
+                Button { HistoryAudioPlayer.shared.toggle(audioURL) } label: {
                     Label(isPlaying ? "Stop audio" : "Play audio", systemImage: isPlaying ? "stop" : "play")
                 }
                 Button {
@@ -400,12 +510,12 @@ private struct CalmFeedRow: View {
                 } label: {
                     Label("Retry", systemImage: "arrow.clockwise")
                 }
-                .disabled(appState.retryingHistoryEntryID != nil)
+                .disabled(retryingID != nil)
                 .help("Transcribe again with the current model and copy the result")
             }
             Divider()
             Button(role: .destructive) {
-                if isPlaying { player.stop() }
+                if isPlaying { HistoryAudioPlayer.shared.stop() }
                 appState.deleteHistoryEntry(entry.id)
             } label: {
                 Label("Delete", systemImage: "trash")
@@ -452,19 +562,11 @@ private struct CalmCommandEditTag: View {
 private struct CalmHomeSideColumn: View {
     @EnvironmentObject private var appState: AppState
     @Environment(CalmNavigator.self) private var navigator
-    /// The summary and streak week, recomputed only when the stats,
-    /// history or day change.
-    @State private var memo = CalmMemo<CalmInsightsInputs, (summary: CalmInsightsSummary, week: [CalmStreakDay])>()
 
     var body: some View {
-        let (summary, week) = memo.value(for: appState.insightsInputs) {
-            let calendar = appState.statsCalendar
-            let week = CalmActivityCalendar.streakWeek(
-                CalmActivityCalendar.lastSevenDays(stats: appState.statsManager.stats, calendar: calendar),
-                calendar: calendar
-            )
-            return (appState.insightsSummary(), week)
-        }
+        // Cached on AppState, shared with Insights.
+        let summary = appState.calmInsightsSummary()
+        let week = appState.calmStreakWeek()
         VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 16) {
                 CalmBigNumber(value: CalmFormat.number(summary.lifetimeWords), unit: summary.lifetimeWords == 1 ? "word" : "words")

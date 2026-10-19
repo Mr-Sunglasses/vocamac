@@ -43,13 +43,17 @@ struct CalmWindowView: View {
             .disabled(navigator.isSettingsPresented)
             .environment(\.calmDimsWhenDisabled, false)
             .accessibilityHidden(navigator.isSettingsPresented)
-            if navigator.isSettingsPresented {
-                settingsLayer
-                    .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.98)))
-                    .zIndex(1)
+            // Only the sheet fades in: an animation on the whole window
+            // animated every change opening Settings made underneath it.
+            ZStack {
+                if navigator.isSettingsPresented {
+                    settingsLayer
+                        .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.98)))
+                }
             }
+            .animation(.easeOut(duration: 0.18), value: navigator.isSettingsPresented)
+            .zIndex(1)
         }
-        .animation(.easeOut(duration: 0.18), value: navigator.isSettingsPresented)
         // Behind a dialog, nothing answers Tab, VoiceOver or a click: the
         // scrim only stopped the mouse, so a row under the dialog could
         // still be focused or pressed and open a second dialog. The scrim

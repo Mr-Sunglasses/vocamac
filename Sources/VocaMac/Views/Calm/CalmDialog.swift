@@ -74,14 +74,11 @@ struct CalmDialog<Header: View, Content: View, Footer: View>: View {
     /// the window, scrolling between the fixed title and footer so every
     /// row and the footer's buttons stay reachable.
     private var fittedContent: some View {
-        ViewThatFits(in: .vertical) {
-            contentStack
-            ScrollView(.vertical) {
-                // Room for focus rings, which the scroll view would clip.
-                contentStack.padding(Self.focusRingRoom)
-            }
-            .padding(-Self.focusRingRoom)
+        CalmFittingScrollView {
+            // Room for focus rings, which the scroll view would clip.
+            contentStack.padding(Self.focusRingRoom)
         }
+        .padding(-Self.focusRingRoom)
     }
 
     private static var focusRingRoom: CGFloat { 4 }

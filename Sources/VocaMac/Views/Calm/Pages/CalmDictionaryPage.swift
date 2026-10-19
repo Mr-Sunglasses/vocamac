@@ -361,15 +361,20 @@ private struct CalmDictionaryList: View {
 
     @EnvironmentObject private var appState: AppState
 
+    private struct ListKey: Hashable {
+        let filter: DictionaryListFilter
+        let query: String
+    }
+
     var body: some View {
         let items = appState.dictionaryItems(filter: filter, query: query)
         if items.isEmpty {
             emptyState
         } else {
-            CalmList {
-                ForEach(items) { item in
-                    CalmDictionaryRow(item: item) { onEdit(item) }
-                }
+            // Hundreds of words: rows are made as they scroll into view, a
+            // page at a time.
+            CalmPagedList(items, resetKey: ListKey(filter: filter, query: query)) { item in
+                CalmDictionaryRow(item: item) { onEdit(item) }
             }
         }
     }

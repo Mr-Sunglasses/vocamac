@@ -52,17 +52,21 @@ struct CalmStylesAddDialog: View {
     private static let rowHeight: CGFloat = 48
 
     var body: some View {
+        // The rows are worked out once per update: each row used to ask for
+        // the selection, which rebuilt and filtered the whole list again.
+        let rows = candidates
+        let selection = selected(in: rows)
         CalmDialog("Add app or website", description: "It will use this group’s style.", width: 480) {
             VStack(alignment: .leading, spacing: 12) {
                 CalmSearchField(text: $query, prompt: "Search apps", focus: $isSearchFocused) { addSelected() }
-                list
+                list(rows, selected: selection)
                 Text("Or type a website, like github.com")
                     .calmType(.description)
             }
         } footer: {
             CalmDialogFooter(
                 primaryTitle: "Add",
-                isPrimaryEnabled: selected.map(canAdd) ?? false,
+                isPrimaryEnabled: selection.map(canAdd) ?? false,
                 dismissesOnPrimary: false,
                 onPrimary: addSelected
             ) {
@@ -106,15 +110,13 @@ struct CalmStylesAddDialog: View {
         app.bundleIdentifier?.lowercased() ?? "name:\(app.displayName.lowercased())"
     }
 
-    private var selected: CalmStylesAddCandidate? {
-        let rows = candidates
+    private func selected(in rows: [CalmStylesAddCandidate]) -> CalmStylesAddCandidate? {
         if let selectionID, let row = rows.first(where: { $0.id == selectionID }) { return row }
         return rows.first
     }
 
     @ViewBuilder
-    private var list: some View {
-        let rows = candidates
+    private func list(_ rows: [CalmStylesAddCandidate], selected: CalmStylesAddCandidate?) -> some View {
         let shape = RoundedRectangle(cornerRadius: CalmMetrics.Radius.list, style: .continuous)
         if rows.isEmpty {
             Text(isLoading ? "Finding your apps…" : (query.isEmpty ? "No open apps." : "No apps match “\(query)”."))
@@ -124,10 +126,12 @@ struct CalmStylesAddDialog: View {
                 .padding(24)
                 .overlay(shape.strokeBorder(CalmColor.line2, lineWidth: 1))
         } else {
+            let firstID = rows.first?.id
             ScrollView {
-                VStack(spacing: 0) {
-                    ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
-                        if index > 0 { Rectangle().fill(CalmColor.line).frame(height: 1) }
+                // Only the rows in view are made.
+                LazyVStack(spacing: 0) {
+                    ForEach(rows) { row in
+                        if row.id != firstID { Rectangle().fill(CalmColor.line).frame(height: 1) }
                         rowView(row, isSelected: row.id == selected?.id)
                     }
                 }
@@ -193,7 +197,7 @@ struct CalmStylesAddDialog: View {
     // MARK: Actions
 
     private func addSelected() {
-        guard let row = selected, canAdd(row) else { return }
+        guard let row = selected(in: candidates), canAdd(row) else { return }
         switch row {
         case .website(let host):
             guard let rule = appState.calmAddWebsite(host, to: group) else { return }

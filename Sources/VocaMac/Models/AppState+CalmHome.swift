@@ -55,6 +55,36 @@ extension AppState {
         )
     }
 
+    /// `insightsSummary()`, computed once per change of its inputs and kept
+    /// across page switches (Home's side card and Insights both show it).
+    func calmInsightsSummary() -> CalmInsightsSummary {
+        calmDerived.value(\.summary, for: insightsInputs) { insightsSummary() }
+    }
+
+    /// The streak dots for the last seven days.
+    func calmStreakWeek() -> [CalmStreakDay] {
+        calmDerived.value(\.week, for: insightsInputs) {
+            let calendar = statsCalendar
+            return CalmActivityCalendar.streakWeek(
+                CalmActivityCalendar.lastSevenDays(stats: statsManager.stats, calendar: calendar), calendar: calendar
+            )
+        }
+    }
+
+    /// The heatmap's year of days.
+    func calmHeatmapDays() -> [CalmActivityDay] {
+        calmDerived.value(\.heatmap, for: insightsInputs) {
+            CalmActivityCalendar.heatmapDays(stats: statsManager.stats, calendar: statsCalendar)
+        }
+    }
+
+    /// The apps the user dictates into most, from history (empty while it's off).
+    func calmAppShares() -> [CalmAppShare] {
+        calmDerived.value(\.apps, for: insightsInputs) {
+            historyEnabled ? CalmAppShare.top(from: historyStore.entries) : []
+        }
+    }
+
     /// What `insightsSummary()` depends on, for pages that cache it.
     var insightsInputs: CalmInsightsInputs {
         CalmInsightsInputs(
@@ -72,5 +102,40 @@ extension AppState {
             || stats.totalWords > 0
             || stats.totalAudioDurationSeconds > 0
             || !stats.dailyWordCounts.isEmpty
+    }
+}
+
+/// What the v3 window derives from stats and history, kept on `AppState`
+/// so switching pages doesn't redo it. Each page used to recompute the
+/// summary and app shares from all of history every time it appeared.
+@MainActor
+final class CalmDerivedCache {
+    struct Entry<Value> {
+        let key: CalmInsightsInputs
+        let value: Value
+    }
+
+    var summary: Entry<CalmInsightsSummary>?
+    var week: Entry<[CalmStreakDay]>?
+    var heatmap: Entry<[CalmActivityDay]>?
+    var apps: Entry<[CalmAppShare]>?
+    /// Last decode of the Styles page's group store and of the website
+    /// rules, keyed by the JSON they came from: the Styles page and its
+    /// Add dialog read them once per rule and row, and decoding JSON each
+    /// time made those views slow to open.
+    var styleGroups: (json: String?, store: CalmStyleGroupStore)?
+    var websites: (json: String?, bindings: [WebsiteStyleBinding])?
+
+    /// The value stored at `slot` when it was computed for `key`, otherwise
+    /// a fresh one, which replaces it.
+    func value<Value>(
+        _ slot: ReferenceWritableKeyPath<CalmDerivedCache, Entry<Value>?>,
+        for key: CalmInsightsInputs,
+        compute: () -> Value
+    ) -> Value {
+        if let entry = self[keyPath: slot], entry.key == key { return entry.value }
+        let value = compute()
+        self[keyPath: slot] = Entry(key: key, value: value)
+        return value
     }
 }

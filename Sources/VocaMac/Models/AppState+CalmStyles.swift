@@ -313,7 +313,13 @@ extension AppState {
     /// rules that are gone, unless a removal can still be undone (its rule
     /// must come back in the same tab).
     var calmStyleGroupStore: CalmStyleGroupStore {
-        get { CalmStyleGroupStore.decode(UserDefaults.standard.string(forKey: CalmStyleGroupStore.defaultsKey)) }
+        get {
+            let json = UserDefaults.standard.string(forKey: CalmStyleGroupStore.defaultsKey)
+            if let cached = calmDerived.styleGroups, cached.json == json { return cached.store }
+            let store = CalmStyleGroupStore.decode(json)
+            calmDerived.styleGroups = (json, store)
+            return store
+        }
         set {
             var store = newValue
             if undoCenter.current == nil { store.prune(keepingKeys: calmLiveStyleGroupKeys) }

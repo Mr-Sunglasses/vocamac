@@ -20,15 +20,6 @@ struct CalmInsightsPage: View {
     /// the state it was scheduled for.
     @State private var shareStateToken = 0
     @State private var sharePickerAnchor = CalmSharePickerAnchor()
-    /// The summary, app shares and heatmap days, recomputed only when the
-    /// stats, history or day change (not on every redraw).
-    @State private var memo = CalmMemo<CalmInsightsInputs, Computed>()
-
-    private struct Computed {
-        let summary: CalmInsightsSummary
-        let apps: [CalmAppShare]
-        let days: [CalmActivityDay]
-    }
 
     /// What the last share did, shown as a line under the header.
     private enum ShareState: Equatable {
@@ -39,15 +30,10 @@ struct CalmInsightsPage: View {
     }
 
     var body: some View {
-        let computed = memo.value(for: appState.insightsInputs) {
-            Computed(
-                summary: appState.insightsSummary(),
-                apps: appState.historyEnabled ? CalmAppShare.top(from: appState.historyStore.entries) : [],
-                days: CalmActivityCalendar.heatmapDays(stats: appState.statsManager.stats, calendar: appState.statsCalendar)
-            )
-        }
-        let summary = computed.summary
-        let apps = computed.apps
+        // Cached on AppState: recomputed only when the stats, history or day
+        // change, not on every redraw or every visit to the page.
+        let summary = appState.calmInsightsSummary()
+        let apps = appState.calmAppShares()
         CalmPage(.list, spacing: 20) {
             VStack(alignment: .leading, spacing: 10) {
                 CalmPageHeader("Insights") {
@@ -71,7 +57,7 @@ struct CalmInsightsPage: View {
             totals(summary)
                 .settingsTarget("stats")
 
-            CalmStreakPanel(summary: summary, days: computed.days, metric: metric)
+            CalmStreakPanel(summary: summary, days: appState.calmHeatmapDays(), metric: metric)
 
             bottomRow(summary: summary, apps: apps)
         }

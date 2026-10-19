@@ -71,6 +71,16 @@ enum CalmActivityCalendar {
         return String(format: "%04d-%02d-%02d", year, month, day)
     }
 
+    /// Midnight at the start of the day stored under `key` (`yyyy-MM-dd`),
+    /// or nil when the key isn't a date.
+    static func startOfDay(forKey key: String, calendar: Calendar) -> Date? {
+        let parts = key.split(separator: "-")
+        guard parts.count == 3, let year = Int(parts[0]), let month = Int(parts[1]), let day = Int(parts[2]) else { return nil }
+        guard let date = calendar.date(from: DateComponents(year: year, month: month, day: day)) else { return nil }
+        // A key that doesn't round-trip (month 13) isn't a real day.
+        return dayKey(for: date, calendar: calendar) == key ? calendar.startOfDay(for: date) : nil
+    }
+
     /// The day containing `date`, with its stored activity.
     static func day(at date: Date, stats: UserStats, today: Date, calendar: Calendar) -> CalmActivityDay {
         let start = calendar.startOfDay(for: date)
@@ -182,12 +192,7 @@ extension CalmActivityDay {
 
     /// The line under the heatmap: “Fri, Oct 16 · 473 words in 11 dictations”.
     func detail(for metric: CalmInsightsMetric, averageWPM: Double, calendar: Calendar) -> String {
-        let formatter = DateFormatter()
-        formatter.calendar = calendar
-        formatter.timeZone = calendar.timeZone
-        formatter.locale = calendar.locale
-        formatter.setLocalizedDateFormatFromTemplate("EEE MMM d")
-        let when = formatter.string(from: date)
+        let when = CalmDateFormatters.formatter(template: "EEE MMM d", calendar: calendar).string(from: date)
         guard isActive else { return "\(when) · no dictation" }
         switch metric {
         case .words:
@@ -257,11 +262,16 @@ struct CalmInsightsSummary {
         // would let a reset's earlier dictations that day count again.
         let firstStatsDay = (Array(stats.dailyWordCounts.keys) + Array(stats.dailyTranscriptionCounts.keys)).min()
         let longestInHistory = firstStatsDay.map { firstDay in
-            history
+            // Day keys sort in time order, so “on or after the first day”
+            // is a date comparison; no key needs formatting per entry.
+            let firstDayStart = CalmActivityCalendar.startOfDay(forKey: firstDay, calendar: calendar)
+            let earliest = max(firstDayStart ?? .distantPast, stats.resetDate ?? .distantPast)
+            return history
                 .filter { entry in
                     entry.status == .completed && !entry.isCommandEdit && entry.audioSeconds.isFinite
-                        && CalmActivityCalendar.dayKey(for: entry.createdAt, calendar: calendar) >= firstDay
-                        && entry.createdAt >= (stats.resetDate ?? .distantPast)
+                        && entry.createdAt >= earliest
+                        && (firstDayStart != nil
+                            || CalmActivityCalendar.dayKey(for: entry.createdAt, calendar: calendar) >= firstDay)
                 }
                 .map(\.audioSeconds)
                 .max() ?? 0
@@ -409,14 +419,44 @@ enum CalmFormat {
 
     /// A feed row's time: “1:04 pm” (or “13:04” where the locale uses a 24-hour clock).
     static func feedTime(_ date: Date, calendar: Calendar = .current) -> String {
+        let formatter = CalmDateFormatters.formatter(template: "jmm", calendar: calendar, lowercaseAmPm: true)
+        // Newer ICU puts a narrow no-break space before am/pm; the design uses a plain one.
+        return formatter.string(from: date).replacingOccurrences(of: "\u{202F}", with: " ")
+    }
+}
+
+/// Date formatters for the window, made once per template and calendar.
+/// Making a `DateFormatter` costs far more than using one, and the feed
+/// formats a time for every row it draws.
+enum CalmDateFormatters {
+    private struct Key: Hashable {
+        let template: String
+        let calendar: Calendar
+        let lowercaseAmPm: Bool
+    }
+
+    /// Guarded by `lock`. A configured `DateFormatter` is safe to use from
+    /// any thread; only the dictionary needs the lock.
+    nonisolated(unsafe) private static var cache: [Key: DateFormatter] = [:]
+    private static let lock = NSLock()
+
+    /// A formatter for `template` (`setLocalizedDateFormatFromTemplate`) in
+    /// `calendar`'s time zone and locale. `lowercaseAmPm` writes “am” / “pm”.
+    static func formatter(template: String, calendar: Calendar, lowercaseAmPm: Bool = false) -> DateFormatter {
+        let key = Key(template: template, calendar: calendar, lowercaseAmPm: lowercaseAmPm)
+        lock.lock()
+        defer { lock.unlock() }
+        if let cached = cache[key] { return cached }
         let formatter = DateFormatter()
         formatter.calendar = calendar
         formatter.timeZone = calendar.timeZone
         formatter.locale = calendar.locale ?? .current
-        formatter.setLocalizedDateFormatFromTemplate("jmm")
-        formatter.amSymbol = "am"
-        formatter.pmSymbol = "pm"
-        // Newer ICU puts a narrow no-break space before am/pm; the design uses a plain one.
-        return formatter.string(from: date).replacingOccurrences(of: "\u{202F}", with: " ")
+        formatter.setLocalizedDateFormatFromTemplate(template)
+        if lowercaseAmPm {
+            formatter.amSymbol = "am"
+            formatter.pmSymbol = "pm"
+        }
+        cache[key] = formatter
+        return formatter
     }
 }

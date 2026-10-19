@@ -13,6 +13,8 @@ struct CalmAboutSettings: View {
     @EnvironmentObject private var appState: AppState
 
     @State private var updateInfo: UpdateInfo?
+    /// Measured off the main thread when the page opens.
+    @State private var modelsOnDisk: String?
 
     private static let websiteURL = URL(string: "https://vocamac.com")
     private static let sourceURL = URL(string: "https://github.com/VocaHQ/vocamac")
@@ -41,7 +43,7 @@ struct CalmAboutSettings: View {
                     if let cleanupModelLabel {
                         readOnlyRow("Smart Cleanup model", value: cleanupModelLabel)
                     }
-                    readOnlyRow("Models on disk", value: appState.modelManager.diskUsageDescription())
+                    readOnlyRow("Models on disk", value: modelsOnDisk ?? "Measuring…")
                     CalmRow("Set up VocaMac again", description: "Walk through the first-launch setup") {
                         Button("Start setup") {
                             NotificationCenter.default.post(name: .showOnboarding, object: nil)
@@ -74,6 +76,7 @@ struct CalmAboutSettings: View {
             }
             .settingsTarget("github-issues", aliases: ["discord", "x", "email"])
         }
+        .task { modelsOnDisk = await appState.calmModelsDiskUsage() }
         .onChange(of: appState.updateChecker.updateState) { old, new in
             // A check that finds an update (here or from the menu footer) opens it.
             guard old == .checking, let info = Self.availableInfo(new) else { return }

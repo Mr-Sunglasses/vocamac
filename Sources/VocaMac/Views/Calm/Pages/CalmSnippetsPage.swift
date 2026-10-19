@@ -122,10 +122,8 @@ struct CalmSnippetsPage: View {
         } else if snippets.isEmpty {
             CalmNoResults(message: "No snippets match “\(trimmedQuery)”.") { query = "" }
         } else {
-            CalmList {
-                ForEach(snippets) { snippet in
-                    CalmSnippetRow(snippet: snippet) { editor = .edit(snippet) }
-                }
+            CalmPagedList(snippets, resetKey: trimmedQuery) { snippet in
+                CalmSnippetRow(snippet: snippet) { editor = .edit(snippet) }
             }
         }
     }

@@ -580,6 +580,15 @@ enum CalmCommandModeChoice: String, Hashable, Sendable {
 // MARK: - AppState
 
 extension AppState {
+    /// The speech models' disk use (“3.2 GB”), measured off the main
+    /// thread: the first measurement walks every file of every model.
+    func calmModelsDiskUsage() async -> String {
+        let manager = modelManager
+        return await Task.detached(priority: .utility) { manager.diskUsageDescription() }.value
+    }
+}
+
+extension AppState {
     /// This Mac's installed memory, as the recommendations read it.
     var calmMemoryGB: Int {
         systemCapabilities?.physicalMemoryGB ?? SystemInfo.physicalMemoryGB

@@ -490,7 +490,6 @@ struct CalmToggleRow: View {
     @Binding var isOn: Bool
 
     @Environment(\.isEnabled) private var isEnabled
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(_ title: String, description: String? = nil, isOn: Binding<Bool>) {
         self.title = title
@@ -506,7 +505,8 @@ struct CalmToggleRow: View {
         .contentShape(Rectangle())
         .onTapGesture {
             guard isEnabled else { return }
-            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.15)) { isOn.toggle() }
+            // The switch animates its own track.
+            isOn.toggle()
         }
     }
 }
@@ -622,6 +622,126 @@ struct CalmList<Content: View>: View {
         .background(shape.fill(CalmColor.content))
         .clipShape(shape)
         .overlay(shape.strokeBorder(CalmColor.line2, lineWidth: 1))
+    }
+}
+
+/// A `CalmList` for lists that can grow long (the Home feed, dictionary
+/// words, snippets): rows are made only as they scroll into view, with a
+/// divider above every row but the first.
+///
+/// ```swift
+/// CalmLazyList(day.entries) { entry in CalmFeedRow(entry: entry) }
+/// ```
+struct CalmLazyList<Data: RandomAccessCollection, Row: View>: View where Data.Element: Identifiable {
+    let data: Data
+    let row: (Data.Element) -> Row
+    /// Views after the last row, inside the list (a load-more trigger).
+    var footer: AnyView?
+
+    init(_ data: Data, footer: AnyView? = nil, @ViewBuilder row: @escaping (Data.Element) -> Row) {
+        self.data = data
+        self.footer = footer
+        self.row = row
+    }
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: CalmMetrics.Radius.list, style: .continuous)
+        let firstID = data.first?.id
+        LazyVStack(alignment: .leading, spacing: 0) {
+            ForEach(data) { item in
+                if item.id != firstID {
+                    Rectangle().fill(CalmColor.line).frame(height: 1)
+                }
+                row(item)
+            }
+            footer
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(shape.fill(CalmColor.content))
+        .clipShape(shape)
+        .overlay(shape.strokeBorder(CalmColor.line2, lineWidth: 1))
+    }
+}
+
+/// A vertical scroll view as tall as its content but never taller than it
+/// is offered: short content sits still, long content scrolls. It lays the
+/// content out once, where a `ViewThatFits` between the content and a
+/// scrolling copy of it built and measured everything twice.
+struct CalmFittingScrollView<Content: View>: View {
+    let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    var body: some View {
+        CalmFittingHeightLayout {
+            ScrollView(.vertical) { content }
+                .scrollBounceBehavior(.basedOnSize)
+        }
+    }
+}
+
+/// Sizes its one child to the child's own height, capped at the height
+/// offered.
+private struct CalmFittingHeightLayout: Layout {
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard let child = subviews.first else { return .zero }
+        let natural = child.sizeThatFits(ProposedViewSize(width: proposal.width, height: nil))
+        let height = proposal.height.map { min(natural.height, $0) } ?? natural.height
+        return CGSize(width: proposal.width ?? natural.width, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(at: bounds.origin, proposal: ProposedViewSize(bounds.size))
+    }
+}
+
+/// How many rows a growing list shows at first, and adds each time the
+/// user scrolls near its end.
+enum CalmPaging {
+    static let pageSize = 50
+}
+
+/// A `CalmLazyList` that also builds its rows a page at a time: the first
+/// `CalmPaging.pageSize`, then the next page whenever the last one shown
+/// nears the screen. Changing `resetKey` (a new search or tab) starts
+/// again from the first page.
+struct CalmPagedList<Data: RandomAccessCollection, Row: View>: View where Data.Element: Identifiable {
+    let data: Data
+    let resetKey: AnyHashable
+    let row: (Data.Element) -> Row
+
+    @State private var limit = CalmPaging.pageSize
+
+    init(_ data: Data, resetKey: AnyHashable = 0, @ViewBuilder row: @escaping (Data.Element) -> Row) {
+        self.data = data
+        self.resetKey = resetKey
+        self.row = row
+    }
+
+    var body: some View {
+        let hasMore = data.count > limit
+        CalmLazyList(data.prefix(limit), footer: hasMore ? AnyView(CalmLoadMoreTrigger(token: limit) { limit += CalmPaging.pageSize }) : nil) { item in
+            row(item)
+        }
+        .onChange(of: resetKey) { limit = CalmPaging.pageSize }
+    }
+}
+
+/// An invisible, zero-height view for the end of a lazy stack: it runs
+/// `load` when the stack makes it, which happens as it nears the screen.
+/// A new `token` (the count shown) makes a new trigger for the next page.
+struct CalmLoadMoreTrigger: View {
+    let token: Int
+    let load: () -> Void
+
+    var body: some View {
+        Color.clear
+            .frame(height: 0)
+            .id(token)
+            .onAppear(perform: load)
+            .accessibilityHidden(true)
     }
 }
 
@@ -793,10 +913,7 @@ struct CalmDaySection<Content: View>: View {
         if calendar.isDate(date, inSameDayAs: now) { return "Today" }
         if let yesterday = calendar.date(byAdding: .day, value: -1, to: now),
            calendar.isDate(date, inSameDayAs: yesterday) { return "Yesterday" }
-        let formatter = DateFormatter()
-        formatter.calendar = calendar
-        formatter.setLocalizedDateFormatFromTemplate("EEE d MMM")
-        return formatter.string(from: date)
+        return CalmDateFormatters.formatter(template: "EEE d MMM", calendar: calendar).string(from: date)
     }
 }
 

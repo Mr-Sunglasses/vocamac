@@ -400,12 +400,15 @@ struct CalmSwitch: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
+        // Only the track animates (`CalmSwitchTrack`). Toggling inside
+        // `withAnimation` animated everything the setting changed across
+        // the whole window, which made every switch feel slow.
         Button {
-            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.15)) { isOn.toggle() }
+            isOn.toggle()
         } label: {
             EmptyView()
         }
-        .buttonStyle(CalmSwitchTrackStyle(isOn: isOn))
+        .buttonStyle(CalmSwitchTrackStyle(isOn: isOn, animation: reduceMotion ? nil : .easeOut(duration: 0.15)))
         .focusEffectDisabled()
         .accessibilityRepresentation {
             Toggle("", isOn: $isOn)
@@ -415,15 +418,17 @@ struct CalmSwitch: View {
 
 private struct CalmSwitchTrackStyle: ButtonStyle {
     let isOn: Bool
+    let animation: Animation?
 
     func makeBody(configuration: Configuration) -> some View {
-        CalmSwitchTrack(isOn: isOn, isPressed: configuration.isPressed)
+        CalmSwitchTrack(isOn: isOn, isPressed: configuration.isPressed, animation: animation)
     }
 }
 
 private struct CalmSwitchTrack: View {
     let isOn: Bool
     let isPressed: Bool
+    let animation: Animation?
 
     @Environment(\.isEnabled) private var isEnabled
     @Environment(\.isFocused) private var focusedForReal
@@ -444,6 +449,7 @@ private struct CalmSwitchTrack: View {
                     .frame(width: CalmMetrics.switchKnob, height: CalmMetrics.switchKnob)
                     .padding(3)
             }
+            .animation(animation, value: isOn)
             .contentShape(Capsule())
             .calmPressed(isPressed, scheme: scheme)
             .calmFocusRing(isFocused && isEnabled, radius: size.height / 2)
