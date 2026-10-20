@@ -126,15 +126,31 @@ enum AppIdentityMatching {
         return result
     }
 
-    /// Open apps with a Dock icon, the ones a person thinks of as “open”.
-    /// Helpers and background agents (AutoFill, AUHostingService, …) run
-    /// too but aren't apps anyone picks from a list.
-    static func workspaceDockApps() -> [RunningAppSnapshot] {
+    /// Open apps a person would pick from a list: Dock apps and menu-bar
+    /// apps (accessory apps such as a password manager's menu). Helpers and
+    /// agents that live inside another app's bundle (“AutoFill (Brave
+    /// Browser)”, AUHostingService, …) run too but aren't apps anyone picks,
+    /// so they are left out.
+    static func workspacePickableApps() -> [RunningAppSnapshot] {
         var seen = Set<RunningAppSnapshot>()
         return NSWorkspace.shared.runningApplications
-            .filter { $0.activationPolicy == .regular }
+            .filter { isPickable(policy: $0.activationPolicy, bundlePath: $0.bundleURL?.path) }
             .compactMap { snapshot(for: $0) }
             .filter { seen.insert($0).inserted }
+    }
+
+    /// Whether a running app belongs in an app picker: any Dock app, and an
+    /// accessory (menu-bar) app unless its bundle sits inside another app's.
+    static func isPickable(policy: NSApplication.ActivationPolicy, bundlePath: String?) -> Bool {
+        switch policy {
+        case .regular:
+            return true
+        case .accessory:
+            guard let bundlePath, bundlePath.hasSuffix(".app") else { return false }
+            return !bundlePath.dropLast(4).contains(".app/")
+        default:
+            return false
+        }
     }
 
     /// Convert one `NSRunningApplication` into a snapshot, or `nil` when it is

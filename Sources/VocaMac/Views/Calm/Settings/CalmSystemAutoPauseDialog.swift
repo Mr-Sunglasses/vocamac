@@ -170,7 +170,7 @@ struct CalmAutoPauseDialog: View {
     }
 
     private func openAddStep() {
-        runningApps = AppIdentityMatching.workspaceDockApps()
+        runningApps = AppIdentityMatching.workspacePickableApps()
             .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
         search = ""
         picked = nil
