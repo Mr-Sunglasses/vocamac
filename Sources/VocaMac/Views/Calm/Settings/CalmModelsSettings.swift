@@ -99,6 +99,7 @@ struct CalmSpeechModelsTab: View {
         return CalmPickCard(
             kind: pick.slot.title,
             name: CalmModelText.name(size),
+            variant: CalmModelText.variant(size, isBundled: appState.modelManager.bundledModelFolder(for: size) != nil),
             logo: CalmLogoName(engine: size.engine),
             reason: CalmModelPicks.reason(for: pick, among: picks, languages: appState.spokenLanguages),
             footer: Self.footer(for: state, size: size),
@@ -258,6 +259,7 @@ struct CalmWritingModelsTab: View {
         return CalmPickCard(
             kind: pick.slot.title,
             name: CalmModelText.name(kind),
+            // No variant: the reason already starts “Cleanup only”.
             logo: kind == .ministral3_3b_q4_k_m ? .ministral : .qwen,
             reason: CalmModelPicks.reason(for: kind, languages: appState.spokenLanguages),
             footer: footer,
@@ -337,6 +339,7 @@ struct CalmWritingModelsTab: View {
                 if isMissing && !isDownloading {
                     Button("Download") { flow.pick(current, role: .commandMode, appState: appState) }
                         .calmButton(.secondary)
+                        .fixedSize()
                         .help("Download \(CalmModelText.name(current)) (\(CalmModelText.downloadSize(current))) for Command Mode")
                 }
                 CalmDropdown(
@@ -344,10 +347,9 @@ struct CalmWritingModelsTab: View {
                         get: { current },
                         set: { kind in flow.pick(kind, role: .commandMode, appState: appState) }
                     ),
-                    options: CleanupModelKind.commandModeChoices.map { kind in
-                        let downloaded = appState.transcriptCleanup.isDownloaded(kind)
-                        return CalmOption(kind, CalmModelText.name(kind) + (downloaded ? "" : " — download \(CalmModelText.downloadSize(kind))"))
-                    }
+                    // Names only: the note under the row gives a missing
+                    // model's size, and a long label squeezed Download away.
+                    options: CleanupModelKind.commandModeChoices.map { CalmOption($0, CalmModelText.name($0)) }
                 )
                 .disabled(isDownloading)
             }
@@ -480,11 +482,11 @@ struct CalmAllSpeechModels: View {
                 CalmSearchField(text: $search, prompt: "Search models")
                 if !spoken.isEmpty {
                     HStack(spacing: 10) {
-                        Text("Only for \(SpokenLanguages.list(spoken))")
+                        Text("Works with \(SpokenLanguages.list(spoken))")
                             .font(CalmFont.description)
                             .foregroundStyle(CalmColor.ink2)
                             .lineLimit(1)
-                        CalmSwitch(isOn: $onlyMine).accessibilityLabel("Only models for my languages")
+                        CalmSwitch(isOn: $onlyMine).accessibilityLabel("Only models that work with my languages")
                     }
                     .fixedSize()
                 }

@@ -66,6 +66,11 @@ struct CalmStylesPage: View {
             if target == "default-writing-style" { storedTab = CalmStyleGroup.everythingElse.rawValue }
         }
         .onChange(of: storedTab) { notice = nil }
+        // Try it starts on the style this tab uses, not a fixed Plain.
+        .onChange(of: appState.calmStyle(for: group), initial: true) { _, style in
+            appState.settingsPreviewBindingID = nil
+            appState.settingsPreviewStyle = style
+        }
         .onAppear { appState.calmPruneStyleGroups() }
         .calmDialog(item: $addingTo) { group in
             CalmStylesAddDialog(group: group) { message in notice = CalmStylesNotice(message, tone: .success) }
@@ -140,7 +145,7 @@ struct CalmStylesPage: View {
 
     private var optionsMenu: some View {
         Menu {
-            Button("Set Up My Apps") { Task { await addSuggestions() } }
+            Button("Set up my apps") { Task { await addSuggestions() } }
                 .disabled(isDiscoveringApps)
             Divider()
             Button("Export App List…") { exportRules() }
@@ -278,7 +283,7 @@ struct CalmStylesPage: View {
                         .buttonStyle(CalmStylesChipButtonStyle())
                         .focusEffectDisabled()
                     if appState.writingStyleBindings.isEmpty {
-                        Button("Set Up My Apps") { Task { await addSuggestions() } }
+                        Button("Set up my apps") { Task { await addSuggestions() } }
                             .buttonStyle(CalmStylesChipButtonStyle())
                             .focusEffectDisabled()
                             .disabled(isDiscoveringApps)
