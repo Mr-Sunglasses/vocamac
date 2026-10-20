@@ -391,12 +391,12 @@ enum CalmFeedItem: Identifiable {
     case caption(day: Date, isFirst: Bool)
     case entry(DictationHistoryEntry, isFirstInDay: Bool, isLastInDay: Bool)
 
-    enum ID: Hashable {
+    enum Identity: Hashable {
         case day(Date)
         case entry(UUID)
     }
 
-    var id: ID {
+    var id: Identity {
         switch self {
         case .caption(let day, _): return .day(day)
         case .entry(let entry, _, _): return .entry(entry.id)

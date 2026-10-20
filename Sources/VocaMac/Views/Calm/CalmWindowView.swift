@@ -706,12 +706,13 @@ struct CalmSettingsMenu: View {
             // editor keeps Esc, so the sheet's own Esc never sees it.
             CalmSearchField(
                 text: $navigator.settingsSearchText, prompt: "Search settings", focus: isSearchFocused,
-                onEscapeWhenEmpty: { navigator.closeSettings() }
-            ) {
-                if let first = CalmNavigation.searchGroups(for: navigator.settingsSearchText).first?.entries.first {
-                    navigator.open(first)
+                onEscapeWhenEmpty: { navigator.closeSettings() },
+                onSubmit: {
+                    if let first = CalmNavigation.searchGroups(for: navigator.settingsSearchText).first?.entries.first {
+                        navigator.open(first)
+                    }
                 }
-            }
+            )
             .padding(.bottom, 18)
 
             ForEach(CalmSettingsMenuGroup.allCases) { group in
