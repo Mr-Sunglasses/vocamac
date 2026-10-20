@@ -122,6 +122,11 @@ enum DictionaryEditing {
     ) -> DictionaryEntryCheck {
         let candidate = WordReplacement(heard: heard, replacement: replacement)
         guard candidate.isValid else { return .incomplete }
+        // “zzq” → “zzq” would change nothing. A change of case still counts.
+        let typed = candidate.replacement.trimmingCharacters(in: .whitespacesAndNewlines)
+        if candidate.heardForms.allSatisfy({ $0 == typed }) {
+            return .problem("That already comes out as “\(typed)”.")
+        }
         let others = existing.filter { $0.id != editing }
         // A new spoken form for text that already has a replacement is fine:
         // adding merges it in. Only a form that is already taken clashes.

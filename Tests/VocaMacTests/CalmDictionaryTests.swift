@@ -109,6 +109,12 @@ final class CalmDictionaryTests: XCTestCase {
         XCTAssertEqual(DictionaryEditing.checkReplacement(heard: "", replacement: "x", existing: [btw]), .incomplete)
         XCTAssertEqual(DictionaryEditing.checkReplacement(heard: "lgtm", replacement: " ", existing: [btw]), .incomplete)
         XCTAssertEqual(DictionaryEditing.checkReplacement(heard: "lgtm", replacement: "looks good", existing: [btw]), .valid)
+        XCTAssertEqual(
+            DictionaryEditing.checkReplacement(heard: "zzq", replacement: " zzq ", existing: [btw]),
+            .problem("That already comes out as “zzq”."), "Text that becomes itself changes nothing"
+        )
+        XCTAssertEqual(DictionaryEditing.checkReplacement(heard: "github", replacement: "GitHub", existing: [btw]), .valid)
+        XCTAssertEqual(DictionaryEditing.checkReplacement(heard: "zzq, zq", replacement: "zzq", existing: [btw]), .valid)
         XCTAssertEqual(DictionaryEditing.checkReplacement(heard: "B T W", replacement: "bye", existing: [btw]),
                        .problem("“B T W” already becomes “by the way”."))
     }
