@@ -397,8 +397,10 @@ enum SettingsSearchIndex {
         SettingsSearchEntry(
             id: "history",
             page: .history,
-            title: "Keep a history of dictations",
-            subtitle: "Find, copy, replay, and retry past dictations",
+            // Lands on Home's feed; the on/off switch is under Privacy and
+            // History (“history-retention”).
+            title: "Dictation history",
+            subtitle: "Find, copy, replay, and retry past dictations on Home",
             keywords: ["history", "past", "previous", "transcripts", "retry", "search", "recordings", "audio", "undo", "dictation history"]
         ),
         SettingsSearchEntry(
@@ -406,7 +408,7 @@ enum SettingsSearchIndex {
             page: .history,
             title: "Delete dictations older than",
             subtitle: "Delete dictations after a day, a week, or a month",
-            keywords: ["retention", "delete", "privacy", "storage", "keep audio", "keep history for"]
+            keywords: ["retention", "delete", "privacy", "storage", "keep audio", "keep history for", "keep a history", "save history", "turn off history"]
         ),
         SettingsSearchEntry(
             id: "history-excluded-apps",
@@ -486,7 +488,7 @@ enum SettingsSearchIndex {
             id: "idle-unload",
             page: .performance,
             title: "Unload models when idle",
-            subtitle: "Keep-alive timeout",
+            subtitle: "Frees memory after a while without dictating",
             keywords: ["idle", "keepalive", "keep-alive", "battery", "ram", "unload", "unload model when idle"]
         ),
         SettingsSearchEntry(
