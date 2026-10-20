@@ -271,6 +271,12 @@ final class AppState: ObservableObject {
         isCapturingAudio && !recordingInjectsResult && activeCommandTarget == nil
     }
 
+    /// Whether the practice recording is Settings › General's Test
+    /// dictation (not the Scratchpad's).
+    var isSettingsTestRecording: Bool {
+        isPracticeRecording && nonInjectedOutputDestination == .settingsTest
+    }
+
     private var recordingTranscription: RecordingTranscription?
     private var finishingTranscription: RecordingTranscription?
     /// Cleanups of finished pieces, run while recording ("Process while
@@ -339,7 +345,11 @@ final class AppState: ObservableObject {
     @Published var onboardingVerification = OnboardingVerification()
     /// Last Settings → Test Dictation result (shown in the sidebar footer; not injected).
     @Published var settingsTestResultText: String?
-    @AppStorage("vocamac.scratchpad.text") var scratchpadText: String = ""
+    /// A Settings test dictation is still starting: its microphone may be
+    /// open while the speech model loads, before `isSettingsTestRecording`
+    /// turns true. Leaving the page then must still close it.
+    var isStartingSettingsTest = false
+    @UserDefault("vocamac.scratchpad.text") var scratchpadText: String = ""
 
     /// Error message to display, if any
     @Published var errorMessage: String?
@@ -393,7 +403,7 @@ final class AppState: ObservableObject {
     @Published var systemCapabilities: SystemCapabilities?
 
     /// Persisted priority shared by onboarding and the model catalog.
-    @AppStorage(PreferenceKey.modelRecommendationPriority) var modelRecommendationPriorityStorage = SpeechModelPriority.balanced.rawValue
+    @UserDefault(PreferenceKey.modelRecommendationPriority) var modelRecommendationPriorityStorage = SpeechModelPriority.balanced.rawValue
     /// WhisperKit's recommended model for this device.
     @Published var deviceRecommendedModel: String?
 
@@ -402,110 +412,110 @@ final class AppState: ObservableObject {
 
     // MARK: - User Settings (persisted via UserDefaults)
 
-    @AppStorage(PreferenceKey.onboardingCompleted) var hasCompletedOnboarding: Bool = false
-    @AppStorage("vocamac.activationMode") var activationMode: ActivationMode = .pushToTalk
-    @AppStorage("vocamac.hotKeyCode") var hotKeyCode: Int = 61  // Right Option
-    @AppStorage("vocamac.hotKeyModifiers") var hotKeyModifiers: HotKeyModifiers = []
+    @UserDefault(PreferenceKey.onboardingCompleted) var hasCompletedOnboarding: Bool = false
+    @UserDefault("vocamac.activationMode") var activationMode: ActivationMode = .pushToTalk
+    @UserDefault("vocamac.hotKeyCode") var hotKeyCode: Int = 61  // Right Option
+    @UserDefault("vocamac.hotKeyModifiers") var hotKeyModifiers: HotKeyModifiers = []
 
     /// Whether the hotkey is a regular key (⌥Space) rather than a lone
     /// modifier (Right Option). Only keyed hotkeys are hidden by Secure
     /// Event Input.
     var hotKeyIsKeyed: Bool { !KeyCodeReference.isModifierKeyCode(hotKeyCode) }
-    @AppStorage("vocamac.doubleTapThreshold") var doubleTapThreshold: Double = 0.4
-    @AppStorage("vocamac.silenceThreshold") var silenceThreshold: Double = 0.01
-    @AppStorage("vocamac.silenceDuration") var silenceDuration: Double = SilenceDetectionSettings.defaultDuration
-    @AppStorage("vocamac.maxRecordingDuration") var maxRecordingDuration: Int = 60
-    @AppStorage("vocamac.selectedAudioDeviceID") var selectedAudioDeviceID: String = ""
-    @AppStorage("vocamac.selectedAudioDeviceName") var selectedAudioDeviceName: String = ""
-    @AppStorage("vocamac.selectedAudioChannel") var selectedAudioChannel: Int = 0
-    @AppStorage("vocamac.selectedAudioChannelDeviceID") var selectedAudioChannelDeviceID: String = ""
-    @AppStorage("vocamac.selectedAudioChannelCount") var selectedAudioChannelCount: Int = 0
-    @AppStorage(PreferenceKey.selectedModelSize) var selectedModelSize: String = ModelSize.tiny.rawValue
-    @AppStorage(PreferenceKey.selectedLanguage) var selectedLanguage: String = "auto"
+    @UserDefault("vocamac.doubleTapThreshold") var doubleTapThreshold: Double = 0.4
+    @UserDefault("vocamac.silenceThreshold") var silenceThreshold: Double = 0.01
+    @UserDefault("vocamac.silenceDuration") var silenceDuration: Double = SilenceDetectionSettings.defaultDuration
+    @UserDefault("vocamac.maxRecordingDuration") var maxRecordingDuration: Int = 60
+    @UserDefault("vocamac.selectedAudioDeviceID") var selectedAudioDeviceID: String = ""
+    @UserDefault("vocamac.selectedAudioDeviceName") var selectedAudioDeviceName: String = ""
+    @UserDefault("vocamac.selectedAudioChannel") var selectedAudioChannel: Int = 0
+    @UserDefault("vocamac.selectedAudioChannelDeviceID") var selectedAudioChannelDeviceID: String = ""
+    @UserDefault("vocamac.selectedAudioChannelCount") var selectedAudioChannelCount: Int = 0
+    @UserDefault(PreferenceKey.selectedModelSize) var selectedModelSize: String = ModelSize.tiny.rawValue
+    @UserDefault(PreferenceKey.selectedLanguage) var selectedLanguage: String = "auto"
     /// Languages the user dictates in, which steer the model picker. Nil
     /// until they choose, so the picker can start from a guess.
-    @AppStorage(PreferenceKey.spokenLanguages) var spokenLanguagesStorage: String?
-    @AppStorage("vocamac.launchAtLogin") var launchAtLogin: Bool = false
-    @AppStorage("vocamac.preserveClipboard") var preserveClipboard: Bool = true
-    @AppStorage("vocamac.soundEffectsEnabled") var soundEffectsEnabled: Bool = true
-    @AppStorage(PreferenceKey.dictationTone) var dictationTone: DictationTone = .voca
-    @AppStorage(PreferenceKey.duckOtherAudioEnabled) var duckOtherAudioEnabled: Bool = false
-    @AppStorage(PreferenceKey.pauseSpotifyEnabled) var pauseSpotifyEnabled: Bool = false
-    @AppStorage("vocamac.overlayStyle") var overlayStyle: OverlayStyle = .minimal
-    @AppStorage("vocamac.overlayPosition") var overlayPosition: OverlayPosition = .bottom
+    @UserDefault(PreferenceKey.spokenLanguages) var spokenLanguagesStorage: String?
+    @UserDefault("vocamac.launchAtLogin") var launchAtLogin: Bool = false
+    @UserDefault("vocamac.preserveClipboard") var preserveClipboard: Bool = true
+    @UserDefault("vocamac.soundEffectsEnabled") var soundEffectsEnabled: Bool = true
+    @UserDefault(PreferenceKey.dictationTone) var dictationTone: DictationTone = .voca
+    @UserDefault(PreferenceKey.duckOtherAudioEnabled) var duckOtherAudioEnabled: Bool = false
+    @UserDefault(PreferenceKey.pauseSpotifyEnabled) var pauseSpotifyEnabled: Bool = false
+    @UserDefault("vocamac.overlayStyle") var overlayStyle: OverlayStyle = .minimal
+    @UserDefault("vocamac.overlayPosition") var overlayPosition: OverlayPosition = .bottom
     /// Legacy preference retained so existing installs that disabled the old
     /// cursor indicator continue to keep the overlay hidden after upgrading.
-    @AppStorage("vocamac.showCursorIndicator") var showCursorIndicator: Bool = true
-    @AppStorage("vocamac.translationEnabled") var translationEnabled: Bool = false
-    @AppStorage("vocamac.customVocabulary") var customVocabulary: String = ""
-    @AppStorage("vocamac.logLevel") var logLevel: String = "info"
-    @AppStorage(PreferenceKey.appendTrailingSpace) var appendTrailingSpace: Bool = true
-    @AppStorage(PreferenceKey.autoCapitalize) var autoCapitalize: Bool = true
+    @UserDefault("vocamac.showCursorIndicator") var showCursorIndicator: Bool = true
+    @UserDefault("vocamac.translationEnabled") var translationEnabled: Bool = false
+    @UserDefault("vocamac.customVocabulary") var customVocabulary: String = ""
+    @UserDefault("vocamac.logLevel") var logLevel: String = "info"
+    @UserDefault(PreferenceKey.appendTrailingSpace) var appendTrailingSpace: Bool = true
+    @UserDefault(PreferenceKey.autoCapitalize) var autoCapitalize: Bool = true
     /// "twenty three" → "23". Off by default: talking about numbers in prose
     /// often wants the words.
-    @AppStorage(PreferenceKey.numbersAsDigits) var numbersAsDigits: Bool = false
+    @UserDefault(PreferenceKey.numbersAsDigits) var numbersAsDigits: Bool = false
     /// "fifty percent" → "50%", "June twenty second" → "June 22". Only applies
     /// with `numbersAsDigits`; off by default, because "$5" and "21st" are a
     /// house style, not a transcription.
-    @AppStorage(PreferenceKey.numberSymbols) var numberSymbols: Bool = false
+    @UserDefault(PreferenceKey.numberSymbols) var numberSymbols: Bool = false
     /// "crying emoji" → 😭. Off by default, so talking *about* an emoji never
     /// rewrites the sentence until the user opts in.
-    @AppStorage(PreferenceKey.spokenEmoji) var spokenEmoji: Bool = false
+    @UserDefault(PreferenceKey.spokenEmoji) var spokenEmoji: Bool = false
     /// Start a new paragraph where a long dictation paused between two
     /// sentences, and give an email's greeting a line of its own. Only in
     /// styles that allow paragraphs (`WritingStyle.allowsParagraphs`).
-    @AppStorage(PreferenceKey.pauseParagraphs) var pauseParagraphs: Bool = true
-    @AppStorage(PreferenceKey.autoPauseEnabled) var autoPauseEnabled: Bool = false
-    @AppStorage(PreferenceKey.autoPausePollInterval) var autoPausePollIntervalSeconds: Double = 5
-    @AppStorage(PreferenceKey.modelKeepAliveEnabled) var modelKeepAliveEnabled: Bool = false
-    @AppStorage(PreferenceKey.modelKeepAliveIdleTimeout) var modelKeepAliveIdleTimeoutSeconds: Double = 300
-    @AppStorage(PreferenceKey.writingStyleEnabled) var writingStyleEnabled: Bool = true
-    @AppStorage(PreferenceKey.writingStyleDefault) var writingStyleDefault: WritingStyle = .plain
-    @AppStorage(PreferenceKey.writingIntent) var writingIntent: WritingIntent = .preserve
-    @AppStorage(PreferenceKey.writingRewriteEnabled) var writingRewriteEnabled: Bool = false
-    @AppStorage(PreferenceKey.transcriptCleanupEnabled) var transcriptCleanupEnabled: Bool = false
-    @AppStorage(PreferenceKey.transcriptCleanupModel) var transcriptCleanupModel: String = CleanupModelKind.defaultKind.rawValue
-    @AppStorage(PreferenceKey.transcriptCleanupPrompt) var transcriptCleanupPrompt: String = ""
-    @AppStorage(PreferenceKey.transcriptCleanupLevel) var transcriptCleanupLevel: CleanupLevel = .medium
+    @UserDefault(PreferenceKey.pauseParagraphs) var pauseParagraphs: Bool = true
+    @UserDefault(PreferenceKey.autoPauseEnabled) var autoPauseEnabled: Bool = false
+    @UserDefault(PreferenceKey.autoPausePollInterval) var autoPausePollIntervalSeconds: Double = 5
+    @UserDefault(PreferenceKey.modelKeepAliveEnabled) var modelKeepAliveEnabled: Bool = false
+    @UserDefault(PreferenceKey.modelKeepAliveIdleTimeout) var modelKeepAliveIdleTimeoutSeconds: Double = 300
+    @UserDefault(PreferenceKey.writingStyleEnabled) var writingStyleEnabled: Bool = true
+    @UserDefault(PreferenceKey.writingStyleDefault) var writingStyleDefault: WritingStyle = .plain
+    @UserDefault(PreferenceKey.writingIntent) var writingIntent: WritingIntent = .preserve
+    @UserDefault(PreferenceKey.writingRewriteEnabled) var writingRewriteEnabled: Bool = false
+    @UserDefault(PreferenceKey.transcriptCleanupEnabled) var transcriptCleanupEnabled: Bool = false
+    @UserDefault(PreferenceKey.transcriptCleanupModel) var transcriptCleanupModel: String = CleanupModelKind.defaultKind.rawValue
+    @UserDefault(PreferenceKey.transcriptCleanupPrompt) var transcriptCleanupPrompt: String = ""
+    @UserDefault(PreferenceKey.transcriptCleanupLevel) var transcriptCleanupLevel: CleanupLevel = .medium
     /// Decode (and clean up) each finished sentence while recording, so long
     /// dictations paste sooner. Off by default until measured on more Macs.
-    @AppStorage(PreferenceKey.processWhileSpeaking) var processWhileSpeaking: Bool = false
-    @AppStorage(PreferenceKey.cleanupEndpoint) var cleanupEndpointJSON: String = ""
-    @AppStorage(PreferenceKey.speechEndpoint) var speechEndpointJSON: String = ""
-    @AppStorage(PreferenceKey.historyEnabled) var historyEnabled: Bool = true
-    @AppStorage(PreferenceKey.historyKeepsAudio) var historyKeepsAudio: Bool = false
-    @AppStorage(PreferenceKey.historyRetention) var historyRetention: HistoryRetention = .defaultRetention
-    @AppStorage(PreferenceKey.escapeCancelsDictation) var escapeCancelsDictation: Bool = true
+    @UserDefault(PreferenceKey.processWhileSpeaking) var processWhileSpeaking: Bool = false
+    @UserDefault(PreferenceKey.cleanupEndpoint) var cleanupEndpointJSON: String = ""
+    @UserDefault(PreferenceKey.speechEndpoint) var speechEndpointJSON: String = ""
+    @UserDefault(PreferenceKey.historyEnabled) var historyEnabled: Bool = true
+    @UserDefault(PreferenceKey.historyKeepsAudio) var historyKeepsAudio: Bool = false
+    @UserDefault(PreferenceKey.historyRetention) var historyRetention: HistoryRetention = .defaultRetention
+    @UserDefault(PreferenceKey.escapeCancelsDictation) var escapeCancelsDictation: Bool = true
     /// `HotKeyCombo.storageString`, or empty for no shortcut.
-    @AppStorage(PreferenceKey.pasteLastShortcut) var pasteLastShortcut: String = HotKeyCombo.defaultPasteLast.storageString
+    @UserDefault(PreferenceKey.pasteLastShortcut) var pasteLastShortcut: String = HotKeyCombo.defaultPasteLast.storageString
     /// `HotKeyCombo.storageString`, or empty for no shortcut.
-    @AppStorage(PreferenceKey.handsFreeShortcut) var handsFreeShortcut: String = ""
-    @AppStorage(PreferenceKey.commandModeShortcut) var commandModeShortcut: String = ""
+    @UserDefault(PreferenceKey.handsFreeShortcut) var handsFreeShortcut: String = ""
+    @UserDefault(PreferenceKey.commandModeShortcut) var commandModeShortcut: String = ""
     /// `CommandModeEngine.storageValue`, or empty to pick automatically.
-    @AppStorage(PreferenceKey.commandModeEngine) var commandModeEngineStorage: String = ""
+    @UserDefault(PreferenceKey.commandModeEngine) var commandModeEngineStorage: String = ""
     /// Set when the user chose separate models for Smart Cleanup and Command
     /// Mode even though one model could serve both.
-    @AppStorage(PreferenceKey.aiModelsKeptSeparate) var aiModelsKeptSeparate: Bool = false
+    @UserDefault(PreferenceKey.aiModelsKeptSeparate) var aiModelsKeptSeparate: Bool = false
     /// Opt-in: let Command Mode copy a selection an app won't share through
     /// Accessibility. Off by default; see `AccessibilitySelectedTextService`.
-    @AppStorage(PreferenceKey.commandModeClipboardFallback) var commandModeClipboardFallback: Bool = false
+    @UserDefault(PreferenceKey.commandModeClipboardFallback) var commandModeClipboardFallback: Bool = false
     /// Paste a dictation without the cleanup model when the rules already
     /// left it nothing to do (see `CleanupNeed`).
-    @AppStorage(PreferenceKey.cleanupSkipsCleanText) var skipCleanDictations: Bool = true
-    @AppStorage(PreferenceKey.commandModeReview) var commandModeReview: CommandReviewMode = .never
+    @UserDefault(PreferenceKey.cleanupSkipsCleanText) var skipCleanDictations: Bool = true
+    @UserDefault(PreferenceKey.commandModeReview) var commandModeReview: CommandReviewMode = .never
     /// JSON `[SavedCommand]`; read and written through `savedCommands`.
-    @AppStorage(PreferenceKey.savedCommands) var savedCommandsJSON: String = ""
+    @UserDefault(PreferenceKey.savedCommands) var savedCommandsJSON: String = ""
     /// Opt-in: let a spoken instruction open apps and pages, search the web,
     /// run allow-listed Shortcuts, and add reminders.
-    @AppStorage(PreferenceKey.voiceActionsEnabled) var voiceActionsEnabled: Bool = false
+    @UserDefault(PreferenceKey.voiceActionsEnabled) var voiceActionsEnabled: Bool = false
     /// Names of the Shortcuts a spoken instruction may run, one per line.
-    @AppStorage(PreferenceKey.voiceActionShortcuts) var voiceActionShortcuts: String = ""
-    @AppStorage(PreferenceKey.mouseTriggerButton) var mouseTriggerButton: Int = MouseTriggerButton.off.rawValue
-    @AppStorage(PreferenceKey.learnCorrectionsMode) var learnCorrectionsMode: LearnCorrectionsMode = .defaultMode
-    @AppStorage(PreferenceKey.useScreenContext) var useScreenContext: Bool = true
-    @AppStorage(PreferenceKey.externalMicWhenLidClosed) var externalMicWhenLidClosed: Bool = false
+    @UserDefault(PreferenceKey.voiceActionShortcuts) var voiceActionShortcuts: String = ""
+    @UserDefault(PreferenceKey.mouseTriggerButton) var mouseTriggerButton: Int = MouseTriggerButton.off.rawValue
+    @UserDefault(PreferenceKey.learnCorrectionsMode) var learnCorrectionsMode: LearnCorrectionsMode = .defaultMode
+    @UserDefault(PreferenceKey.useScreenContext) var useScreenContext: Bool = true
+    @UserDefault(PreferenceKey.externalMicWhenLidClosed) var externalMicWhenLidClosed: Bool = false
     /// Trim silence with voice activity detection before batch decodes.
-    @AppStorage(PreferenceKey.skipSilence) var skipSilence: Bool = true
+    @UserDefault(PreferenceKey.skipSilence) var skipSilence: Bool = true
 
     var cleanupEndpoint: CleanupEndpointConfiguration {
         get { CleanupEndpointConfiguration.decode(cleanupEndpointJSON) }
@@ -518,7 +528,14 @@ final class AppState: ObservableObject {
     }
 
     var websiteStyleBindings: [WebsiteStyleBinding] {
-        get { WebsiteStyleBindingStore.decode(UserDefaults.standard.string(forKey: PreferenceKey.websiteStyleBindings)) }
+        get {
+            // Decoded once per stored value: the Styles page reads this per row.
+            let json = UserDefaults.standard.string(forKey: PreferenceKey.websiteStyleBindings)
+            if let cached = calmDerived.websites, cached.json == json { return cached.bindings }
+            let bindings = WebsiteStyleBindingStore.decode(json)
+            calmDerived.websites = (json, bindings)
+            return bindings
+        }
         set {
             UserDefaults.standard.set(WebsiteStyleBindingStore.encode(newValue), forKey: PreferenceKey.websiteStyleBindings)
             objectWillChange.send()
@@ -653,6 +670,7 @@ final class AppState: ObservableObject {
         let outputDestination: ScratchpadOutputDestination
         let isHandsFree: Bool
         let verifiesShortcut: Bool
+        let trigger: DictationTrigger
     }
     private var queuedRecordingStart: QueuedRecordingStart?
 
@@ -890,7 +908,7 @@ final class AppState: ObservableObject {
 
     /// Whether the current recording was started with the hands-free
     /// shortcut, so silence ends it the way it ends a double-tap recording.
-    private var isHandsFreeSession = false
+    private(set) var isHandsFreeSession = false
 
     /// True from the end of a recording until its text is delivered. Escape
     /// cancels during this window as well as while recording.
@@ -921,6 +939,15 @@ final class AppState: ObservableObject {
     /// The edit a review panel is holding until it is approved.
     private var pendingReviewEdit: PendingCommandEdit?
     private var commandModePressStartedAt: Date?
+
+    /// Whether the Command Mode shortcut is still held from the press that
+    /// started the session (false after a quick press, which needs a second).
+    var isCommandModeKeyHeld: Bool { commandModePressStartedAt != nil }
+
+    /// What started the dictation being set up, for the overlay's finish
+    /// hint: set around a start by the dictation key or mouse button (and a
+    /// queued one), `.other` otherwise.
+    var dictationTrigger: DictationTrigger = .other
     /// Engine chosen when the current Command Mode session began.
     private var activeCommandEngine: CommandModeEngine?
     /// App whose selection is being edited, for the history entry.
@@ -965,6 +992,8 @@ final class AppState: ObservableObject {
     /// look like the microphone is already listening.
     /// The one pending "Undo" offered after a Settings list removal.
     let undoCenter = UndoCenter()
+    /// Stats and history summaries the v3 window shows, kept across page switches.
+    let calmDerived = CalmDerivedCache()
 
     private(set) lazy var overlayPreview = OverlayPreviewController(
         overlay: cursorOverlay,
@@ -2036,6 +2065,10 @@ final class AppState: ObservableObject {
             return 0
         }
         writingStyleBindings = merged
+        // A re-added app goes to the tab its catalog entry picks, not one it
+        // was pinned to before it was removed.
+        let existingIDs = Set(existing.map(\.id))
+        calmResetStyleGroups(forApps: merged.map(\.id).filter { !existingIDs.contains($0) })
         let added = merged.count - existing.count
         VocaLogger.info(.appState, "Added \(added) suggested writing style rule(s)")
         return added
@@ -2216,7 +2249,8 @@ final class AppState: ObservableObject {
                     injectResult: injectResult,
                     outputDestination: outputDestination,
                     isHandsFree: isHandsFreeSession,
-                    verifiesShortcut: verifiesShortcut
+                    verifiesShortcut: verifiesShortcut,
+                    trigger: dictationTrigger
                 )
                 VocaLogger.info(.appState, "Dictation requested while the previous one is still finishing — starting when it's delivered")
                 // Push to talk speaks while the key is down; toggle-style
@@ -2288,6 +2322,7 @@ final class AppState: ObservableObject {
                 if showCursorIndicator && overlayStyle != .off {
                     cursorOverlay.recordingLimit = maxRecordingDuration > 0 ? TimeInterval(maxRecordingDuration) : nil
                     cursorOverlay.show(style: overlayStyle, position: overlayPosition)
+                    cursorOverlay.setStopHint(overlayStopHint)
                     cursorOverlay.setLoadingSpeechModel(true)
                 }
             }
@@ -2365,6 +2400,7 @@ final class AppState: ObservableObject {
         if showCursorIndicator && overlayStyle != .off {
             cursorOverlay.recordingLimit = maxRecordingDuration > 0 ? TimeInterval(maxRecordingDuration) : nil
             cursorOverlay.show(style: overlayStyle, position: overlayPosition)
+            cursorOverlay.setStopHint(overlayStopHint)
             cursorOverlay.setCommandSession(commandModeSession)
         }
 
@@ -3802,6 +3838,8 @@ final class AppState: ObservableObject {
         let releasedAt = earlyCapture?.releasedAtSampleCount
         VocaLogger.info(.appState, "Previous dictation delivered — starting the queued one")
         if queued.isHandsFree { isHandsFreeSession = true }
+        dictationTrigger = queued.trigger
+        defer { dictationTrigger = .other }
         await startRecording(
             injectResult: queued.injectResult, outputDestination: queued.outputDestination,
             verifiesShortcut: queued.verifiesShortcut
@@ -4572,7 +4610,7 @@ final class AppState: ObservableObject {
             translate: translatesSpeech,
             vocabulary: recognitionHintVocabulary
         )
-        statsManager.recordTranscription(result)
+        statsManager.recordTranscription(result, isDictation: false)
         lastTranscription = result
         return result
     }
@@ -4608,7 +4646,7 @@ final class AppState: ObservableObject {
             vocabulary: recognitionHintVocabulary
         )
         try Task.checkCancellation()
-        statsManager.recordTranscription(result)
+        statsManager.recordTranscription(result, isDictation: false)
         lastTranscription = result
         return result
     }
@@ -4856,10 +4894,10 @@ extension AppState {
     /// report an identifier ("openai_whisper-tiny"), which is for logs, not
     /// for people.
     var loadedModelDisplayName: String? {
-        if let model = currentModel { return model.size.displayName }
+        if let model = currentModel { return CalmModelText.name(model.size) }
         guard let name = whisperService.loadedModelName else { return nil }
         let size = ModelSize(rawValue: name) ?? modelManager.modelSize(from: name)
-        return size?.displayName ?? name
+        return size.map(CalmModelText.name) ?? name
     }
 
     /// Open Speech Model showing only models that translate.
@@ -4885,10 +4923,13 @@ extension AppState {
         if let combo = HotKeyCombo(storageString: handsFreeShortcut) {
             shortcuts[.handsFreeToggle] = combo
         }
-        if let combo = HotKeyCombo(storageString: commandModeShortcut) {
-            shortcuts[.commandMode] = combo
+        let commandMode = HotKeyCombo(storageString: commandModeShortcut)
+        if let commandMode {
+            shortcuts[.commandMode] = commandMode
         }
-        for command in savedCommands where command.isUsable {
+        // Saved commands are part of Command Mode: while it is off (no
+        // shortcut), their shortcuts are off too. Turning it on restores them.
+        for command in savedCommands where command.isUsable && commandMode != nil {
             if let combo = HotKeyCombo(storageString: command.shortcut) {
                 shortcuts[.savedCommand(command.id)] = combo
             }
@@ -4979,6 +5020,8 @@ extension AppState {
         // and ended the command before any audio could exist.
         guard Date().timeIntervalSince(startedAt) >= commandModeHoldThreshold else {
             VocaLogger.debug(.appState, "Command Mode quick press — waiting for a second press")
+            // The overlay said “Let go to apply”; now it takes a second press.
+            cursorOverlay.setStopHint(overlayStopHint)
             return
         }
 
@@ -5691,7 +5734,8 @@ extension AppState {
 
     /// Run a saved command on the current selection.
     func runSavedCommand(_ id: UUID) async {
-        guard let command = savedCommands.first(where: { $0.id == id }), command.isUsable else { return }
+        guard isCommandModeOn,
+              let command = savedCommands.first(where: { $0.id == id }), command.isUsable else { return }
         await runCommand(instruction: command.instruction)
     }
 
@@ -5901,7 +5945,10 @@ extension AppState {
 
     func setVocabularyTerms(_ terms: [String]) {
         var seen = Set<String>()
+        // A comma or new line inside a term would read back as two terms
+        // (and could duplicate one already listed), so split them here.
         let cleaned = terms
+            .flatMap { RecognitionHints.vocabularyTerms(from: $0) }
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty && seen.insert($0.lowercased()).inserted }
         customVocabulary = cleaned.joined(separator: "\n")

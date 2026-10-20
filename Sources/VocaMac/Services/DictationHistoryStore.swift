@@ -19,7 +19,13 @@ final class DictationHistoryStore: ObservableObject {
     static let maximumAudioBytes: Int64 = 1 << 30
 
     /// Newest first.
-    @Published private(set) var entries: [DictationHistoryEntry] = []
+    @Published private(set) var entries: [DictationHistoryEntry] = [] {
+        didSet { revision &+= 1 }
+    }
+
+    /// Changes whenever `entries` does, so views can cache what they derive
+    /// from history without comparing every entry.
+    private(set) var revision = 0
 
     /// True when a change is in memory but the disk refused both the journal
     /// and the index. Every later save rewrites the whole index until one
@@ -135,6 +141,13 @@ final class DictationHistoryStore: ObservableObject {
 
     /// Entries whose text or app name contains every word of `query`.
     func search(_ query: String) -> [DictationHistoryEntry] {
+        Self.entries(entries, matching: query)
+    }
+
+    /// The entries in `entries` whose text or app name contains every word
+    /// of `query`, in order. Touches nothing else, so a long history can be
+    /// searched off the main thread.
+    nonisolated static func entries(_ entries: [DictationHistoryEntry], matching query: String) -> [DictationHistoryEntry] {
         let words = query.lowercased()
             .components(separatedBy: .whitespacesAndNewlines)
             .filter { !$0.isEmpty }
