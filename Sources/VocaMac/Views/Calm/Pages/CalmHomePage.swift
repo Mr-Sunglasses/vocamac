@@ -98,7 +98,7 @@ private struct CalmHomeFeed: View {
     @State private var results = CalmFeedSearchResults()
     /// The shown entries grouped by day, regrouped only when history, the
     /// results or the number shown change, not on every AppState change.
-    @State private var memo = CalmMemo<FeedKey, [CalmFeedDay]>()
+    @State private var memo = CalmMemo<FeedKey, [CalmFeedItem]>()
 
     private struct FeedKey: Equatable {
         let historyRevision: Int
@@ -130,8 +130,8 @@ private struct CalmHomeFeed: View {
         let store = appState.historyStore
         let source = source
         let shownCount = min(limit, source.entries.count)
-        let days = memo.value(for: FeedKey(historyRevision: store.revision, resultsToken: source.resultsToken, limit: limit)) {
-            CalmFeedDay.page(source.entries, limit: limit)
+        let items = memo.value(for: FeedKey(historyRevision: store.revision, resultsToken: source.resultsToken, limit: limit)) {
+            CalmFeedDay.items(CalmFeedDay.page(source.entries, limit: limit))
         }
         let retryingID = appState.retryingHistoryEntryID
         VStack(alignment: .leading, spacing: 22) {
@@ -155,22 +155,28 @@ private struct CalmHomeFeed: View {
                     }
                 }
             }
-            if days.isEmpty, query.isEmpty || isSearchCurrent {
+            if items.isEmpty, query.isEmpty || isSearchCurrent {
                 emptyState
             } else {
-                LazyVStack(alignment: .leading, spacing: 22) {
-                    ForEach(days) { day in
-                        CalmDaySection(CalmDaySection<EmptyView>.caption(for: day.day)) {
-                            CalmLazyList(day.entries) { entry in
-                                CalmFeedRow(
-                                    entry: entry,
-                                    audioURL: entry.hasAudio ? store.audioURL(for: entry) : nil,
-                                    playingURL: player.playingURL,
-                                    retryingID: retryingID,
-                                    appState: appState
-                                )
-                                .equatable()
-                            }
+                // One lazy stack for captions and rows alike (see `CalmFeedDay.items`).
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(items) { item in
+                        switch item {
+                        case .caption(let day, let isFirst):
+                            CalmCaption(CalmDaySection<EmptyView>.caption(for: day))
+                                .padding(.leading, 2)
+                                .padding(.top, isFirst ? 0 : 22)
+                                .padding(.bottom, 10)
+                        case .entry(let entry, let isFirst, let isLast):
+                            CalmFeedRow(
+                                entry: entry,
+                                audioURL: entry.hasAudio ? store.audioURL(for: entry) : nil,
+                                playingURL: player.playingURL,
+                                retryingID: retryingID,
+                                appState: appState
+                            )
+                            .equatable()
+                            .calmListSegment(isFirst: isFirst, isLast: isLast)
                         }
                     }
                     if shownCount < source.entries.count {

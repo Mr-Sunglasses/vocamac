@@ -367,6 +367,41 @@ struct CalmFeedDay: Identifiable {
         }
         return groups
     }
+
+    /// The days as one flat run of captions and dictations, for a single
+    /// lazy stack. Day lists nested in a lazy stack each guess their own
+    /// height, and those guesses made the feed's scroll height jump and
+    /// left it blank when the user dragged to the end.
+    static func items(_ days: [CalmFeedDay]) -> [CalmFeedItem] {
+        var items: [CalmFeedItem] = []
+        items.reserveCapacity(days.reduce(days.count) { $0 + $1.entries.count })
+        for (dayIndex, day) in days.enumerated() {
+            items.append(.caption(day: day.day, isFirst: dayIndex == 0))
+            for (index, entry) in day.entries.enumerated() {
+                items.append(.entry(entry, isFirstInDay: index == 0, isLastInDay: index == day.entries.count - 1))
+            }
+        }
+        return items
+    }
+}
+
+/// One item of the Home feed: a day's caption, or a dictation and where it
+/// sits in that day's list.
+enum CalmFeedItem: Identifiable {
+    case caption(day: Date, isFirst: Bool)
+    case entry(DictationHistoryEntry, isFirstInDay: Bool, isLastInDay: Bool)
+
+    enum ID: Hashable {
+        case day(Date)
+        case entry(UUID)
+    }
+
+    var id: ID {
+        switch self {
+        case .caption(let day, _): return .day(day)
+        case .entry(let entry, _, _): return .entry(entry.id)
+        }
+    }
 }
 
 // MARK: - Formatting

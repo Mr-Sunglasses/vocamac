@@ -50,4 +50,30 @@ final class CalmFeedPagingTests: XCTestCase {
         XCTAssertTrue(CalmFeedDay.page(history(10), limit: 0, calendar: calendar).isEmpty)
         XCTAssertTrue(CalmFeedDay.page([], limit: 50, calendar: calendar).isEmpty)
     }
+
+    func testItemsFlattenDaysInOrderWithTheirListEnds() {
+        let days = CalmFeedDay.page(history(20), limit: 20, calendar: calendar)
+        let items = CalmFeedDay.items(days)
+        XCTAssertEqual(items.count, days.count + 20, "One caption per day plus every entry")
+        XCTAssertEqual(Set(items.map(\.id)).count, items.count, "IDs are unique")
+
+        var captions = 0
+        for (index, item) in items.enumerated() {
+            switch item {
+            case .caption(let day, let isFirst):
+                XCTAssertEqual(isFirst, captions == 0)
+                XCTAssertEqual(day, days[captions].day)
+                captions += 1
+            case .entry(let entry, let isFirstInDay, let isLastInDay):
+                let day = days[captions - 1]
+                XCTAssertEqual(isFirstInDay, entry.id == day.entries.first?.id)
+                XCTAssertEqual(isLastInDay, entry.id == day.entries.last?.id)
+                if isFirstInDay, case .caption = items[index - 1] {} else if isFirstInDay {
+                    XCTFail("A day's first entry follows its caption")
+                }
+            }
+        }
+        XCTAssertEqual(captions, days.count)
+        XCTAssertTrue(CalmFeedDay.items([]).isEmpty)
+    }
 }

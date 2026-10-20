@@ -663,6 +663,45 @@ struct CalmLazyList<Data: RandomAccessCollection, Row: View>: View where Data.El
     }
 }
 
+extension View {
+    /// Draws this row as one slice of a `CalmList` (content fill, 1 pt
+    /// line2 outline, radius 14, a 1 pt line above every row but the first),
+    /// so a list's rows can sit directly in a parent lazy stack instead of
+    /// a lazy stack of their own.
+    func calmListSegment(isFirst: Bool, isLast: Bool) -> some View {
+        modifier(CalmListSegment(isFirst: isFirst, isLast: isLast))
+    }
+}
+
+private struct CalmListSegment: ViewModifier {
+    let isFirst: Bool
+    let isLast: Bool
+
+    func body(content: Content) -> some View {
+        let radius = CalmMetrics.Radius.list
+        let corners = RectangleCornerRadii(
+            topLeading: isFirst ? radius : 0, bottomLeading: isLast ? radius : 0,
+            bottomTrailing: isLast ? radius : 0, topTrailing: isFirst ? radius : 0
+        )
+        // The whole list's outline, stretched past the ends this slice
+        // doesn't have and cut to the slice, so the sides line up.
+        let reach = radius * 2
+        let outline = RoundedRectangle(cornerRadius: radius, style: .continuous)
+            .strokeBorder(CalmColor.line2, lineWidth: 1)
+            .padding(.top, isFirst ? 0 : -reach)
+            .padding(.bottom, isLast ? 0 : -reach)
+        content
+            .overlay(alignment: .top) {
+                if !isFirst {
+                    Rectangle().fill(CalmColor.line).frame(height: 1)
+                }
+            }
+            .background(CalmColor.content)
+            .clipShape(UnevenRoundedRectangle(cornerRadii: corners, style: .continuous))
+            .overlay { Color.clear.overlay { outline }.clipped() }
+    }
+}
+
 /// A vertical scroll view as tall as its content but never taller than it
 /// is offered: short content sits still, long content scrolls. It lays the
 /// content out once, where a `ViewThatFits` between the content and a
