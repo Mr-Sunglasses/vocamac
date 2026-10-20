@@ -58,7 +58,7 @@ struct CalmStylesAddDialog: View {
         let selection = selected(in: rows)
         CalmDialog("Add app or website", description: "It will use this group’s style.", width: 480) {
             VStack(alignment: .leading, spacing: 12) {
-                CalmSearchField(text: $query, prompt: "Search apps", focus: $isSearchFocused) { addSelected() }
+                CalmSearchField(text: $query, prompt: "Search apps", focus: $isSearchFocused, onSubmit: addSelected)
                 list(rows, selected: selection)
                 Text("Or type a website, like github.com")
                     .calmType(.description)

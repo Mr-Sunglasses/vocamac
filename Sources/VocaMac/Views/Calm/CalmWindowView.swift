@@ -697,11 +697,11 @@ struct CalmSettingsMenu: View {
     var body: some View {
         @Bindable var navigator = navigator
         VStack(alignment: .leading, spacing: CalmMetrics.navItemSpacing) {
-            CalmSearchField(text: $navigator.settingsSearchText, prompt: "Search settings", focus: isSearchFocused) {
+            CalmSearchField(text: $navigator.settingsSearchText, prompt: "Search settings", focus: isSearchFocused, onSubmit: {
                 if let first = CalmNavigation.searchGroups(for: navigator.settingsSearchText).first?.entries.first {
                     navigator.open(first)
                 }
-            }
+            })
             .padding(.bottom, 18)
 
             ForEach(CalmSettingsMenuGroup.allCases) { group in

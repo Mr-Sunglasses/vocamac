@@ -50,12 +50,11 @@ struct CalmHomePage: View {
     @ViewBuilder
     private var searchControl: some View {
         if isSearching {
-            CalmSearchField(text: $query, prompt: "Search dictations", focus: $isSearchFocused)
+            CalmSearchField(text: $query, prompt: "Search dictations", focus: $isSearchFocused, onEscapeWhenEmpty: closeSearch)
                 .frame(width: 280)
                 .onChange(of: isSearchFocused) { _, focused in
                     if !focused, query.isEmpty { closeSearch() }
                 }
-                .onExitCommand { closeSearch() }
                 .transition(.opacity.combined(with: .move(edge: .trailing)))
         } else {
             Button {

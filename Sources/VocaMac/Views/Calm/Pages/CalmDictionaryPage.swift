@@ -91,11 +91,10 @@ struct CalmDictionaryPage: View {
     // MARK: Search
 
     private var searchField: some View {
-        CalmSearchField(text: $query, prompt: "Search words and replacements", focus: $isSearchFocused)
+        CalmSearchField(text: $query, prompt: "Search words and replacements", focus: $isSearchFocused, onEscapeWhenEmpty: closeSearch)
             .onChange(of: isSearchFocused) { _, focused in
                 if !focused, query.isEmpty { closeSearch() }
             }
-            .onExitCommand { closeSearch() }
             .transition(.opacity)
     }
 

@@ -953,6 +953,9 @@ struct CalmSearchField: View {
     @Binding var text: String
     var prompt: String = "Search"
     var focus: FocusState<Bool>.Binding?
+    /// Esc with nothing typed (close the search). The field's editor
+    /// keeps Esc for itself, so whatever holds the field can't see it.
+    var onEscapeWhenEmpty: (() -> Void)?
     var onSubmit: () -> Void = {}
 
     @FocusState private var ownFocus: Bool
@@ -960,11 +963,13 @@ struct CalmSearchField: View {
 
     init(
         text: Binding<String>, prompt: String = "Search",
-        focus: FocusState<Bool>.Binding? = nil, onSubmit: @escaping () -> Void = {}
+        focus: FocusState<Bool>.Binding? = nil, onEscapeWhenEmpty: (() -> Void)? = nil,
+        onSubmit: @escaping () -> Void = {}
     ) {
         _text = text
         self.prompt = prompt
         self.focus = focus
+        self.onEscapeWhenEmpty = onEscapeWhenEmpty
         self.onSubmit = onSubmit
     }
 
@@ -982,10 +987,10 @@ struct CalmSearchField: View {
                 .foregroundStyle(CalmColor.ink)
                 .focused(focusBinding)
                 .onSubmit(onSubmit)
-                // Esc clears the query; once it's empty, Esc goes on to
-                // whatever holds the field (close the search, the dialog
-                // or the sheet).
-                .onExitCommand(perform: text.isEmpty ? nil : { text = "" })
+                // Esc clears the query, then closes the search.
+                .onExitCommand {
+                    if !text.isEmpty { text = "" } else { onEscapeWhenEmpty?() }
+                }
                 .accessibilityLabel(prompt)
             if !text.isEmpty {
                 Button {
