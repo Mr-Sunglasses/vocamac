@@ -702,11 +702,16 @@ struct CalmSettingsMenu: View {
     var body: some View {
         @Bindable var navigator = navigator
         VStack(alignment: .leading, spacing: CalmMetrics.navItemSpacing) {
-            CalmSearchField(text: $navigator.settingsSearchText, prompt: "Search settings", focus: isSearchFocused, onSubmit: {
+            // Esc clears the query, then closes the sheet: the field's
+            // editor keeps Esc, so the sheet's own Esc never sees it.
+            CalmSearchField(
+                text: $navigator.settingsSearchText, prompt: "Search settings", focus: isSearchFocused,
+                onEscapeWhenEmpty: { navigator.closeSettings() }
+            ) {
                 if let first = CalmNavigation.searchGroups(for: navigator.settingsSearchText).first?.entries.first {
                     navigator.open(first)
                 }
-            })
+            }
             .padding(.bottom, 18)
 
             ForEach(CalmSettingsMenuGroup.allCases) { group in
