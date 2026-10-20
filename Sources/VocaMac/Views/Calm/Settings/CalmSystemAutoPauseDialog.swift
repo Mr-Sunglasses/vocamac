@@ -55,7 +55,11 @@ struct CalmAutoPauseDialog: View {
 
             Group {
                 if appState.autoPauseApps.isEmpty {
-                    Text("No apps yet. Add a game or another heavy app.")
+                    // Add app waits for the switch, so say so.
+                    Text(appState.autoPauseEnabled
+                         ? "No apps yet. Add a game or another heavy app."
+                         : "No apps yet. Turn this on, then add a game or another heavy app.")
+                        .multilineTextAlignment(.center)
                         .font(CalmFont.description)
                         .foregroundStyle(CalmColor.muted)
                         .padding(.vertical, 22)
