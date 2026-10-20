@@ -433,6 +433,8 @@ private struct CalmFeedRow: View, Equatable {
     private var statusTag: (text: String, tone: CalmTone)? {
         switch entry.status {
         case .completed: return nil
+        // “No words were heard.” already says it.
+        case .empty where entry.displayText.isEmpty: return nil
         case .failed, .interrupted: return (entry.status.displayName, .warning)
         case .pending, .cancelled, .empty: return (entry.status.displayName, .neutral)
         }
