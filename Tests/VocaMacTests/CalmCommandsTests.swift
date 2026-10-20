@@ -57,6 +57,17 @@ final class CalmCommandsTests: XCTestCase {
         XCTAssertEqual(state.shortcut(for: .commandMode), controlOptionE)
     }
 
+    /// The off notice offers the keys the switch would bring back, not a
+    /// different suggestion.
+    func testOffNoticeOffersTheRememberedShortcut() {
+        let (state, _) = AppState.makeTestState()
+        XCTAssertEqual(state.commandModeOnCandidate(defaults: defaults), suggestedE, "Nothing remembered: the suggestion")
+
+        state.setShortcut(controlOptionE, for: .commandMode)
+        state.setCommandModeOn(false, defaults: defaults)
+        XCTAssertEqual(state.commandModeOnCandidate(defaults: defaults), controlOptionE)
+    }
+
     /// Saved commands belong to Command Mode: turning it off takes their
     /// shortcuts off the listener too, and turning it on puts them back.
     func testSavedCommandShortcutsFollowCommandMode() {
@@ -191,6 +202,17 @@ final class CalmCommandsTests: XCTestCase {
 
         XCTAssertEqual(draft.nameProblem(in: [existing]), "“Shorter” already answers to that name.")
         XCTAssertFalse(draft.isValid(in: [existing]))
+    }
+
+    func testDraftNameMayNotTakeOverUndo() {
+        var draft = CalmSavedCommandDraft()
+        draft.name = "Undo"
+        draft.instruction = "make it longer"
+        XCTAssertEqual(draft.nameProblem(in: []), "Saying “Undo” takes back the last edit. Pick another name.")
+        XCTAssertFalse(draft.isValid(in: []))
+
+        draft.name = "Undo typos"
+        XCTAssertNil(draft.nameProblem(in: []), "Only the exact undo phrases are taken")
     }
 
     func testEditingDraftDoesNotClashWithItself() {

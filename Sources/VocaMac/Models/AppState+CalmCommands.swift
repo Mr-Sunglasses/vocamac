@@ -115,6 +115,11 @@ struct CalmSavedCommandDraft: Equatable {
     func nameProblem(in commands: [SavedCommand]) -> String? {
         let wanted = CommandInstruction.normalized(trimmedName)
         guard !wanted.isEmpty else { return nil }
+        // A saved command is looked up by name before anything else, so one
+        // called “undo” would stop “undo” taking back the last edit.
+        if CommandInstruction.isUndo(trimmedName) {
+            return "Saying “\(trimmedName)” takes back the last edit. Pick another name."
+        }
         let clash = commands.first { $0.id != id && CommandInstruction.normalized($0.name) == wanted }
         guard let clash else { return nil }
         return "“\(CalmCommandsText.commandName(clash))” already answers to that name."
@@ -169,13 +174,18 @@ extension AppState {
             return true
         }
         guard !isCommandModeOn else { return true }
-        let remembered = defaults.string(forKey: Self.calmCommandsLastShortcutKey).flatMap(HotKeyCombo.init(storageString:))
-        let candidate = remembered.flatMap { combo in
-            ShortcutValidation.problem(with: combo, action: .commandMode, appState: self) == nil ? combo : nil
-        } ?? ShortcutValidation.suggestion(for: .commandMode, appState: self)
-        guard let candidate else { return false }
+        guard let candidate = commandModeOnCandidate(defaults: defaults) else { return false }
         setShortcut(candidate, for: .commandMode)
         return true
+    }
+
+    /// The keys turning Command Mode on would use: the ones the switch
+    /// turned off, while still free, else the suggested ones.
+    func commandModeOnCandidate(defaults: UserDefaults = .standard) -> HotKeyCombo? {
+        let remembered = defaults.string(forKey: Self.calmCommandsLastShortcutKey).flatMap(HotKeyCombo.init(storageString:))
+        return remembered.flatMap { combo in
+            ShortcutValidation.problem(with: combo, action: .commandMode, appState: self) == nil ? combo : nil
+        } ?? ShortcutValidation.suggestion(for: .commandMode, appState: self)
     }
 
     // MARK: Status
@@ -183,7 +193,8 @@ extension AppState {
     /// The one problem the page shows, most basic first.
     var calmCommandsStatus: CalmCommandsStatus {
         guard isCommandModeOn else {
-            return .off(suggestion: ShortcutValidation.suggestion(for: .commandMode, appState: self))
+            // The same keys the switch would turn back on.
+            return .off(suggestion: commandModeOnCandidate())
         }
         let engine = commandModeEngine
         if case .local(let kind) = engine {
