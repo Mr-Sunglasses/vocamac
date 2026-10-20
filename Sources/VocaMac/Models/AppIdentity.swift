@@ -126,6 +126,17 @@ enum AppIdentityMatching {
         return result
     }
 
+    /// Open apps with a Dock icon, the ones a person thinks of as “open”.
+    /// Helpers and background agents (AutoFill, AUHostingService, …) run
+    /// too but aren't apps anyone picks from a list.
+    static func workspaceDockApps() -> [RunningAppSnapshot] {
+        var seen = Set<RunningAppSnapshot>()
+        return NSWorkspace.shared.runningApplications
+            .filter { $0.activationPolicy == .regular }
+            .compactMap { snapshot(for: $0) }
+            .filter { seen.insert($0).inserted }
+    }
+
     /// Convert one `NSRunningApplication` into a snapshot, or `nil` when it is
     /// VocaMac itself, has no usable name, or is missing.
     static func snapshot(for app: NSRunningApplication?) -> RunningAppSnapshot? {

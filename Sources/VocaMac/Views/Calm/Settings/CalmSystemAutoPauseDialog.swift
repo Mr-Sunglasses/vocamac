@@ -69,7 +69,7 @@ struct CalmAutoPauseDialog: View {
                     CalmList {
                         ForEach(appState.autoPauseApps) { app in
                             CalmListRow(padding: .compact, alignment: .center, alwaysShowsActions: true) {
-                                CalmAppTile(name: app.displayName)
+                                CalmAppTile(name: app.displayName, bundleIdentifier: app.bundleIdentifier)
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(app.displayName).font(CalmFont.body).foregroundStyle(CalmColor.ink)
                                     if let detail = app.bundleIdentifier ?? app.processName {
@@ -121,7 +121,7 @@ struct CalmAutoPauseDialog: View {
                         ForEach(candidates, id: \.self) { app in
                             Button { picked = app } label: {
                                 HStack(spacing: 12) {
-                                    CalmAppTile(name: app.displayName)
+                                    CalmAppTile(name: app.displayName, bundleIdentifier: app.bundleIdentifier)
                                     Text(app.displayName).font(CalmFont.body).foregroundStyle(CalmColor.ink)
                                         .frame(maxWidth: .infinity, alignment: .leading)
                                     if picked == app {
@@ -170,7 +170,7 @@ struct CalmAutoPauseDialog: View {
     }
 
     private func openAddStep() {
-        runningApps = AutoPauseMatching.workspaceRunningApps()
+        runningApps = AppIdentityMatching.workspaceDockApps()
             .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
         search = ""
         picked = nil

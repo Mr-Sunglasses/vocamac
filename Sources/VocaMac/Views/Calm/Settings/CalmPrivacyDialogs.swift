@@ -55,7 +55,7 @@ struct CalmExcludedAppsDialog: View {
                     CalmList {
                         ForEach(appState.historyExcludedApps) { app in
                             CalmListRow(padding: .compact, alignment: .center, alwaysShowsActions: true) {
-                                CalmAppTile(name: app.displayName)
+                                CalmAppTile(name: app.displayName, bundleIdentifier: app.bundleIdentifier)
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(app.displayName).font(CalmFont.body).foregroundStyle(CalmColor.ink)
                                     if let detail = app.bundleIdentifier ?? app.processName {
@@ -121,7 +121,7 @@ struct CalmExcludedAppsDialog: View {
     private func appChoice(_ app: RunningAppSnapshot) -> some View {
         Button { picked = app } label: {
             HStack(spacing: 12) {
-                CalmAppTile(name: app.displayName)
+                CalmAppTile(name: app.displayName, bundleIdentifier: app.bundleIdentifier)
                 Text(app.displayName).font(CalmFont.body).foregroundStyle(CalmColor.ink)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 if picked == app {
@@ -158,7 +158,7 @@ struct CalmExcludedAppsDialog: View {
     }
 
     private func openAddStep() {
-        runningApps = AutoPauseMatching.workspaceRunningApps()
+        runningApps = AppIdentityMatching.workspaceDockApps()
             .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
         search = ""
         picked = nil
