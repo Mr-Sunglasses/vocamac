@@ -1407,10 +1407,12 @@ private struct OverlayPill: View {
                     .monospacedDigit()
                     .foregroundStyle(OverlayPalette.secondaryText)
             }
-        case .processing, .idle:
+        case .processing:
             OverlaySpinner(color: viewModel.isCommandMode ? OverlayPalette.violet : OverlayPalette.text)
             Text(OverlayCopy.workingTitle(viewModel))
-        case .failure:
+        case .idle, .failure:
+            // Hidden. The panel is kept between dictations, and a spinner
+            // left in it spun forever off screen (several % CPU when idle).
             EmptyView()
         }
     }
@@ -1557,7 +1559,10 @@ private struct OverlayLivePanel: View {
                         Text(OverlayCopy.clock(viewModel.elapsedSeconds)).monospacedDigit()
                     }
                 }
-            case .processing, .idle:
+            case .idle:
+                // Hidden; no spinner left running off screen (see the pill).
+                EmptyView()
+            case .processing:
                 OverlaySpinner(color: viewModel.isCommandMode ? OverlayPalette.violet : OverlayPalette.text)
                 Text(OverlayCopy.workingDetail(viewModel))
                     .lineLimit(1)
