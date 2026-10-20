@@ -61,6 +61,9 @@ struct CalmStyleCard: View {
                 + CalmStyleSample(sample, dialect: style.defaultRules.emphasisDialect).plainText
         )
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+        // The element above replaces the button's own, so it needs the
+        // press back for VoiceOver and other assistive apps.
+        .accessibilityAction { action() }
     }
 }
 
@@ -239,6 +242,9 @@ struct CalmStylesChipLabel: View {
                 Text(notes.joined(separator: " · ")).foregroundStyle(CalmColor.muted)
             }
         }
+        // One element: otherwise each Text turns into its own copy of the
+        // chip's menu button for VoiceOver.
+        .accessibilityElement(children: .combine)
     }
 }
 
