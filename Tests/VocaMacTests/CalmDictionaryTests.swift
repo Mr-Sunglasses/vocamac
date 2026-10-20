@@ -4,6 +4,7 @@
 // The v3 Dictionary and Snippets pages' rules: list filtering and search,
 // the add / edit checks, and edits that keep an item in place.
 
+import AppKit
 import XCTest
 @testable import VocaMac
 
@@ -110,8 +111,8 @@ final class CalmDictionaryTests: XCTestCase {
         XCTAssertEqual(DictionaryEditing.checkReplacement(heard: "lgtm", replacement: " ", existing: [btw]), .incomplete)
         XCTAssertEqual(DictionaryEditing.checkReplacement(heard: "lgtm", replacement: "looks good", existing: [btw]), .valid)
         XCTAssertEqual(
-            DictionaryEditing.checkReplacement(heard: "zzq", replacement: " zzq ", existing: [btw]),
-            .problem("That already comes out as “zzq”."), "Text that becomes itself changes nothing"
+            DictionaryEditing.checkReplacement(heard: "iPhone", replacement: "iPhone", existing: [btw]),
+            .valid, "Matching ignores case, so the same spelling still fixes “iphone” and “IPHONE”"
         )
         XCTAssertEqual(DictionaryEditing.checkReplacement(heard: "github", replacement: "GitHub", existing: [btw]), .valid)
         XCTAssertEqual(DictionaryEditing.checkReplacement(heard: "zzq, zq", replacement: "zzq", existing: [btw]), .valid)
@@ -200,5 +201,21 @@ final class CalmDictionaryTests: XCTestCase {
         XCTAssertEqual(state.dictionaryItems(filter: .all, query: "").count, 2)
         XCTAssertFalse(state.checkVocabularyTerm("kubernetes").isValid)
         XCTAssertFalse(state.checkWordReplacement(heard: "BTW", replacement: "x").isValid)
+    }
+}
+
+// MARK: - App pickers
+
+final class AppPickerFilterTests: XCTestCase {
+    func testDockAndMenuBarAppsArePickableButEmbeddedHelpersAreNot() {
+        XCTAssertTrue(AppIdentityMatching.isPickable(policy: .regular, bundlePath: "/Applications/Notes.app"))
+        XCTAssertTrue(AppIdentityMatching.isPickable(policy: .accessory, bundlePath: "/Applications/1Password.app"),
+                      "Menu-bar apps can be excluded from history or pause dictation")
+        XCTAssertFalse(AppIdentityMatching.isPickable(
+            policy: .accessory,
+            bundlePath: "/Applications/Brave Browser.app/Contents/Frameworks/Brave Browser Framework.framework/Helpers/AutoFill.app"
+        ), "Helpers inside another app's bundle stay out of the list")
+        XCTAssertFalse(AppIdentityMatching.isPickable(policy: .accessory, bundlePath: nil))
+        XCTAssertFalse(AppIdentityMatching.isPickable(policy: .prohibited, bundlePath: "/Applications/Agent.app"))
     }
 }
