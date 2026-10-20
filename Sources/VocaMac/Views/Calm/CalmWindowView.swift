@@ -123,7 +123,12 @@ struct CalmWindowView: View {
             Button("Settings") { navigator.openSettings() }
                 .keyboardShortcut(",", modifiers: .command)
                 .disabled(isDialogPresented)
-            Button("Search Settings") { isSearchFocused = true }
+            Button("Search Settings") {
+                isSearchFocused = true
+                // Select what's there, so typing starts a new search (as ⌘F
+                // does in Finder and Safari) instead of adding to the old one.
+                DispatchQueue.main.async { NSApp.sendAction(#selector(NSText.selectAll(_:)), to: nil, from: nil) }
+            }
                 .keyboardShortcut("f", modifiers: .command)
                 .disabled(!navigator.isSettingsPresented || isDialogPresented)
         }
