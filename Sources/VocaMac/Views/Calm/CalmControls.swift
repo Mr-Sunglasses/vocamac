@@ -977,7 +977,10 @@ struct CalmSearchField: View {
                 .foregroundStyle(CalmColor.ink)
                 .focused(focusBinding)
                 .onSubmit(onSubmit)
-                .onExitCommand { if !text.isEmpty { text = "" } }
+                // Esc clears the query; once it's empty, Esc goes on to
+                // whatever holds the field (close the search, the dialog
+                // or the sheet).
+                .onExitCommand(perform: text.isEmpty ? nil : { text = "" })
                 .accessibilityLabel(prompt)
             if !text.isEmpty {
                 Button {
