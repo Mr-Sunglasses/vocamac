@@ -311,12 +311,22 @@ struct CalmCommandsTryDialog: View {
         let combo = appState.shortcut(for: .commandMode)
         CalmDialog("Try it out") {
             if let combo {
+                let caps = CalmKeyCaps.labels(for: combo)
                 VStack(alignment: .leading, spacing: 6) {
-                    CalmKeyedLine(
-                        [.text("Select some of the text below, press"), .keys(CalmKeyCaps.labels(for: combo)), .text("and say")],
-                        spacing: 5, capSize: .inline
-                    )
-                    Text("“make this shorter” or “fix the grammar”.").calmType(.description).foregroundStyle(CalmColor.muted)
+                    // Caps never wrap, so a line too wide for the dialog
+                    // would widen it past its footer; long shortcuts get a
+                    // line of their own.
+                    ViewThatFits(in: .horizontal) {
+                        CalmKeyedLine([.text("Select some of the text below, press"), .keys(caps)], spacing: 5, capSize: .inline)
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Select some of the text below, press").calmType(.description).foregroundStyle(CalmColor.muted)
+                            CalmKeyedLine([.keys(caps)], spacing: 5, capSize: .inline)
+                        }
+                    }
+                    Text("and say “make this shorter” or “fix the grammar”.")
+                        .calmType(.description)
+                        .foregroundStyle(CalmColor.muted)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             } else {
                 CalmInlineNotice("Command Mode needs a shortcut first.", tone: .warning)
