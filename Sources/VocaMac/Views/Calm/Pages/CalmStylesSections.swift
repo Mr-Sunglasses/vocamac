@@ -261,7 +261,7 @@ private struct CalmStylesTypedTextGroup: View {
                 CalmToggleRow(
                     "Use symbols and ordinals",
                     description: appState.numbersAsDigits
-                        ? "“fifty percent” becomes “50%”, “June twenty second” “June 22”"
+                        ? "“fifty percent” becomes “50%” and “June twenty second” “June 22”"
                         : "Needs “Write numbers as digits”",
                     isOn: $appState.numberSymbols
                 )
