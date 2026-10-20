@@ -243,12 +243,19 @@ enum ModelPickerCatalog {
         let needle = search.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !needle.isEmpty else { return true }
 
+        // “whisper turbo”: every word must match, not the whole phrase in
+        // one field (the name says “Large v3 Turbo”, the engine “Whisper”).
+        let words = needle.split(whereSeparator: \.isWhitespace)
+        if words.count > 1 {
+            return fields(of: size).contains { $0.lowercased().contains(needle) }
+                || words.allSatisfy { matches(size, search: String($0), systemLanguages: systemLanguages) }
+        }
+
         if size.translatesToEnglish, "translates".hasPrefix(needle) || needle.hasPrefix("translat") {
             return true
         }
 
-        let fields = [size.displayName, size.creator.displayName, size.engine.displayName, size.pickerSummary]
-        if fields.contains(where: { $0.lowercased().contains(needle) }) { return true }
+        if fields(of: size).contains(where: { $0.lowercased().contains(needle) }) { return true }
 
         // A language name ("hindi") or code ("hi") finds the models that
         // speak it. Codes must match exactly: "hi" is inside "chinese".
@@ -257,6 +264,10 @@ enum ModelPickerCatalog {
             .filter { $0.displayName.lowercased().hasPrefix(needle) || $0.code == needle }
             .map(\.code)
         return languageCodes.contains { fit(of: size, for: [$0], systemLanguages: systemLanguages).coversAll }
+    }
+
+    private static func fields(of size: ModelSize) -> [String] {
+        [size.displayName, size.creator.displayName, size.engine.displayName, size.pickerSummary]
     }
 
     /// The models a scope lists, best fit first.

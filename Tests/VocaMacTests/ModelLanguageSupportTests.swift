@@ -144,6 +144,14 @@ final class ModelLanguageSupportTests: XCTestCase {
         XCTAssertFalse(ModelPickerCatalog.matches(.parakeetV2, search: "whisper"))
     }
 
+    func testSearchWithSeveralWordsNeedsEveryWordSomewhere() {
+        XCTAssertTrue(ModelPickerCatalog.matches(.largeV3LatestTurbo, search: "whisper turbo"))
+        XCTAssertTrue(ModelPickerCatalog.matches(.largeV3Latest, search: "Whisper  large"))
+        XCTAssertTrue(ModelPickerCatalog.matches(.parakeetV2, search: "parakeet english"), "A language counts as a word")
+        XCTAssertFalse(ModelPickerCatalog.matches(.parakeetV2, search: "parakeet turbo"))
+        XCTAssertFalse(ModelPickerCatalog.matches(.largeV3Latest, search: "whisper zzq"))
+    }
+
     func testSearchByLanguageFindsModelsThatSpeakIt() {
         XCTAssertTrue(ModelPickerCatalog.matches(.gigaamV3, search: "russian"))
         XCTAssertTrue(ModelPickerCatalog.matches(.qwen3Asr06B, search: "hindi"))

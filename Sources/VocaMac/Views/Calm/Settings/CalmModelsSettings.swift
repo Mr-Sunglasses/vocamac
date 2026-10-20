@@ -633,10 +633,10 @@ struct CalmAllWritingModels: View {
     }
 
     private func matches(_ kind: CleanupModelKind) -> Bool {
-        let needle = search.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !needle.isEmpty else { return true }
-        return [CalmModelText.name(kind), kind.creator.displayName, kind.descriptor.summary]
-            .contains { $0.lowercased().contains(needle) }
+        let words = search.lowercased().split(whereSeparator: \.isWhitespace)
+        let fields = [CalmModelText.name(kind), kind.creator.displayName, kind.descriptor.summary].map { $0.lowercased() }
+        // Every word somewhere (“qwen 4b”), as speech model search does.
+        return words.allSatisfy { word in fields.contains { $0.contains(word) } }
     }
 
     private func row(_ kind: CleanupModelKind, isSelected: Bool) -> some View {
