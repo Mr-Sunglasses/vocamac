@@ -877,6 +877,10 @@ struct CalmTextEditor: View {
                 .foregroundStyle(CalmColor.ink)
                 .lineSpacing(3)
                 .scrollContentBackground(.hidden)
+                // The field grows with its text, so it only scrolls once it
+                // reaches maxHeight; before that, a scroller (always shown
+                // with a mouse attached) would sit in an empty field.
+                .scrollIndicators(contentHeight > maxHeight ? .automatic : .never)
                 .focused(focusBinding)
                 .padding(.horizontal, 7)
                 .padding(.vertical, 8)
@@ -889,6 +893,7 @@ struct CalmTextEditor: View {
                         // prompt's own colour), so both prompts match.
                         Text(prompt)
                             .font(CalmFont.field)
+                            .lineSpacing(3)
                             .foregroundStyle(Color(nsColor: .placeholderTextColor))
                             .padding(.horizontal, 12)
                             .padding(.vertical, 10)
