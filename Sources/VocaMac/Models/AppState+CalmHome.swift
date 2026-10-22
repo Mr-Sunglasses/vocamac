@@ -182,7 +182,7 @@ extension AppState {
     /// another way (onboarding, an imported backup).
     var calmGettingStartedDone: Set<CalmGettingStartedStep> {
         var done: Set<CalmGettingStartedStep> = []
-        if hasStatistics || !historyStore.entries.isEmpty { done.insert(.dictate) }
+        if hasDictated { done.insert(.dictate) }
         if selectedModelSize != ModelSize.tiny.rawValue { done.insert(.pickModel) }
         if !vocabularyTerms.isEmpty || !wordReplacements.isEmpty { done.insert(.addWord) }
         if transcriptCleanupEnabled { done.insert(.smartCleanup) }
@@ -191,6 +191,17 @@ extension AppState {
 
     /// Home's title: no “back” for someone who hasn't dictated yet.
     var calmHomeTitle: String {
-        hasStatistics ? "Welcome back" : "Welcome"
+        hasDictated ? "Welcome back" : "Welcome"
+    }
+
+    /// Whether the person has dictated, as opposed to only transcribing a
+    /// file or a meeting (`hasStatistics` counts those too). Speaking time
+    /// and the longest dictation are recorded for dictations alone, and
+    /// history keeps only dictations and Command Mode edits.
+    var hasDictated: Bool {
+        let stats = statsManager.stats
+        return stats.longestDictationSeconds > 0
+            || !stats.dailyAudioSeconds.isEmpty
+            || !historyStore.entries.isEmpty
     }
 }

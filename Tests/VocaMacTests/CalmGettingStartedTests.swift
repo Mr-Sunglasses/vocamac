@@ -30,8 +30,21 @@ final class CalmGettingStartedTests: XCTestCase {
         XCTAssertTrue(done.contains(.smartCleanup))
     }
 
-    func testHomeTitleWelcomesBackOnlyAfterADictation() {
-        let (state, _) = AppState.makeTestState()
-        XCTAssertEqual(state.calmHomeTitle, state.hasStatistics ? "Welcome back" : "Welcome")
+    func testATranscribedFileIsNotADictation() {
+        let (state, mocks) = AppState.makeTestState()
+        // What recordTranscription(_:isDictation: false) leaves: counts, no speaking time.
+        mocks.statsManager.stats = UserStats(totalWords: 120, totalTranscriptions: 1, dailyWordCounts: ["2026-10-21": 120])
+
+        XCTAssertTrue(state.hasStatistics)
+        XCTAssertFalse(state.calmGettingStartedDone.contains(.dictate))
+        XCTAssertEqual(state.calmHomeTitle, "Welcome")
+    }
+
+    func testADictationTicksDictateAndWelcomesBack() {
+        let (state, mocks) = AppState.makeTestState()
+        mocks.statsManager.stats = UserStats(totalWords: 12, totalTranscriptions: 1, dailyAudioSeconds: ["2026-10-21": 4], longestDictationSeconds: 4)
+
+        XCTAssertTrue(state.calmGettingStartedDone.contains(.dictate))
+        XCTAssertEqual(state.calmHomeTitle, "Welcome back")
     }
 }

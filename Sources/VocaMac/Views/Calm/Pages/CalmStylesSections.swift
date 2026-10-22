@@ -129,6 +129,9 @@ private struct CalmStylesTryItGroup: View {
             .calmPanelBackground()
         }
         .settingsTarget("writing-style-preview")
+        // The full result belongs to the target it ran for, whichever way
+        // the target changed (the menu or opening another Styles tab).
+        .onChange(of: previewTarget) { result = nil }
     }
 
     /// The preview runs the formatting engine only; no model.
@@ -176,10 +179,18 @@ private struct CalmStylesTryItGroup: View {
 
     private func runFullPreview() {
         isRunning = true
+        let target = previewTarget
         Task { @MainActor in
-            result = await appState.previewWritingProfile(sample)
+            let preview = await appState.previewWritingProfile(sample)
+            // A run for a style the person has since moved off is stale.
+            if previewTarget == target { result = preview }
             isRunning = false
         }
+    }
+
+    /// What Try it previews: a style, or one app's binding.
+    private var previewTarget: String {
+        appState.settingsPreviewBindingID.map { "binding-\($0)" } ?? "style-\(appState.settingsPreviewStyle.rawValue)"
     }
 
     // MARK: Target

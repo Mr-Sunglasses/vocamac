@@ -66,10 +66,12 @@ struct CalmStylesPage: View {
             if target == "default-writing-style" { storedTab = CalmStyleGroup.everythingElse.rawValue }
         }
         .onChange(of: storedTab) { notice = nil }
-        // Try it starts on the style this tab uses, not a fixed Plain.
-        .onChange(of: appState.calmStyle(for: group), initial: true) { _, style in
+        // Try it starts on the style each tab uses, not a fixed Plain: on
+        // opening a tab (even one sharing the last tab's style, after Try it
+        // was pointed elsewhere) and when the tab's style changes.
+        .onChange(of: "\(group.rawValue)|\(appState.calmStyle(for: group).rawValue)", initial: true) {
             appState.settingsPreviewBindingID = nil
-            appState.settingsPreviewStyle = style
+            appState.settingsPreviewStyle = appState.calmStyle(for: group)
         }
         .onAppear { appState.calmPruneStyleGroups() }
         .calmDialog(item: $addingTo) { group in
