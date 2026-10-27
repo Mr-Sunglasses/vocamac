@@ -15,6 +15,9 @@ enum CorrectionLearner {
     struct Correction: Equatable {
         let heard: String
         let corrected: String
+        /// The language of the dictation it corrects, when known: whether
+        /// `heard` is an ordinary word depends on it.
+        var language: String?
     }
 
     /// Longest edited region, in words, that is still treated as a fix

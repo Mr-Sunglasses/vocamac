@@ -1239,8 +1239,13 @@ final class MockCorrectionObserver: CorrectionObserving {
     var observedTexts: [String] = []
     var flushCallCount = 0
 
-    func observe(insertedText text: String, processID: pid_t, isKnownWord: @escaping @MainActor @Sendable (String) -> Bool) {
+    var observedLanguages: [String?] = []
+    func observe(
+        insertedText text: String, processID: pid_t, language: String?,
+        isKnownWord: @escaping @MainActor @Sendable (String) -> Bool
+    ) {
         observedTexts.append(text)
+        observedLanguages.append(language)
     }
 
     func flush() {

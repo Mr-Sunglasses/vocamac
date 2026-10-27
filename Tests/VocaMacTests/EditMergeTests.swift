@@ -60,6 +60,9 @@ final class EditMergeTests: XCTestCase {
                        "Ask bob to review it.")
         XCTAssertEqual(merge("ask cloud to review it", "Ask Claude to review it.", glossary: ["Claude"], level: .light),
                        "Ask cloud to review it.")
+        // "not in" is spelled close to "Notion", but a negation never goes.
+        XCTAssertEqual(merge("it is not in the folder", "It is Notion the folder.", glossary: ["Notion"]),
+                       "It is not in the folder.")
     }
 
     /// The system spell checker accepts every single letter, so a fragment

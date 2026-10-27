@@ -346,6 +346,24 @@ final class AppStateHistoryTests: XCTestCase {
         XCTAssertEqual(appState.wordReplacements.map(\.replacement), ["GitHub", "Namrata"])
     }
 
+    func testLearningJudgesOrdinaryWordsInTheDictationsLanguage() {
+        let (appState, _) = AppState.makeTestState()
+        // "dans" is a word in French, not in English.
+        appState.isKnownWord = { word, language in language == "fr" && word == "dans" }
+        appState.learnCorrectionsMode = .automatic
+        appState._receiveCorrectionsForTesting([.init(heard: "dans", corrected: "Dan", language: "fr")])
+        XCTAssertEqual(appState.vocabularyTerms, ["Dan"])
+        XCTAssertTrue(appState.wordReplacements.isEmpty)
+
+        // A suggestion remembers its language until it is accepted.
+        appState.learnCorrectionsMode = .suggest
+        appState._receiveCorrectionsForTesting([.init(heard: "dans", corrected: "Dana", language: "fr")])
+        let suggestion = try? XCTUnwrap(appState.dictionarySuggestions.first)
+        XCTAssertEqual(suggestion?.language, "fr")
+        if let suggestion { appState.acceptDictionarySuggestion(suggestion) }
+        XCTAssertTrue(appState.wordReplacements.isEmpty)
+    }
+
     func testScreenTermsReachALiveSessionAfterItStarts() async {
         let reader = MockScreenContextReader()
         reader.text = "let userId = request.userId"

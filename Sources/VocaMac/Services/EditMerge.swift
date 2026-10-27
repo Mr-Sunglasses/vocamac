@@ -424,6 +424,10 @@ enum EditMerge {
               hunk.added.filter({ $0.text == "?" }).count >= hunk.removed.filter({ $0.text == "?" }).count,
               hunk.added.filter({ $0.text == "!" }).count == hunk.removed.filter({ $0.text == "!" }).count
         else { return false }
+        // "not in" is spelled close to "Notion", but dropping a negation
+        // is never a respelling.
+        guard !hunk.removedWords.contains(where: { negations.contains($0.key) || $0.key.hasSuffix("n't") })
+        else { return false }
         let written = hunk.addedWords.map(\.text)
         guard let term = glossary.first(where: {
             $0 == written.joined(separator: " ") || $0 == written.joined()

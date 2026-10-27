@@ -198,7 +198,8 @@ struct DictationOutputPipeline {
                CleanupNeed.reason(
                    for: sources[index], level: prepared.effectiveLevel,
                    technical: plan.technical, isEnglish: prepared.isEnglishText
-               ) == nil {
+               ) == nil,
+               plan.glossary.isEmpty || !Self.mayRespell(sources[index], dictionary: options.dictionary) {
                 outcomes.append(.alreadyClean)
                 continue
             }
@@ -577,11 +578,13 @@ struct DictationOutputPipeline {
         // and so may a prompt the user wrote: only they know what it asks
         // for, so it is always given the text. (Code and Terminal use their
         // own fixed prompt whatever the user's says.)
+        let glossary = technical || !cleaner.isOnDevice ? [] : Self.cleanupGlossary(options.dictionary)
         if options.skipWhenClean, intent == .preserve,
            technical || Self.usesBuiltInCleanupPrompt(options),
            CleanupNeed.reason(
                for: masked.text, level: effectiveLevel, technical: technical, isEnglish: prepared.isEnglishText
-           ) == nil {
+           ) == nil,
+           glossary.isEmpty || !Self.mayRespell(masked.text, dictionary: options.dictionary) {
             return .finished(text: fallback, summary: noting(technical
                 ? "\(styleName) style — no filler found, commands kept exact"
                 : Self.alreadyCleanSummary))
@@ -597,8 +600,32 @@ struct DictationOutputPipeline {
             // mustn't count toward the give-up limit that turns cleanup off for
             // every app.
             usesPreview: options.preview || technical,
-            glossary: technical || !cleaner.isOnDevice ? [] : Self.cleanupGlossary(options.dictionary)
+            glossary: glossary
         ))
+    }
+
+    /// Whether a word, or a run of words, in `text` is spelled close to one
+    /// of the user's own terms without being it ("Ask cloud to review it."
+    /// with Claude in the Dictionary): work for the model even in an
+    /// otherwise clean sentence.
+    ///
+    /// Screen terms don't count here: a page of identifiers has one close
+    /// to almost any short word, and every dictation would wait on the
+    /// model. They still reach it whenever it runs.
+    static func mayRespell(_ text: String, dictionary: DictionaryContext?) -> Bool {
+        guard let dictionary else { return false }
+        let terms = cleanupGlossary(DictionaryContext(
+            vocabulary: dictionary.vocabulary, replacements: dictionary.replacements,
+            contextTerms: [], isKnownWord: dictionary.isKnownWord
+        ))
+        guard !terms.isEmpty else { return false }
+        let words = text.split { !($0.isLetter || $0.isNumber || $0 == "'" || $0 == "’") }.map(String.init)
+        // A term already spelled as listed has nothing to fix, and must not
+        // join its neighbours into a near miss ("Claude to" ≈ "Claude").
+        let listed = Set(terms.map(DictionaryCorrector.normalized))
+        return words.split { listed.contains(DictionaryCorrector.normalized($0)) }.contains {
+            ParakeetVocabularyBoost.couldAcceptReplacement(heardWords: Array($0), terms: terms)
+        }
     }
 
     /// Most terms, and characters, the cleanup model is shown beside the text.

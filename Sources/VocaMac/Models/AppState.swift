@@ -6067,7 +6067,7 @@ extension AppState {
     /// vocabulary term, plus a replacement when the engine heard different
     /// letters (not just different casing or spacing).
     func acceptDictionarySuggestion(_ suggestion: CorrectionSuggestion) {
-        learn(heard: suggestion.heard, corrected: suggestion.corrected)
+        learn(heard: suggestion.heard, corrected: suggestion.corrected, language: suggestion.language)
         dictionarySuggestions.removeAll { $0.id == suggestion.id }
         saveSuggestions()
     }
@@ -6078,7 +6078,9 @@ extension AppState {
         saveSuggestions()
     }
 
-    private func learn(heard: String, corrected: String) {
+    /// - Parameter language: The language of the dictation the correction
+    ///   was seen in; the selected one when unknown.
+    private func learn(heard: String, corrected: String, language: String?) {
         addVocabularyTerm(corrected)
         // A replacement fires on every later match. "cloud" fixed to
         // "Claude" once must not turn every cloud into Claude, so a single
@@ -6087,7 +6089,7 @@ extension AppState {
         // ("get hub" → "GitHub") is rarely said for itself, so it still
         // becomes a replacement.
         if DictionaryCorrector.normalized(heard) != DictionaryCorrector.normalized(corrected),
-           !Self.isOrdinaryWord(heard, isKnownWord: { self.isKnownWord($0, self.spellingLanguage) }) {
+           !Self.isOrdinaryWord(heard, isKnownWord: { self.isKnownWord($0, language ?? self.spellingLanguage) }) {
             addWordReplacement(heard: heard, replacement: corrected)
         }
         VocaLogger.info(.dictionary, "Learned a spelling from a correction")
@@ -6114,16 +6116,17 @@ extension AppState {
             let key = CorrectionSuggestion.key(heard: correction.heard, corrected: correction.corrected)
             guard !dismissedSuggestionKeys.contains(key) else { continue }
             if mode == .automatic {
-                learn(heard: correction.heard, corrected: correction.corrected)
+                learn(heard: correction.heard, corrected: correction.corrected, language: correction.language)
                 continue
             }
             if let index = dictionarySuggestions.firstIndex(where: { $0.id == key }) {
                 dictionarySuggestions[index].occurrences += 1
                 dictionarySuggestions[index].lastSeen = Date()
+                dictionarySuggestions[index].language = correction.language ?? dictionarySuggestions[index].language
             } else {
                 dictionarySuggestions.insert(
                     CorrectionSuggestion(heard: correction.heard, corrected: correction.corrected,
-                                         occurrences: 1, lastSeen: Date()),
+                                         occurrences: 1, lastSeen: Date(), language: correction.language),
                     at: 0
                 )
             }
@@ -6141,7 +6144,9 @@ extension AppState {
         guard learnCorrectionsMode != .off, let correctionObserver,
               let processID = NSWorkspace.shared.frontmostApplication?.processIdentifier else { return }
         let isKnownWord = self.isKnownWord
-        correctionObserver.observe(insertedText: text, processID: processID) { isKnownWord($0, language) }
+        correctionObserver.observe(insertedText: text, processID: processID, language: language) {
+            isKnownWord($0, language)
+        }
     }
 
     /// Start reading names and identifiers from the screen while the user speaks.
