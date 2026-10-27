@@ -283,14 +283,23 @@ final class SherpaService: @unchecked Sendable {
     ///     empty result as failed audio: a preview window that ends in a
     ///     pause often decodes to nothing, and the retries would hold the
     ///     engine while the final decode waits.
+    ///   - vocabulary: Dictionary terms (comma/newline separated). Only
+    ///     Qwen3-ASR reads them, as hotwords (see `hotwords(from:)`).
     func transcribe(
         audioData: [Float],
         language: String? = nil,
-        isPreview: Bool = false
+        isPreview: Bool = false,
+        vocabulary: String = ""
     ) async throws -> VocaTranscription {
         try Task.checkCancellation()
         guard let request = snapshot() else { throw SherpaError.modelNotLoaded }
         let size = request.size
+        let hotwords: String?
+        if case .qwen3Asr = SherpaModelCatalog.spec(for: size)?.kind {
+            hotwords = Self.hotwords(from: vocabulary)
+        } else {
+            hotwords = nil
+        }
 
         try SherpaAudioPreparation.validate(audioData)
 
@@ -323,7 +332,7 @@ final class SherpaService: @unchecked Sendable {
         let worker = Task.detached(priority: .userInitiated) {
             try Self.decodeRequest(
                 audioData: audioData, segments: segments, language: language,
-                recoversEmpty: !isPreview, request: request
+                recoversEmpty: !isPreview, hotwords: hotwords, request: request
             )
         }
         let decoded = try await withTaskCancellationHandler {
@@ -376,10 +385,32 @@ final class SherpaService: @unchecked Sendable {
         )
     }
 
+    /// Most hotwords Qwen3-ASR is given. They go into its prompt, which shares
+    /// a 512-token window with up to 20 s of audio (about 250 tokens), so the
+    /// list stays short.
+    static let maximumHotwords = 20
+    static let maximumHotwordCharacters = 200
+
+    /// Qwen3-ASR's comma-separated hotwords for a comma/newline vocabulary,
+    /// keeping the terms at its end (the user's own, see
+    /// `AppState.recognitionVocabulary`). Nil when there are none.
+    static func hotwords(from vocabulary: String) -> String? {
+        var kept: [String] = []
+        var used = 0
+        for term in RecognitionHints.terms(from: vocabulary).reversed() {
+            // The list is split on ASCII commas.
+            let term = term.replacingOccurrences(of: ",", with: " ")
+            guard kept.count < maximumHotwords, used + term.count + 1 <= maximumHotwordCharacters else { break }
+            kept.insert(term, at: 0)
+            used += term.count + 1
+        }
+        return kept.isEmpty ? nil : kept.joined(separator: ",")
+    }
+
     /// Serialize native decoding for a retained model without holding the state lock.
     private static func decodeRequest(
         audioData: [Float], segments: [Range<Int>], language: String?, recoversEmpty: Bool,
-        request: LoadedRecognizer
+        hotwords: String?, request: LoadedRecognizer
     ) throws -> (text: String, lang: String) {
         try Task.checkCancellation()
         request.decodeLock.lock()
@@ -387,7 +418,7 @@ final class SherpaService: @unchecked Sendable {
         return try decodeSegments(
             segments.lazy.map { Array(audioData[$0]) }, language: language, recoversEmpty: recoversEmpty
         ) { samples in
-            try decode(samples: samples, recognizer: request.pointer)
+            try decode(samples: samples, recognizer: request.pointer, hotwords: hotwords)
         }
     }
 
@@ -477,12 +508,15 @@ final class SherpaService: @unchecked Sendable {
 
     /// Decode while the caller holds the recognizer lock for the whole request.
     private static func decode(
-        samples: [Float], recognizer: OpaquePointer
+        samples: [Float], recognizer: OpaquePointer, hotwords: String?
     ) throws -> (text: String, lang: String) {
         guard let stream = SherpaOnnxCreateOfflineStream(recognizer) else {
             throw SherpaError.transcriptionFailed(reason: "Could not create an ONNX audio stream.")
         }
         defer { SherpaOnnxDestroyOfflineStream(stream) }
+        if let hotwords {
+            SherpaOnnxOfflineStreamSetOption(stream, "hotwords", hotwords)
+        }
 
         samples.withUnsafeBufferPointer { buffer in
             SherpaOnnxAcceptWaveformOffline(stream, 16000, buffer.baseAddress, Int32(buffer.count))

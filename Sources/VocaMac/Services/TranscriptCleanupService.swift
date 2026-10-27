@@ -153,18 +153,31 @@ final class TranscriptCleanupService: ObservableObject, TranscriptCleaning {
     }
 
     func attempt(_ text: String, prompt: String) async -> CleanupAttempt {
-        await attemptClean(text, prompt: prompt, recordingFailures: true, allowsTransform: false)
+        await attempt(text, prompt: prompt, glossary: [])
+    }
+
+    func attempt(_ text: String, prompt: String, glossary: [String]) async -> CleanupAttempt {
+        await attemptClean(text, prompt: prompt, glossary: glossary, recordingFailures: true, allowsTransform: false)
     }
 
     /// Same pass as `clean`, but reporting what happened and without letting a
     /// hand-typed experiment trip the give-up counter that guards dictation.
     func preview(_ text: String, prompt: String) async -> CleanupAttempt {
-        await attemptClean(text, prompt: prompt, recordingFailures: false, allowsTransform: false)
+        await preview(text, prompt: prompt, glossary: [])
+    }
+
+    func preview(_ text: String, prompt: String, glossary: [String]) async -> CleanupAttempt {
+        await attemptClean(text, prompt: prompt, glossary: glossary, recordingFailures: false, allowsTransform: false)
     }
 
     func speculate(_ text: String, prompt: String) async -> CleanupAttempt {
+        await speculate(text, prompt: prompt, glossary: [])
+    }
+
+    func speculate(_ text: String, prompt: String, glossary: [String]) async -> CleanupAttempt {
         await attemptClean(
-            text, prompt: prompt, recordingFailures: false, allowsTransform: false, honoursGiveUp: true
+            text, prompt: prompt, glossary: glossary, recordingFailures: false, allowsTransform: false,
+            honoursGiveUp: true
         )
     }
 
@@ -247,6 +260,7 @@ final class TranscriptCleanupService: ObservableObject, TranscriptCleaning {
     private func attemptClean(
         _ text: String,
         prompt: String,
+        glossary: [String] = [],
         recordingFailures: Bool,
         allowsTransform: Bool,
         honoursGiveUp: Bool = false,
@@ -256,7 +270,7 @@ final class TranscriptCleanupService: ObservableObject, TranscriptCleaning {
         // replaced by it; either way the model is busy until it is done.
         if let priming = primeTask { await priming.value }
         let attempt = await performAttempt(
-            text, prompt: prompt, recordingFailures: recordingFailures,
+            text, prompt: prompt, glossary: glossary, recordingFailures: recordingFailures,
             allowsTransform: allowsTransform, honoursGiveUp: honoursGiveUp, transform: transform
         )
         Self.log(attempt, input: text, model: activeKind, isTransform: allowsTransform)
@@ -284,6 +298,7 @@ final class TranscriptCleanupService: ObservableObject, TranscriptCleaning {
     private func performAttempt(
         _ text: String,
         prompt: String,
+        glossary: [String],
         recordingFailures: Bool,
         allowsTransform: Bool,
         honoursGiveUp: Bool,
@@ -319,7 +334,7 @@ final class TranscriptCleanupService: ObservableObject, TranscriptCleaning {
             ? TranscriptCleanup.defaultPrompt
             : prompt
 
-        let formatted = TranscriptCleanup.formatInput(trimmed)
+        let formatted = TranscriptCleanup.formatInput(trimmed, glossary: glossary)
         // The transcript is waiting to be pasted, so the deadline hands back
         // the raw text rather than waiting for llama.cpp to wind down. It
         // scales with the model, so a Command Mode model doing cleanup is not
@@ -343,7 +358,7 @@ final class TranscriptCleanupService: ObservableObject, TranscriptCleaning {
             let chunks = await CleanupContext.chunks(
                 trimmed, contextTokens: context, promptTokens: promptTokens,
                 allowsSplitting: !allowsTransform || transform.allowsSplitting,
-                countTokens: { await llm.encode(TranscriptCleanup.formatInput($0)).count }
+                countTokens: { await llm.encode(TranscriptCleanup.formatInput($0, glossary: glossary)).count }
             )
             guard let chunks else {
                 return result(text, .skipped(allowsTransform
@@ -378,7 +393,7 @@ final class TranscriptCleanupService: ObservableObject, TranscriptCleaning {
                 )
                 let answer = try await runInference(
                     llm: llm, prompt: activePrompt,
-                    input: TranscriptCleanup.formatInput(chunkInput),
+                    input: TranscriptCleanup.formatInput(chunkInput, glossary: glossary),
                     timeout: remaining, monitor: monitor
                 )
                 switch monitor.stopReason {

@@ -350,6 +350,7 @@ extension TranscriptionRouter: SpeechTranscribing {
     func startStreaming(
         language: String?,
         vocabulary: String,
+        liveVocabulary: LiveVocabulary?,
         onPartial: (@Sendable (String) -> Void)?,
         commit: StreamingCommitOptions?
     ) -> RecordingTranscription? {
@@ -379,7 +380,8 @@ extension TranscriptionRouter: SpeechTranscribing {
                 switch expectedEngine {
                 case .appleSpeech:
                     return try await appleSpeech.transcribe(
-                        chunks: chunks, language: language, vocabulary: vocabulary, onPiece: commit?.onPiece
+                        chunks: chunks, language: language, vocabulary: liveVocabulary?.read() ?? vocabulary,
+                        vocabularyUpdates: liveVocabulary, onPiece: commit?.onPiece
                     )
                 case .whisperKit:
                     // The final decode gets the batch path's silence trim, so
@@ -413,7 +415,11 @@ extension TranscriptionRouter: SpeechTranscribing {
                             try await parakeet.transcribe(audioData: samples, language: language)
                         },
                         transcribeFinal: { [self, parakeet] samples in
-                            try await finalDecode(samples, language: language) { speech, _ in
+                            // Screen terms usually arrive after the session
+                            // starts; the boost runs after decoding, so the
+                            // final decode reads them.
+                            let vocabulary = liveVocabulary?.read() ?? vocabulary
+                            return try await finalDecode(samples, language: language) { speech, _ in
                                 try await parakeet.transcribe(audioData: speech, language: language, vocabulary: vocabulary)
                             }
                         },
@@ -425,7 +431,10 @@ extension TranscriptionRouter: SpeechTranscribing {
                         language: language, model: loadedModelSize,
                         speechOnly: { [self] samples in await audioWithoutSilence(samples)?.samples },
                         decode: { [sherpa] samples, isPreview in
-                            try await sherpa.transcribe(audioData: samples, language: language, isPreview: isPreview)
+                            try await sherpa.transcribe(
+                                audioData: samples, language: language, isPreview: isPreview,
+                                vocabulary: isPreview ? "" : liveVocabulary?.read() ?? vocabulary
+                            )
                         },
                         onPartial: onPartial
                     )
@@ -578,7 +587,9 @@ extension TranscriptionRouter: SpeechTranscribing {
             }
         case .sherpaOnnx:
             transcribe = { [sherpa] samples in
-                try await sherpa.transcribe(audioData: samples, language: language)
+                try await sherpa.transcribe(
+                    audioData: samples, language: language, vocabulary: commit.vocabulary?() ?? vocabulary
+                )
             }
             previewTranscribe = { [sherpa] samples in
                 try await sherpa.transcribe(audioData: samples, language: language, isPreview: true)
@@ -683,7 +694,7 @@ extension TranscriptionRouter: SpeechTranscribing {
         case .appleSpeech:
             return try await appleSpeech.transcribe(audioData: audioData, language: language, vocabulary: vocabulary)
         case .sherpaOnnx:
-            return try await sherpa.transcribe(audioData: audioData, language: language)
+            return try await sherpa.transcribe(audioData: audioData, language: language, vocabulary: vocabulary)
         case .customEndpoint:
             return try await customEndpoint.transcribe(
                 audioData: audioData, language: language, translate: translate, vocabulary: vocabulary

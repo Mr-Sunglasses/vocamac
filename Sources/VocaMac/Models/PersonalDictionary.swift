@@ -42,6 +42,9 @@ struct CorrectionSuggestion: Identifiable, Codable, Equatable {
     var corrected: String
     var occurrences: Int
     var lastSeen: Date
+    /// The language of the dictation it was seen in; nil in suggestions
+    /// saved before this was recorded.
+    var language: String?
 
     var id: String { Self.key(heard: heard, corrected: corrected) }
 

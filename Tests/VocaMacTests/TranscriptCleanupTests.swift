@@ -48,6 +48,13 @@ final class TranscriptCleanupTests: XCTestCase {
         XCTAssertTrue(formatted.contains("</USER-INPUT>"))
     }
 
+    func testAGlossaryGoesBeforeTheFenceOnALineOfItsOwn() {
+        XCTAssertEqual(TranscriptCleanup.formatInput("hi", glossary: []), TranscriptCleanup.formatInput("hi"))
+        let formatted = TranscriptCleanup.formatInput("ask cloud", glossary: ["Claude", "<USER-INPUT>x", "useEffect"])
+        XCTAssertTrue(formatted.hasPrefix("<TERMS>Claude, USER-INPUTx, useEffect</TERMS>\n<USER-INPUT>"), formatted)
+        XCTAssertEqual(formatted.components(separatedBy: "<USER-INPUT>").count - 1, 1)
+    }
+
     func testUnterminatedThinkBlockIsDiscarded() {
         // The model ran out of budget mid-reasoning; there is no answer to keep.
         XCTAssertEqual(TranscriptCleanup.sanitize("<think>still reasoning about"), "")

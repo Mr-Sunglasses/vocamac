@@ -88,6 +88,16 @@ final class ScreenContextTermsTests: XCTestCase {
         XCTAssertFalse(terms.contains("Apple"))
     }
 
+    func testMostRelevantTermsComeFirst() {
+        let filler = String(repeating: "and so on ", count: 40)
+        let text = "farAwayName " + filler + "nearCaret " + filler + "lastName repeatedTerm repeatedTerm"
+        let terms = ScreenContextTerms.extract(from: text, isKnownWord: isKnown)
+        // Shown twice beats shown once; then nearest the middle, where the caret is.
+        XCTAssertEqual(terms.first, "repeatedTerm")
+        XCTAssertEqual(terms.dropFirst().first, "nearCaret")
+        XCTAssertEqual(Set(terms), ["repeatedTerm", "nearCaret", "farAwayName", "lastName"])
+    }
+
     func testDeduplicatesAndCaps() {
         let text = (0..<400).map { "varName\($0)" }.joined(separator: " ") + " varName0"
         let terms = ScreenContextTerms.extract(from: text, isKnownWord: isKnown)

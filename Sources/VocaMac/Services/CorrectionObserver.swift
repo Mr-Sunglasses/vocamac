@@ -14,7 +14,12 @@ protocol CorrectionObserving: AnyObject {
     /// Called on the main actor with any corrections found.
     var onCorrections: (([CorrectionLearner.Correction]) -> Void)? { get set }
     /// Start watching the field `text` was just typed into.
-    func observe(insertedText text: String, processID: pid_t, isKnownWord: @escaping @MainActor @Sendable (String) -> Bool)
+    /// - Parameter language: The dictation's language, stamped on each
+    ///   correction found in it.
+    func observe(
+        insertedText text: String, processID: pid_t, language: String?,
+        isKnownWord: @escaping @MainActor @Sendable (String) -> Bool
+    )
     /// Compare now instead of waiting for the timer.
     func flush()
     func cancel()
@@ -40,6 +45,7 @@ final class CorrectionObserver: CorrectionObserving {
         let id: UUID
         let text: String
         let processID: pid_t
+        let language: String?
         /// Main actor: spell checking goes through NSSpellChecker.
         let isKnownWord: @MainActor @Sendable (String) -> Bool
         var baseline: FocusedTextSnapshot?
@@ -48,10 +54,13 @@ final class CorrectionObserver: CorrectionObserving {
     private var observation: Observation?
     private var comparisonWork: DispatchWorkItem?
 
-    func observe(insertedText text: String, processID: pid_t, isKnownWord: @escaping @MainActor @Sendable (String) -> Bool) {
+    func observe(
+        insertedText text: String, processID: pid_t, language: String?,
+        isKnownWord: @escaping @MainActor @Sendable (String) -> Bool
+    ) {
         flush()
         let id = UUID()
-        observation = Observation(id: id, text: text, processID: processID, isKnownWord: isKnownWord)
+        observation = Observation(id: id, text: text, processID: processID, language: language, isKnownWord: isKnownWord)
 
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.baselineDelay) { [weak self] in
             self?.captureBaseline(for: id)
@@ -69,6 +78,7 @@ final class CorrectionObserver: CorrectionObserving {
         guard let baseline = current.baseline else { return }
 
         let inserted = current.text
+        let language = current.language
         let isKnownWord = current.isKnownWord
         Self.queue.async { [weak self] in
             guard let after = AccessibilityTextReader.value(of: baseline.element.element),
@@ -87,7 +97,7 @@ final class CorrectionObserver: CorrectionObserving {
                     let corrections = CorrectionLearner.corrections(
                         inserted: inserted, before: before, after: after,
                         caretLocation: caret, isKnownWord: isKnownWord
-                    )
+                    ).map { CorrectionLearner.Correction(heard: $0.heard, corrected: $0.corrected, language: language) }
                     guard !corrections.isEmpty else { return }
                     VocaLogger.info(.dictionary, "Noticed \(corrections.count) correction(s) to dictated text")
                     observer?.onCorrections?(corrections)

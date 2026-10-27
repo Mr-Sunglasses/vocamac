@@ -26,7 +26,12 @@ enum ScreenContextTerms {
     /// aren't ordinary words (which would make "Apple" out of "apple").
     private static let capitalizedWord = try? NSRegularExpression(pattern: #"\b[A-Z][a-z]{2,}\b"#)
 
-    /// Distinct terms in reading order, at most `maximumTerms`.
+    /// Distinct terms, most relevant first, at most `maximumTerms`.
+    ///
+    /// A term the screen shows more often comes first, then the one nearest
+    /// the middle of the text: the reader sends the visible text, or the text
+    /// around the caret with the caret in the middle. Engines that take few
+    /// hints keep the first ones.
     static func extract(from text: String, isKnownWord: (String) -> Bool) -> [String] {
         guard !text.isEmpty else { return [] }
         let source = text as NSString
@@ -49,15 +54,26 @@ enum ScreenContextTerms {
             }
         }
 
-        var seen = Set<String>()
-        var terms: [String] = []
-        for item in found.sorted(by: { $0.location < $1.location }) {
-            guard DictionaryCorrector.normalized(item.term).count >= 3,
-                  seen.insert(item.term).inserted else { continue }
-            terms.append(item.term)
-            if terms.count == maximumTerms { break }
+        let focus = source.length / 2
+        var ranked: [String: (count: Int, distance: Int, first: Int)] = [:]
+        var counted = Set<String>()
+        for item in found where DictionaryCorrector.normalized(item.term).count >= 3 {
+            // Two patterns can match the same word; it was still shown once.
+            guard counted.insert("\(item.location):\(item.term)").inserted else { continue }
+            let distance = abs(item.location - focus)
+            if let rank = ranked[item.term] {
+                ranked[item.term] = (rank.count + 1, min(rank.distance, distance), min(rank.first, item.location))
+            } else {
+                ranked[item.term] = (1, distance, item.location)
+            }
         }
-        return terms
+        return ranked.sorted { lhs, rhs in
+            // Past a few mentions, more says little.
+            let lhsCount = min(lhs.value.count, 3), rhsCount = min(rhs.value.count, 3)
+            if lhsCount != rhsCount { return lhsCount > rhsCount }
+            if lhs.value.distance != rhs.value.distance { return lhs.value.distance < rhs.value.distance }
+            return lhs.value.first < rhs.value.first
+        }.prefix(maximumTerms).map(\.key)
     }
 
     /// Whether the word at `location` opens a sentence or line, where a

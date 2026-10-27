@@ -580,13 +580,16 @@ final class MockWhisperService: SpeechTranscribing {
     var lastStreamingVocabulary: String?
     var lastStreamingCommit: StreamingCommitOptions?
     var streamingStartCount = 0
+    var lastStreamingLiveVocabulary: LiveVocabulary?
     func startStreaming(
         language: String?, vocabulary: String,
+        liveVocabulary: LiveVocabulary?,
         onPartial: (@Sendable (String) -> Void)?,
         commit: StreamingCommitOptions?
     ) -> RecordingTranscription? {
         streamingStartCount += 1
         lastStreamingVocabulary = vocabulary
+        lastStreamingLiveVocabulary = liveVocabulary
         streamingPartialHandler = onPartial
         lastStreamingCommit = commit
         return streamingFactory?(language)
@@ -882,6 +885,21 @@ final class MockTranscriptCleanup: TranscriptCleaning, ObservableObject {
         }
         let output = cleanHandler?(text) ?? text
         return CleanupAttempt(output: output, outcome: output == text ? .unchanged : .cleaned, duration: 0)
+    }
+
+    /// The glossary the last attempt, preview, or speculation was given.
+    var lastGlossary: [String]?
+    func attempt(_ text: String, prompt: String, glossary: [String]) async -> CleanupAttempt {
+        lastGlossary = glossary
+        return await attempt(text, prompt: prompt)
+    }
+    func preview(_ text: String, prompt: String, glossary: [String]) async -> CleanupAttempt {
+        lastGlossary = glossary
+        return await preview(text, prompt: prompt)
+    }
+    func speculate(_ text: String, prompt: String, glossary: [String]) async -> CleanupAttempt {
+        lastGlossary = glossary
+        return await speculate(text, prompt: prompt)
     }
 
     var recordedOutcomes: [CleanupAttempt] = []
@@ -1221,8 +1239,13 @@ final class MockCorrectionObserver: CorrectionObserving {
     var observedTexts: [String] = []
     var flushCallCount = 0
 
-    func observe(insertedText text: String, processID: pid_t, isKnownWord: @escaping @MainActor @Sendable (String) -> Bool) {
+    var observedLanguages: [String?] = []
+    func observe(
+        insertedText text: String, processID: pid_t, language: String?,
+        isKnownWord: @escaping @MainActor @Sendable (String) -> Bool
+    ) {
         observedTexts.append(text)
+        observedLanguages.append(language)
     }
 
     func flush() {

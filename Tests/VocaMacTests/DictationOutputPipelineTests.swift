@@ -37,6 +37,68 @@ final class DictationOutputPipelineTests: XCTestCase {
         )
     }
 
+    func testTheModelSeesTheSpeakersTermsOnThisMacOnly() async {
+        let dictionary = DictionaryContext(
+            vocabulary: ["Claude", "claude"], replacements: [WordReplacement(heard: "get hub", replacement: "GitHub")],
+            contextTerms: ["useEffect", "GitHub"], isKnownWord: { _ in true }
+        )
+        XCTAssertEqual(DictationOutputPipeline.cleanupGlossary(dictionary), ["Claude", "GitHub", "useEffect"])
+        XCTAssertEqual(DictationOutputPipeline.cleanupGlossary(nil), [])
+
+        let cleaner = MockTranscriptCleanup()
+        cleaner.cleanHandler = { _ in "Then update the **useEffect** hook." }
+        let result = await DictationOutputPipeline(cleaner: cleaner, snippets: SnippetExpander()).process(
+            "then update the use effect hook",
+            options: DictationOutputOptions(
+                profile: WritingProfile(format: .plain, rules: WritingStyle.plain.defaultRules),
+                snippetList: [], cleanupEnabled: true, rewritingEnabled: false, model: .defaultKind,
+                customPrompt: "", language: "en", autoCapitalize: true, trailingSpace: false,
+                dictionary: DictionaryContext(vocabulary: [], replacements: [], contextTerms: ["useEffect"],
+                                              isKnownWord: { ["then", "update", "the", "use", "effect", "hook"].contains($0) })
+            )
+        )
+        XCTAssertEqual(cleaner.lastGlossary, ["useEffect"])
+        XCTAssertEqual(result.text, "Then update the useEffect hook.", "Bold the speaker never dictated is dropped")
+
+        // Screen text never goes to an endpoint, and Terminal answers only lose filler.
+        let remote = MockTranscriptCleanup()
+        remote.isOnDevice = false
+        _ = await DictationOutputPipeline(cleaner: remote, snippets: SnippetExpander()).process(
+            "then update the use effect hook",
+            options: DictationOutputOptions(
+                profile: WritingProfile(format: .plain, rules: WritingStyle.plain.defaultRules),
+                snippetList: [], cleanupEnabled: true, rewritingEnabled: false, model: .defaultKind,
+                customPrompt: "", language: "en", autoCapitalize: true, trailingSpace: false, dictionary: dictionary
+            )
+        )
+        XCTAssertEqual(remote.lastGlossary, [])
+    }
+
+    func testACleanSentenceStillGoesToTheModelForADictionaryTerm() async {
+        func process(_ text: String, vocabulary: [String], screen: [String] = []) async -> MockTranscriptCleanup {
+            let cleaner = MockTranscriptCleanup()
+            _ = await DictationOutputPipeline(cleaner: cleaner, snippets: SnippetExpander()).process(
+                text,
+                options: DictationOutputOptions(
+                    profile: WritingProfile(format: .plain, rules: WritingStyle.plain.defaultRules),
+                    snippetList: [], cleanupEnabled: true, rewritingEnabled: false, model: .defaultKind,
+                    customPrompt: "", language: "en", autoCapitalize: true, trailingSpace: false,
+                    dictionary: DictionaryContext(vocabulary: vocabulary, replacements: [], contextTerms: screen,
+                                                  isKnownWord: { _ in true }),
+                    skipWhenClean: true
+                )
+            )
+            return cleaner
+        }
+        let close = await process("Ask cloud to review it.", vocabulary: ["Claude"])
+        XCTAssertEqual(close.lastGlossary, ["Claude"], "“cloud” may be a misheard Claude")
+        let exact = await process("Ask Claude to review it.", vocabulary: ["Claude"])
+        XCTAssertNil(exact.lastGlossary, "Already spelled as listed: nothing for the model")
+        // A screen term alone doesn't hold a clean dictation for the model.
+        let screen = await process("Ask cloud to review it.", vocabulary: [], screen: ["Claude"])
+        XCTAssertNil(screen.lastGlossary)
+    }
+
     func testRawBypassesEveryTransformation() async {
         let cleaner = MockTranscriptCleanup()
         let text = "  um config dot json.\n"

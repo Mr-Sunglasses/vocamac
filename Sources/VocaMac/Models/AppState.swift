@@ -2440,6 +2440,7 @@ final class AppState: ObservableObject {
         let session = adoptedCapture == nil ? whisperService.startStreaming(
             language: selectedLanguage == "auto" ? nil : selectedLanguage,
             vocabulary: recognitionHintVocabulary,
+            liveVocabulary: recordingVocabulary ?? sessionVocabulary(),
             onPartial: partialHandler,
             commit: commit
         ) : nil
@@ -2550,6 +2551,23 @@ final class AppState: ObservableObject {
 
     // MARK: - Process while speaking
 
+    /// The recognition vocabulary for a live session, updated with the
+    /// screen's terms as soon as they are read.
+    private func sessionVocabulary() -> LiveVocabulary {
+        let vocabulary = LiveVocabulary(recognitionHintVocabulary, settled: screenContextTask == nil)
+        if let contextTask = screenContextTask {
+            let customVocabulary = customVocabulary
+            let replacementTargets = replacementTargets
+            Task { @MainActor in
+                let terms = await contextTask.value
+                vocabulary.update(Self.recognitionVocabulary(
+                    customVocabulary, replacementTargets: replacementTargets, contextTerms: terms
+                ))
+            }
+        }
+        return vocabulary
+    }
+
     /// Commit-mode options for a new recording, or nil to record as before.
     /// Also creates the recording's cleanup speculator and live vocabulary.
     ///
@@ -2571,18 +2589,8 @@ final class AppState: ObservableObject {
             return nil
         }
 
-        let vocabulary = LiveVocabulary(recognitionHintVocabulary, settled: screenContextTask == nil)
+        let vocabulary = sessionVocabulary()
         recordingVocabulary = vocabulary
-        if let contextTask = screenContextTask {
-            let customVocabulary = customVocabulary
-            let replacementTargets = replacementTargets
-            Task { @MainActor in
-                let terms = await contextTask.value
-                vocabulary.update(Self.recognitionVocabulary(
-                    customVocabulary, replacementTargets: replacementTargets, contextTerms: terms
-                ))
-            }
-        }
 
         // Cleanup ahead of time only on this Mac: an endpoint would be sent
         // pieces that may never be used.
@@ -2857,8 +2865,9 @@ final class AppState: ObservableObject {
         }
         let language = selectedLanguage == "auto" ? nil : selectedLanguage
         let selectedEngine = ModelSize(rawValue: selectedModelSize)?.engine
-        // sherpa-onnx reads no vocabulary, so its batch decode starts now
-        // instead of after the History write and the screen read.
+        // sherpa-onnx models take no screen terms (only Qwen3-ASR reads the
+        // user's own words), so its batch decode starts now instead of after
+        // the History write and the screen read.
         let earlyDecode: Task<VocaTranscription, Error>?
         let decodesWholeRecording = session == nil || session?.language != language
         if selectedEngine == .sherpaOnnx, decodesWholeRecording {
@@ -2888,8 +2897,11 @@ final class AppState: ObservableObject {
 
         do {
             let contextTerms = await contextTermsRead.value
+            // Words read off the screen stay on this Mac: a remote endpoint
+            // gets only the user's own Dictionary.
             let recognitionVocabulary = Self.recognitionVocabulary(
-                customVocabulary, replacementTargets: replacementTargets, contextTerms: contextTerms
+                customVocabulary, replacementTargets: replacementTargets,
+                contextTerms: selectedEngine == .customEndpoint ? [] : contextTerms
             )
             let result: VocaTranscription
             // A commit-mode session reads the vocabulary per piece, so context
@@ -3073,7 +3085,10 @@ final class AppState: ObservableObject {
                         audioSeconds: result.audioLengthSeconds,
                         processedWhileSpeaking: processedWhileSpeaking
                     ))
-                    observeCorrections(to: output.text)
+                    observeCorrections(
+                        to: output.text,
+                        language: DictationOutputPipeline.knownLanguage(result.detectedLanguage) ?? spellingLanguage
+                    )
                 } else {
                     saveResult()
                     if nonInjectedOutputDestination == .scratchpad {
@@ -6052,7 +6067,7 @@ extension AppState {
     /// vocabulary term, plus a replacement when the engine heard different
     /// letters (not just different casing or spacing).
     func acceptDictionarySuggestion(_ suggestion: CorrectionSuggestion) {
-        learn(heard: suggestion.heard, corrected: suggestion.corrected)
+        learn(heard: suggestion.heard, corrected: suggestion.corrected, language: suggestion.language)
         dictionarySuggestions.removeAll { $0.id == suggestion.id }
         saveSuggestions()
     }
@@ -6063,12 +6078,34 @@ extension AppState {
         saveSuggestions()
     }
 
-    private func learn(heard: String, corrected: String) {
+    /// - Parameter language: The language of the dictation the correction
+    ///   was seen in; the selected one when unknown.
+    private func learn(heard: String, corrected: String, language: String?) {
         addVocabularyTerm(corrected)
-        if DictionaryCorrector.normalized(heard) != DictionaryCorrector.normalized(corrected) {
+        // A replacement fires on every later match. "cloud" fixed to
+        // "Claude" once must not turn every cloud into Claude, so a single
+        // ordinary word only teaches the term; the engines are then asked to
+        // listen for it, and cleanup may respell it in context. A phrase
+        // ("get hub" → "GitHub") is rarely said for itself, so it still
+        // becomes a replacement.
+        if DictionaryCorrector.normalized(heard) != DictionaryCorrector.normalized(corrected),
+           !Self.isOrdinaryWord(heard, isKnownWord: { self.isKnownWord($0, language ?? self.spellingLanguage) }) {
             addWordReplacement(heard: heard, replacement: corrected)
         }
         VocaLogger.info(.dictionary, "Learned a spelling from a correction")
+    }
+
+    /// Whether `text` is one ordinary word, so a replacement from it would
+    /// rewrite ordinary speech.
+    static func isOrdinaryWord(_ text: String, isKnownWord: (String) -> Bool) -> Bool {
+        let words = text.lowercased().split { !($0.isLetter || $0 == "'" || $0 == "’") }.map(String.init)
+        return words.count == 1 && isKnownWord(words[0])
+    }
+
+    /// The language to judge ordinary words in when no dictation says
+    /// which: the selected one, else English.
+    var spellingLanguage: String {
+        DictationOutputPipeline.knownLanguage(selectedLanguage) ?? "en"
     }
 
     fileprivate func receiveCorrections(_ corrections: [CorrectionLearner.Correction]) {
@@ -6079,16 +6116,17 @@ extension AppState {
             let key = CorrectionSuggestion.key(heard: correction.heard, corrected: correction.corrected)
             guard !dismissedSuggestionKeys.contains(key) else { continue }
             if mode == .automatic {
-                learn(heard: correction.heard, corrected: correction.corrected)
+                learn(heard: correction.heard, corrected: correction.corrected, language: correction.language)
                 continue
             }
             if let index = dictionarySuggestions.firstIndex(where: { $0.id == key }) {
                 dictionarySuggestions[index].occurrences += 1
                 dictionarySuggestions[index].lastSeen = Date()
+                dictionarySuggestions[index].language = correction.language ?? dictionarySuggestions[index].language
             } else {
                 dictionarySuggestions.insert(
                     CorrectionSuggestion(heard: correction.heard, corrected: correction.corrected,
-                                         occurrences: 1, lastSeen: Date()),
+                                         occurrences: 1, lastSeen: Date(), language: correction.language),
                     at: 0
                 )
             }
@@ -6102,11 +6140,13 @@ extension AppState {
         receiveCorrections(corrections)
     }
 
-    fileprivate func observeCorrections(to text: String) {
+    fileprivate func observeCorrections(to text: String, language: String) {
         guard learnCorrectionsMode != .off, let correctionObserver,
               let processID = NSWorkspace.shared.frontmostApplication?.processIdentifier else { return }
         let isKnownWord = self.isKnownWord
-        correctionObserver.observe(insertedText: text, processID: processID) { isKnownWord($0, "en") }
+        correctionObserver.observe(insertedText: text, processID: processID, language: language) {
+            isKnownWord($0, language)
+        }
     }
 
     /// Start reading names and identifiers from the screen while the user speaks.
@@ -6118,9 +6158,10 @@ extension AppState {
         guard injectResult, let reader = screenContextReader else { return }
         if useScreenContext {
             let isKnownWord = self.isKnownWord
+            let language = spellingLanguage
             screenContextTask = Task { @MainActor in
                 guard let text = await reader.captureFrontmostContext(), !Task.isCancelled else { return [] }
-                return ScreenContextTerms.extract(from: text) { isKnownWord($0, "en") }
+                return ScreenContextTerms.extract(from: text) { isKnownWord($0, language) }
             }
         }
         if !websiteStyleBindings.isEmpty {
@@ -6186,13 +6227,17 @@ extension AppState {
         return currentURL
     }
 
-    /// Whisper gets the same ephemeral screen terms as the post-corrector.
+    /// The hint list every engine reads its vocabulary from: screen terms,
+    /// then replacement targets and the user's own terms.
     ///
-    /// WhisperKit keeps only the last ~220 prompt tokens and trims from the
-    /// front, so the user's own vocabulary goes last and screen terms fill a
-    /// small budget ahead of it: a page full of identifiers is what gets cut,
-    /// never the user's words. A long glossary also makes Whisper more likely
-    /// to echo it back as a transcript.
+    /// Each engine keeps what it can take from the end of the list: Whisper
+    /// `WhisperService.maximumPromptTokens`, Apple Speech and Parakeet 100
+    /// terms each (`RecognitionHints`), the custom endpoint a short prompt.
+    /// So the user's words go last and are never cut, and the screen terms
+    /// most worth hearing (`ScreenContextTerms.extract` puts them first) sit
+    /// right before them. The budget here only bounds the list as a whole; a
+    /// tighter one sized for Whisper left Apple Speech and Parakeet without
+    /// screen terms once the user had about 40 words.
     static func recognitionVocabulary(
         _ vocabulary: String,
         replacementTargets: [String] = [],
@@ -6220,12 +6265,14 @@ extension AppState {
             screenTerms.append(term)
             used += term.count + 2
         }
-        return (screenTerms + userTerms).joined(separator: ", ")
+        // Most relevant last among them, so a trim from the front drops the
+        // least relevant first.
+        return (screenTerms.reversed() + userTerms).joined(separator: ", ")
     }
 
-    /// About 200 tokens of glossary at roughly three characters per token.
-    static let recognitionPromptCharacterBudget = 600
-    static let maximumRecognitionContextTerms = 40
+    /// Enough for the 100 terms Apple Speech and Parakeet take.
+    static let recognitionPromptCharacterBudget = 2_000
+    static let maximumRecognitionContextTerms = 100
 
     fileprivate func loadDictionary() {
         wordReplacements = Self.loadJSON([WordReplacement].self, forKey: PreferenceKey.wordReplacements) ?? []

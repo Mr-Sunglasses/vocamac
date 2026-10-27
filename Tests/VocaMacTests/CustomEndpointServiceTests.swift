@@ -271,7 +271,8 @@ final class CustomEndpointServiceTests: XCTestCase {
         _ service: CustomEndpointService,
         body: String = #"{"text": "hello world"}"#,
         status: Int = 200,
-        language: String? = nil
+        language: String? = nil,
+        vocabulary: String = ""
     ) async throws -> VocaTranscription {
         try await service.loadModel(name: ModelSize.customEndpoint.rawValue)
         StubEndpointURLProtocol.install { [requestBox] request in
@@ -284,7 +285,7 @@ final class CustomEndpointServiceTests: XCTestCase {
         }
         return try await service.transcribe(
             audioData: [Float](repeating: 0.5, count: 32_000),
-            language: language, translate: false, vocabulary: ""
+            language: language, translate: false, vocabulary: vocabulary
         )
     }
 
@@ -411,6 +412,23 @@ final class CustomEndpointServiceTests: XCTestCase {
         XCTAssertTrue(body.contains("name=\"response_format\"\r\n\r\njson"))
         XCTAssertTrue(body.contains("name=\"language\"\r\n\r\nde"))
         XCTAssertFalse(body.contains("name=\"model\""))
+    }
+
+    func testVocabularyGoesAsAGlossaryPrompt() async throws {
+        let service = configuredService(kind: .whisperCpp)
+        _ = try await transcribe(service, vocabulary: "Namrata, VocaMac")
+        XCTAssertTrue(try XCTUnwrap(capturedBody).contains("name=\"prompt\"\r\n\r\nGlossary: Namrata, VocaMac"))
+
+        let openAI = configuredService()
+        _ = try await transcribe(openAI)
+        XCTAssertFalse(try XCTUnwrap(capturedBody).contains("name=\"prompt\""), "No terms, no prompt")
+    }
+
+    func testALongGlossaryKeepsTheTermsAtItsEnd() throws {
+        let screen = (0..<200).map { "screenTerm\($0)" }.joined(separator: ", ")
+        let prompt = try XCTUnwrap(CustomEndpointService.prompt(for: screen + ", Namrata"))
+        XCTAssertTrue(prompt.hasSuffix("screenTerm199, Namrata"))
+        XCTAssertLessThanOrEqual(prompt.count, CustomEndpointService.maximumPromptCharacters + "Glossary: ".count)
     }
 
     func testUploadCarriesA16kHzMonoWAV() async throws {

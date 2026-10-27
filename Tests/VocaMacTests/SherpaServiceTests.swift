@@ -430,3 +430,16 @@ final class SherpaLiveSessionTests: XCTestCase {
         XCTAssertTrue(calls.isEmpty)
     }
 }
+
+final class SherpaHotwordTests: XCTestCase {
+    func testHotwordsKeepTheUsersTermsAndStayShort() throws {
+        let screen = (0..<40).map { "screenTerm\($0)" }.joined(separator: ", ")
+        let hotwords = try XCTUnwrap(SherpaService.hotwords(from: screen + ", Namrata, Smith, Jones"))
+        let terms = hotwords.split(separator: ",").map(String.init)
+        XCTAssertEqual(terms.last, "Jones")
+        XCTAssertTrue(terms.contains("Namrata"))
+        XCTAssertLessThanOrEqual(terms.count, SherpaService.maximumHotwords)
+        XCTAssertLessThanOrEqual(hotwords.count, SherpaService.maximumHotwordCharacters)
+        XCTAssertNil(SherpaService.hotwords(from: ""))
+    }
+}

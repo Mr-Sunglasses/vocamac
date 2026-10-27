@@ -39,6 +39,32 @@ final class EditMergeTests: XCTestCase {
                        "the code is four two four two")
     }
 
+    func testAMisheardWordTakesTheSpellingOfAListedTerm() {
+        func merge(_ original: String, _ candidate: String, glossary: [String], level: CleanupLevel = .medium) -> String {
+            EditMerge.merge(original: original, candidate: candidate, level: level, names: ["prya"],
+                            glossary: glossary, isKnownWord: { ["ask", "cloud", "to", "review", "it", "use", "effect",
+                                                                 "update", "the", "hook", "bob", "send"].contains($0) }).text
+        }
+        XCTAssertEqual(merge("ask cloud to review it", "Ask Claude to review it.", glossary: ["Claude"]),
+                       "Ask Claude to review it.")
+        XCTAssertEqual(merge("update the use effect hook", "Update the useEffect hook.", glossary: ["useEffect"]),
+                       "Update the useEffect hook.")
+        // Even a name, when the speaker listed how it is spelled.
+        XCTAssertEqual(merge("send it to Prya", "Send it to Priya.", glossary: ["Priya"]), "Send it to Priya.")
+        // Not listed, listed differently, too far from what was heard, or Light.
+        XCTAssertEqual(merge("ask cloud to review it", "Ask Claude to review it.", glossary: []),
+                       "Ask cloud to review it.")
+        XCTAssertEqual(merge("ask cloud to review it", "Ask claude to review it.", glossary: ["Claude"]),
+                       "Ask cloud to review it.")
+        XCTAssertEqual(merge("ask bob to review it", "Ask Claude to review it.", glossary: ["Claude"]),
+                       "Ask bob to review it.")
+        XCTAssertEqual(merge("ask cloud to review it", "Ask Claude to review it.", glossary: ["Claude"], level: .light),
+                       "Ask cloud to review it.")
+        // "not in" is spelled close to "Notion", but a negation never goes.
+        XCTAssertEqual(merge("it is not in the folder", "It is Notion the folder.", glossary: ["Notion"]),
+                       "It is not in the folder.")
+    }
+
     /// The system spell checker accepts every single letter, so a fragment
     /// rule that asked it about "S" never fired in the app.
     func testClippedStartsGoEvenWhenTheSpellCheckerKnowsEveryLetter() {
