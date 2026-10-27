@@ -136,6 +136,82 @@ final class DictationOutputPipelineTests: XCTestCase {
         XCTAssertEqual(unguarded.text, "My address is here")
     }
 
+    /// #389: phrases said twice in a row go without the model, at Medium
+    /// and above, in every app that cleans up.
+    func testRepeatedPhrasesGoWithoutTheModel() async {
+        let result = await process(
+            "for voice to voice to text and you can see you can see the the text",
+            cleaner: MockTranscriptCleanup(), enabled: false
+        )
+        XCTAssertEqual(result.text, "For voice to text and you can see the text")
+        XCTAssertTrue(result.summary.contains("repeated words removed"), result.summary)
+        let light = await process("you can see you can see", cleaner: MockTranscriptCleanup(), enabled: false, level: .light)
+        XCTAssertTrue(light.text.lowercased().contains("you can see you can see"), light.text)
+        // A command repeats arguments; only sentences lose a repeat.
+        let terminal = await process("git add the the docs", cleaner: MockTranscriptCleanup(), format: .terminal, enabled: false)
+        XCTAssertEqual(terminal.text, "git add the the docs")
+        // Even when the command reads like a sentence: "the" may be a file.
+        let sentenceLike = await process("cat the the and other files", cleaner: MockTranscriptCleanup(),
+                                         format: .terminal, enabled: false)
+        XCTAssertEqual(sentenceLike.text, "cat the the and other files")
+    }
+
+    func testRepeatedPhraseRules() {
+        let cases: [(String, String)] = [
+            ("You can see you can see the result.", "You can see the result."),
+            ("and you can see you can see.", "and you can see."),
+            ("in the in the morning", "in the morning"),
+            ("I want to I want to go", "I want to go"),
+            ("go to to the store", "go to the store"),
+            ("what what what there is", "what there is"),
+            // Meant, or for the model to judge.
+            ("thank you, thank you", "thank you, thank you"),
+            ("we need to, we need to ship", "we need to, we need to ship"),
+            ("come on come on", "come on come on"),
+            // Not even shifted inside a run that is meant.
+            ("come on come on come on", "come on come on come on"),
+            ("you can see you can see you can see you can see the the result", "you can see the result"),
+            ("no wait no wait no wait", "no wait no wait no wait"),
+            ("no no no", "no no no"),
+            ("I know that that works", "I know that that works"),
+            ("she had had enough", "she had had enough"),
+            ("bye bye", "bye bye"),
+            ("cleanup cleanup tab", "cleanup cleanup tab"),
+            ("New York New York is a song", "New York New York is a song"),
+            ("the code is four two four two", "the code is four two four two"),
+        ]
+        for (input, expected) in cases {
+            XCTAssertEqual(WritingStyleEngine.removeRepeatedPhrases(input).text, expected, input)
+        }
+    }
+
+    func testAFormalRewriteMayDropAnAccidentalCopy() {
+        XCTAssertNil(RewriteValidation.rejectionReason(
+            "You can see the result.", original: "you can see you can see the result"
+        ))
+        XCTAssertNotNil(RewriteValidation.rejectionReason(
+            "The team builds and ships.", original: "the team builds and the team ships"
+        ))
+        // Keeping the copy is fine too: the style change is what matters.
+        XCTAssertNil(RewriteValidation.rejectionReason(
+            "We can, we can resolve this.", original: "We can, we can fix this."
+        ))
+        // A sentence said twice was said twice.
+        XCTAssertNotNil(RewriteValidation.rejectionReason(
+            "Do not touch it.", original: "Do not touch it. Do not touch it."
+        ))
+        XCTAssertEqual(RewriteValidation.collapsingAdjacentRepeats(in: "come on come on come on"),
+                       "come on come on come on")
+        // A six-word unit that is a three-word phrase twice is no refusal:
+        // every copy but the last may go, and a style change is kept.
+        XCTAssertEqual(RewriteValidation.collapsingAdjacentRepeats(
+            in: "you can see, you can see, you can see, you can see the result"
+        ), "you can see the result")
+        XCTAssertNil(RewriteValidation.rejectionReason(
+            "You can see the outcome.", original: "you can see, you can see, you can see, you can see the result"
+        ))
+    }
+
     func testCutOffWordRules() {
         let known: Set<String> = [
             "please", "improve", "sorry", "supporting", "are", "diff", "different", "them", "theme",

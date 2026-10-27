@@ -31,6 +31,17 @@ final class CleanupSalvageTests: XCTestCase {
         XCTAssertEqual(salvage("this is very very important", "this is very important"), "this is very very important")
     }
 
+    func testRunsOfCopiesAndLongerPhrasesGo() {
+        XCTAssertEqual(salvage("what what what is this", "what is this"), "what is this")
+        XCTAssertEqual(salvage("you can see you can see the result", "you can see the result"),
+                       "you can see the result")
+        // The model kept the first copy: the earlier ones go instead, with their comma.
+        XCTAssertEqual(salvage("we need to, we need to, we need to ship it", "we need to, ship it"),
+                       "we need to ship it")
+        XCTAssertEqual(salvage("I know that that works", "I know that works"), "I know that that works")
+        XCTAssertEqual(salvage("dial four two four two", "dial four two"), "dial four two four two")
+    }
+
     func testClippedStartsOfTheNextWordGo() {
         // Like the system spell checker: every single letter is a word.
         let isKnownWord: (String) -> Bool = { $0.count == 1 || ["sad", "scan", "build", "deploy"].contains($0) }
