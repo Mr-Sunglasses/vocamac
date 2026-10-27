@@ -44,6 +44,15 @@ enum TermSuggestionFinder {
             guard let term, !removed.contains(where: listed.contains) else { continue }
             found.append((removed.joined(separator: " ").lowercased(), term))
         }
+        // A case-only respelling ("userid" → "userId") lines up as the same
+        // word above, so it is found here: a listed term the speaker's words
+        // only had in another casing.
+        let spoken = Set(source)
+        for term in listed where !spoken.contains(term) && target.contains(term)
+            && source.contains(where: { $0.lowercased() == term.lowercased() })
+            && !found.contains(where: { $0.term == term }) {
+            found.append((term.lowercased(), term))
+        }
         return found
     }
 
@@ -60,7 +69,7 @@ enum TermSuggestionFinder {
     /// thread.
     static func capitalizedCandidates(in texts: [String]) -> [(term: String, dictations: Int)] {
         var counts: [String: Int] = [:]
-        for text in texts.suffix(maximumDictations) {
+        for text in texts.prefix(maximumDictations) {
             var seen = Set<String>()
             let tokens = words(text)
             for (index, token) in tokens.enumerated() where isCapitalizedName(token) {

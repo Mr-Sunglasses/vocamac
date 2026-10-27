@@ -2425,7 +2425,12 @@ final class AppState: ObservableObject {
         // read by the time the user stops speaking.
         if injectResult, activeCommandTarget == nil {
             let target = frontmostAppResolver.currentFrontmostApp() ?? pendingTargetApp
-            Task { @MainActor [weak self] in await self?.warmCleanupModel(for: target) }
+            // The prompt a coding agent's terminal will use, not Terminal's.
+            let agentTask = codingAgentTask
+            Task { @MainActor [weak self] in
+                let agentTerminal = await Self.value(of: agentTask, within: Self.screenContextTimeout, otherwise: nil)
+                await self?.warmCleanupModel(for: target, codingAgentTerminal: agentTerminal)
+            }
         }
         appStatus = .recording
         liveTranscript = ""
@@ -5951,10 +5956,13 @@ extension AppState {
     /// terminal, the next dictation used to read all of it while the user
     /// waited. This reads it ahead: at launch, after an edit, and when a
     /// recording starts, while the user is still speaking.
-    func warmCleanupModel(for target: RunningAppSnapshot? = nil) async {
+    func warmCleanupModel(
+        for target: RunningAppSnapshot? = nil, codingAgentTerminal: RunningAppSnapshot? = nil
+    ) async {
         guard cleanupUsesLocalModel else { return }
         let target = target ?? frontmostAppResolver.styleTargetApp()
-        let profile = nextWritingProfile ?? resolveWritingStyle(for: target).profile
+        let profile = nextWritingProfile
+            ?? resolveWritingStyle(for: target, codingAgentTerminal: codingAgentTerminal).profile
         let language = selectedLanguage == "auto" ? nil : selectedLanguage
         await outputPipeline.warmUp(
             options: dictationOptions(profile: profile, language: language, contextTerms: [])
@@ -6228,8 +6236,9 @@ extension AppState {
         if let last = UserDefaults.standard.object(forKey: PreferenceKey.lastFrequentNameScan) as? Date,
            now.timeIntervalSince(last) < 24 * 60 * 60 { return }
         UserDefaults.standard.set(now, forKey: PreferenceKey.lastFrequentNameScan)
+        // History keeps the newest first: these are the most recent.
         let entries = historyStore.entries.filter { $0.status == .completed && $0.commandOriginal == nil }
-            .suffix(TermSuggestionFinder.maximumDictations)
+            .prefix(TermSuggestionFinder.maximumDictations)
         let texts = entries.map(\.finalText)
         // The commonest language decides which spell checker judges a name.
         let language = Dictionary(grouping: entries.compactMap { DictationOutputPipeline.knownLanguage($0.language) }) { $0 }

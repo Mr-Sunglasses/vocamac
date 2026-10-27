@@ -86,6 +86,19 @@ final class CodingAgentStyleTests: XCTestCase {
     }
 
     @MainActor
+    func testRecordingWarmsTheProsePromptForAnAgent() async {
+        let (appState, mocks) = AppState.makeTestState()
+        appState.transcriptCleanupEnabled = true
+        let ghostty = RunningAppSnapshot(displayName: "Ghostty", bundleIdentifier: "com.mitchellh.ghostty", processName: "ghostty")
+        appState.writingStyleBindings = [AppStyleBinding.from(snapshot: ghostty, style: .terminal)]
+        await appState.warmCleanupModel(for: ghostty)
+        await appState.warmCleanupModel(for: ghostty, codingAgentTerminal: ghostty)
+        XCTAssertEqual(mocks.transcriptCleanup.primedPrompts.first, RewriteValidation.technicalPrompt)
+        XCTAssertNotEqual(mocks.transcriptCleanup.primedPrompts.last, RewriteValidation.technicalPrompt,
+                          "An agent's terminal cleans up prose, so that prompt is the one read ahead")
+    }
+
+    @MainActor
     func testTheAgentMustRunInTheAppTheTextGoesTo() {
         let (appState, _) = AppState.makeTestState()
         appState.codingAgentsAsProse = true
@@ -116,9 +129,29 @@ final class TermSuggestionFinderTests: XCTestCase {
         XCTAssertTrue(TermSuggestionFinder.screenRespellings(
             raw: "push it to GitHub", final: "Push it to GitHub.", terms: ["GitHub"]
         ).isEmpty)
+        // Only the casing changed, with no spacing change.
+        let cased = TermSuggestionFinder.screenRespellings(
+            raw: "fix the userid bug", final: "Fix the userId bug.", terms: ["userId"]
+        )
+        XCTAssertEqual(cased.map(\.heard), ["userid"])
+        XCTAssertEqual(cased.map(\.term), ["userId"])
         XCTAssertTrue(TermSuggestionFinder.screenRespellings(
             raw: "send it today", final: "Send it tomorrow.", terms: ["GitHub"]
         ).isEmpty)
+    }
+
+    func testOnlyTheMostRecentDictationsAreScanned() {
+        // Newest first, as History keeps them: a name only in the newest
+        // dictations is found even past the limit.
+        let recent = Array(repeating: "Ask Djangonaut Priyanka about it", count: 3)
+        let old = Array(repeating: "Ask Oldname about it", count: TermSuggestionFinder.maximumDictations)
+        let candidates = TermSuggestionFinder.capitalizedCandidates(in: recent + old).map(\.term)
+        XCTAssertTrue(candidates.contains("Priyanka"))
+        XCTAssertTrue(candidates.contains("Oldname"), "Still within the most recent \(TermSuggestionFinder.maximumDictations)")
+        let pastLimit = TermSuggestionFinder.capitalizedCandidates(
+            in: recent + old + Array(repeating: "Ask Ancient about it", count: 5)
+        ).map(\.term)
+        XCTAssertFalse(pastLimit.contains("Ancient"))
     }
 
     func testNamesSaidInSeveralDictations() {
