@@ -402,6 +402,16 @@ enum AccessibilityTextReader {
         return nil
     }
 
+    /// The title of `processID`'s focused window, which a terminal sets to
+    /// what its tab in front is running.
+    static func focusedWindowTitle(processID: pid_t) -> String? {
+        guard AXIsProcessTrusted(), processID != ProcessInfo.processInfo.processIdentifier else { return nil }
+        let app = AXUIElementCreateApplication(processID)
+        AXUIElementSetMessagingTimeout(app, timeout)
+        guard let window = copyElement(app, kAXFocusedWindowAttribute) else { return nil }
+        return copyString(window, kAXTitleAttribute)
+    }
+
     /// The text visible in the element, falling back to the text around the
     /// caret, plus the window title. Used only to find names and identifiers.
     static func visibleContext(processID: pid_t) -> String? {

@@ -470,6 +470,10 @@ final class AppState: ObservableObject {
     @UserDefault(PreferenceKey.modelKeepAliveEnabled) var modelKeepAliveEnabled: Bool = false
     @UserDefault(PreferenceKey.modelKeepAliveIdleTimeout) var modelKeepAliveIdleTimeoutSeconds: Double = 300
     @UserDefault(PreferenceKey.writingStyleEnabled) var writingStyleEnabled: Bool = true
+    /// Clean up dictation into a terminal as prose when its tab in front runs
+    /// a coding agent (`CodingAgentDetector`). Not in the App Store build,
+    /// whose sandbox can't read another app's processes.
+    @UserDefault(PreferenceKey.codingAgentsAsProse) var codingAgentsAsProse: Bool = true
     @UserDefault(PreferenceKey.writingStyleDefault) var writingStyleDefault: WritingStyle = .plain
     @UserDefault(PreferenceKey.writingIntent) var writingIntent: WritingIntent = .preserve
     @UserDefault(PreferenceKey.writingRewriteEnabled) var writingRewriteEnabled: Bool = false
@@ -924,6 +928,9 @@ final class AppState: ObservableObject {
     /// Names and identifiers read from the screen when recording started.
     private var screenContextTask: Task<[String], Never>?
     private var screenDocumentURLTask: Task<URL?, Never>?
+    /// The terminal found running a coding agent when recording started, or
+    /// nil (see `startCodingAgentDetection`).
+    private var codingAgentTask: Task<RunningAppSnapshot?, Never>?
     /// The menu's read of the target app's page address, for website rules.
     private var websiteRuleRefresh: Task<Void, Never>?
 
@@ -1926,7 +1933,13 @@ final class AppState: ObservableObject {
     // MARK: - Writing Styles
 
     /// Resolve the style for a target app using the current preferences.
-    func resolveWritingStyle(for target: RunningAppSnapshot?, documentURL: URL? = nil) -> ResolvedWritingStyle {
+    ///
+    /// - Parameter codingAgentTerminal: The terminal found running a coding
+    ///   agent; its Terminal rule then cleans up prose (see
+    ///   `WritingStyleResolver.applyingCodingAgent`).
+    func resolveWritingStyle(
+        for target: RunningAppSnapshot?, documentURL: URL? = nil, codingAgentTerminal: RunningAppSnapshot? = nil
+    ) -> ResolvedWritingStyle {
         let appRule = WritingStyleResolver.resolve(
             target: target,
             bindings: writingStyleBindings,
@@ -1934,9 +1947,12 @@ final class AppState: ObservableObject {
             isEnabled: writingStyleEnabled,
             defaultIntent: writingIntent
         )
-        return WritingStyleResolver.applyingWebsiteRule(
+        let resolved = WritingStyleResolver.applyingWebsiteRule(
             appRule, url: documentURL, bindings: websiteStyleBindings
         )
+        let detected = codingAgentsAsProse && codingAgentTerminal != nil
+            && Self.sameOutputTarget(codingAgentTerminal, target)
+        return WritingStyleResolver.applyingCodingAgent(resolved, detected: detected)
     }
 
     /// Recompute `activeWritingStyle` for the app the user is working in.
@@ -1958,6 +1974,16 @@ final class AppState: ObservableObject {
         if activeWritingTargetName != target?.displayName { activeWritingTargetName = target?.displayName }
         websiteRuleRefresh?.cancel()
         websiteRuleRefresh = nil
+        // The menu says when a terminal's tab runs a coding agent.
+        if readingWebsite, style.style == .terminal, let target,
+           let detection = codingAgentDetection(for: target) {
+            websiteRuleRefresh = Task { @MainActor [weak self] in
+                guard let agentTerminal = await detection.value, let self, !Task.isCancelled else { return }
+                let style = resolveWritingStyle(for: target, codingAgentTerminal: agentTerminal)
+                if activeWritingStyle != style { activeWritingStyle = style }
+            }
+            return
+        }
         guard readingWebsite, !websiteStyleBindings.isEmpty,
               let target, let reader = screenContextReader else { return }
         websiteRuleRefresh = Task { @MainActor [weak self] in
@@ -2391,6 +2417,10 @@ final class AppState: ObservableObject {
         // review is waiting on.
         dismissCommandReview()
         startScreenContextCapture(injectResult: injectResult)
+        codingAgentTask?.cancel()
+        codingAgentTask = injectResult
+            ? (frontmostAppResolver.currentFrontmostApp() ?? pendingTargetApp).flatMap(codingAgentDetection(for:))
+            : nil
         // A dictation is coming: have the cleanup model loaded and its prompt
         // read by the time the user stops speaking.
         if injectResult, activeCommandTarget == nil {
@@ -2598,7 +2628,8 @@ final class AppState: ObservableObject {
             recordingSpeculator = makeSpeculator(
                 target: frontmostAppResolver.currentFrontmostApp() ?? pendingTargetApp,
                 contextTask: screenContextTask,
-                documentURLTask: screenDocumentURLTask
+                documentURLTask: screenDocumentURLTask,
+                codingAgentTask: codingAgentTask
             )
         }
 
@@ -2662,7 +2693,8 @@ final class AppState: ObservableObject {
     private func makeSpeculator(
         target: RunningAppSnapshot?,
         contextTask: Task<[String], Never>?,
-        documentURLTask: Task<URL?, Never>?
+        documentURLTask: Task<URL?, Never>?,
+        codingAgentTask: Task<RunningAppSnapshot?, Never>?
     ) -> CleanupSpeculator {
         var cachedProfile: WritingProfile?
         var cachedTerms: [String]?
@@ -2670,8 +2702,11 @@ final class AppState: ObservableObject {
             guard let self else { return nil }
             if cachedProfile == nil {
                 let documentURL = await Self.awaitDocumentURL(documentURLTask)
+                let agentTerminal = await Self.value(of: codingAgentTask, within: Self.screenContextTimeout, otherwise: nil)
                 cachedProfile = self.nextWritingProfile
-                    ?? self.resolveWritingStyle(for: target, documentURL: documentURL).profile
+                    ?? self.resolveWritingStyle(
+                        for: target, documentURL: documentURL, codingAgentTerminal: agentTerminal
+                    ).profile
             }
             if cachedTerms == nil {
                 cachedTerms = await Self.awaitContextTerms(contextTask)
@@ -2852,6 +2887,9 @@ final class AppState: ObservableObject {
         screenContextTask = nil
         let documentURLTask = screenDocumentURLTask
         screenDocumentURLTask = nil
+        let agentTask = codingAgentTask
+        codingAgentTask = nil
+        let codingAgentRead = Task { await Self.value(of: agentTask, within: Self.screenContextTimeout, otherwise: nil) }
         // Both screen reads wait out one timeout together, alongside the
         // History write, rather than one after the other.
         let contextTermsRead = Task { await Self.awaitContextTerms(contextTask) }
@@ -2978,7 +3016,9 @@ final class AppState: ObservableObject {
                 let target = frontmostAppResolver.currentFrontmostApp()
                     ?? pendingTargetApp ?? frontmostAppResolver.lastActiveApp()
                 let documentURL = await documentURLCheck.value
-                let resolved = resolveWritingStyle(for: target, documentURL: documentURL)
+                let resolved = resolveWritingStyle(
+                    for: target, documentURL: documentURL, codingAgentTerminal: await codingAgentRead.value
+                )
                 // The scratchpad is plain notes: format it with the default
                 // style, not whichever app the Settings preview was left on.
                 let profile: WritingProfile
@@ -2997,7 +3037,7 @@ final class AppState: ObservableObject {
                 let spoken = laysOutParagraphs
                     ? await Self.paragraphsAtPauses(result, audio: audioData)
                     : result.text
-                let output = await dictationOutputPipeline.process(
+                var output = await dictationOutputPipeline.process(
                     spoken, profile: profile, snippetList: snippets,
                     cleanupEnabled: transcriptCleanupEnabled, rewritingEnabled: writingRewriteEnabled,
                     model: selectedCleanupModelKind, customPrompt: effectiveCleanupPrompt,
@@ -3011,6 +3051,12 @@ final class AppState: ObservableObject {
                     // while recording; an endpoint would get one call per piece.
                     pieces: speculator == nil ? [] : result.pieces, speculator: speculator
                 )
+                if injectResult, resolved.codingAgent, profile == resolved.profile {
+                    output = DictationOutputResult(
+                        original: output.original, text: output.text,
+                        summary: "\(Self.codingAgentSummary) · \(output.summary)"
+                    )
+                }
                 if !result.pieces.isEmpty {
                     Self.logPieceSummary(
                         result: result, speculator: speculator,
@@ -3085,10 +3131,11 @@ final class AppState: ObservableObject {
                         audioSeconds: result.audioLengthSeconds,
                         processedWhileSpeaking: processedWhileSpeaking
                     ))
-                    observeCorrections(
-                        to: output.text,
-                        language: DictationOutputPipeline.knownLanguage(result.detectedLanguage) ?? spellingLanguage
-                    )
+                    let dictationLanguage = DictationOutputPipeline.knownLanguage(result.detectedLanguage) ?? spellingLanguage
+                    observeCorrections(to: output.text, language: dictationLanguage)
+                    noteScreenRespellings(raw: result.text, final: output.text, screenTerms: contextTerms,
+                                          language: dictationLanguage)
+                    suggestFrequentNamesIfDue()
                 } else {
                     saveResult()
                     if nonInjectedOutputDestination == .scratchpad {
@@ -3248,6 +3295,8 @@ final class AppState: ObservableObject {
         screenContextTask = nil
         screenDocumentURLTask?.cancel()
         screenDocumentURLTask = nil
+        codingAgentTask?.cancel()
+        codingAgentTask = nil
         resetCommandModeState()
         liveTranscript = ""
         cursorOverlay.hide()
@@ -6126,13 +6175,79 @@ extension AppState {
             } else {
                 dictionarySuggestions.insert(
                     CorrectionSuggestion(heard: correction.heard, corrected: correction.corrected,
-                                         occurrences: 1, lastSeen: Date(), language: correction.language),
+                                         occurrences: 1, lastSeen: Date(), language: correction.language,
+                                         source: correction.source),
                     at: 0
                 )
             }
         }
         dictionarySuggestions = Array(dictionarySuggestions.prefix(50))
         saveSuggestions()
+    }
+
+    // MARK: - Suggested terms
+
+    /// Screen respellings seen before, by suggestion key, until one has
+    /// been seen often enough to suggest.
+    private var screenRespellingCounts: [String: Int] {
+        get { UserDefaults.standard.dictionary(forKey: PreferenceKey.screenRespellingCounts) as? [String: Int] ?? [:] }
+        set { UserDefaults.standard.set(newValue, forKey: PreferenceKey.screenRespellingCounts) }
+    }
+
+    /// Times a screen term must replace the same words before it is
+    /// suggested: once may be a coincidence, twice is a pattern.
+    static let screenRespellingsBeforeSuggesting = 2
+
+    /// Count each place `final` has a screen term where the engine heard
+    /// other words, and suggest the term once it keeps happening.
+    func noteScreenRespellings(raw: String, final: String, screenTerms: [String], language: String?) {
+        guard learnCorrectionsMode != .off, !screenTerms.isEmpty else { return }
+        let listed = Set(vocabularyTerms.map { $0.lowercased() })
+        var counts = screenRespellingCounts
+        var due: [CorrectionLearner.Correction] = []
+        for (heard, term) in TermSuggestionFinder.screenRespellings(raw: raw, final: final, terms: screenTerms)
+        where !listed.contains(term.lowercased()) {
+            let key = CorrectionSuggestion.key(heard: heard, corrected: term)
+            counts[key, default: 0] += 1
+            if counts[key, default: 0] >= Self.screenRespellingsBeforeSuggesting {
+                due.append(CorrectionLearner.Correction(heard: heard, corrected: term, language: language, source: .screen))
+            }
+        }
+        // Bounded: the rarest go first.
+        if counts.count > 200 {
+            counts = Dictionary(uniqueKeysWithValues: counts.sorted { $0.value > $1.value }.prefix(150).map { ($0.key, $0.value) })
+        }
+        screenRespellingCounts = counts
+        if !due.isEmpty { receiveCorrections(due) }
+    }
+
+    /// Once a day, look through recent History for names the spell checker
+    /// doesn't know that keep coming up, and suggest them.
+    func suggestFrequentNamesIfDue(now: Date = Date()) {
+        guard learnCorrectionsMode != .off else { return }
+        if let last = UserDefaults.standard.object(forKey: PreferenceKey.lastFrequentNameScan) as? Date,
+           now.timeIntervalSince(last) < 24 * 60 * 60 { return }
+        UserDefaults.standard.set(now, forKey: PreferenceKey.lastFrequentNameScan)
+        let entries = historyStore.entries.filter { $0.status == .completed && $0.commandOriginal == nil }
+            .suffix(TermSuggestionFinder.maximumDictations)
+        let texts = entries.map(\.finalText)
+        // The commonest language decides which spell checker judges a name.
+        let language = Dictionary(grouping: entries.compactMap { DictationOutputPipeline.knownLanguage($0.language) }) { $0 }
+            .max { $0.value.count < $1.value.count }?.key ?? spellingLanguage
+        Task { @MainActor [weak self] in
+            let candidates = await Task.detached(priority: .utility) {
+                TermSuggestionFinder.capitalizedCandidates(in: texts)
+            }.value
+            guard let self, !candidates.isEmpty else { return }
+            let names = TermSuggestionFinder.unknownNames(
+                candidates, vocabulary: vocabularyTerms, isKnownWord: { self.isKnownWord($0, language) }
+            )
+            guard !names.isEmpty else { return }
+            VocaLogger.info(.dictionary, "Found \(names.count) name(s) said in several dictations")
+            receiveCorrections(names.map {
+                CorrectionLearner.Correction(heard: $0, corrected: $0, language: language, source: .frequent)
+            })
+        }
     }
 
     /// Feed corrections through the same path the observer uses. Tests only.
@@ -6146,6 +6261,30 @@ extension AppState {
         let isKnownWord = self.isKnownWord
         correctionObserver.observe(insertedText: text, processID: processID, language: language) {
             isKnownWord($0, language)
+        }
+    }
+
+    /// What History and the menu say for a dictation to a coding agent.
+    static let codingAgentSummary = "Coding agent in Terminal — prose cleanup"
+
+    /// Look, off the main thread, for a coding agent in `target`'s tab in
+    /// front, when `target` gets the Terminal style and the setting allows.
+    /// The task returns `target` when one runs there, nil otherwise.
+    func codingAgentDetection(for target: RunningAppSnapshot) -> Task<RunningAppSnapshot?, Never>? {
+        guard codingAgentsAsProse, AppDistribution.canReadOtherProcesses,
+              resolveWritingStyle(for: target).style == .terminal,
+              let app = NSWorkspace.shared.runningApplications.first(where: {
+                  Self.sameOutputTarget(target, RunningAppSnapshot(
+                      displayName: $0.localizedName ?? "", bundleIdentifier: $0.bundleIdentifier,
+                      processName: $0.executableURL?.lastPathComponent
+                  ))
+              }) else { return nil }
+        let processID = app.processIdentifier
+        return Task.detached(priority: .userInitiated) {
+            let title = AccessibilityTextReader.focusedWindowTitle(processID: processID)
+            let found = CodingAgentDetector.detect(terminalProcessID: processID, windowTitle: title)
+            if found { VocaLogger.debug(.appState, "Coding agent running in \(target.displayName): prose cleanup") }
+            return found ? target : nil
         }
     }
 

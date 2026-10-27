@@ -201,13 +201,16 @@ struct CalmDictionarySuggestionsDialog: View {
             ForEach(suggestions) { suggestion in
                 CalmListRow(padding: .compact, alignment: .center, alwaysShowsActions: true) {
                     HStack(spacing: 8) {
-                        Text(suggestion.heard)
-                            .strikethrough()
-                            .foregroundStyle(CalmColor.muted)
-                            .lineLimit(1)
-                        CalmIcon(.arrowRight, size: 14)
-                            .foregroundStyle(CalmColor.muted)
-                            .accessibilityLabel("became")
+                        // A name said often was never respelled: just the word.
+                        if suggestion.heard.lowercased() != suggestion.corrected.lowercased() {
+                            Text(suggestion.heard)
+                                .strikethrough()
+                                .foregroundStyle(CalmColor.muted)
+                                .lineLimit(1)
+                            CalmIcon(.arrowRight, size: 14)
+                                .foregroundStyle(CalmColor.muted)
+                                .accessibilityLabel("became")
+                        }
                         Text(suggestion.corrected)
                             .foregroundStyle(CalmColor.ink)
                             .lineLimit(1)

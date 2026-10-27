@@ -40,12 +40,17 @@ enum AppDistribution {
     /// The sandbox can't read that folder; the App Store collects crashes instead.
     static var canReadCrashReports: Bool { !isAppStore }
 
+    /// Looking at another app's processes, to tell a coding agent in a
+    /// terminal from a shell. The sandbox doesn't allow it.
+    static var canReadOtherProcesses: Bool { !isAppStore }
+
     /// Settings search entries for controls this build doesn't show.
     static var hiddenSettingsTargets: Set<String> {
         var hidden: Set<String> = []
         if !hasSelfUpdate { hidden.insert("updates") }
         if !hasPhoneGateway { hidden.formUnion(["gateway", "gateway-pair", "gateway-docker"]) }
         if !hasAppleScriptControl { hidden.insert("spotify-pause") }
+        if !canReadOtherProcesses { hidden.insert("coding-agents") }
         return hidden
     }
 }

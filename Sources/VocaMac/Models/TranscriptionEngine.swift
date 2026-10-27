@@ -69,8 +69,14 @@ enum PreferenceKey {
     static let dictionarySuggestions = "vocamac.dictionary.suggestions"
     static let dismissedDictionarySuggestions = "vocamac.dictionary.dismissedSuggestions"
     static let learnCorrectionsMode = "vocamac.dictionary.learnMode"
+    /// [String: Int]: screen respellings seen, by suggestion key.
+    static let screenRespellingCounts = "vocamac.dictionary.screenRespellingCounts"
+    /// Date of the last look through History for names said again and again.
+    static let lastFrequentNameScan = "vocamac.dictionary.lastFrequentNameScan"
     static let useScreenContext = "vocamac.dictionary.screenContext"
     static let websiteStyleBindings = "vocamac.writingStyle.websiteBindings"
+    /// Bool: dictation into a terminal running a coding agent is prose.
+    static let codingAgentsAsProse = "vocamac.writingStyle.codingAgentsAsProse"
     static let externalMicWhenLidClosed = "vocamac.audio.externalMicWhenLidClosed"
     static let skipSilence = "vocamac.audio.skipSilence"
     static let spokenLanguages = "vocamac.spokenLanguages"

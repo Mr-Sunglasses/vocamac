@@ -16,12 +16,30 @@ struct ResolvedWritingStyle: Equatable {
     var cleanup: WritingCleanupPolicy = .inherit
     var cleanupLevel: CleanupLevel?
     var cleanupPrompt: String?
+    /// A Terminal rule whose tab in front runs a coding agent: the text is
+    /// prose to the agent, so it is formatted and cleaned up as Plain text
+    /// (see `WritingStyleResolver.applyingCodingAgent`). `style` stays
+    /// Terminal, which is what the menu shows and binds.
+    var codingAgent = false
 
     var profile: WritingProfile {
-        WritingProfile(
-            format: style, rules: rules, intent: intent, cleanup: cleanup,
+        guard codingAgent else {
+            return WritingProfile(
+                format: style, rules: rules, intent: intent, cleanup: cleanup,
+                cleanupLevel: cleanupLevel, cleanupPrompt: cleanupPrompt
+            )
+        }
+        // Prose for the agent, in the speaker's own words: no Formal or
+        // Casual rewrite of an instruction.
+        return WritingProfile(
+            format: .plain, rules: WritingStyle.plain.defaultRules, intent: .preserve, cleanup: cleanup,
             cleanupLevel: cleanupLevel, cleanupPrompt: cleanupPrompt
         )
+    }
+
+    /// The style's name as the menu shows it.
+    var displayName: String {
+        codingAgent ? "\(style.displayName) · coding agent" : style.displayName
     }
 
     /// The unshaped result: global preferences only.
@@ -82,6 +100,24 @@ enum WritingStyleResolver {
             matchedAppName: nil,
             intent: defaultIntent
         )
+    }
+
+    /// Dictation into a terminal whose tab in front runs a coding agent
+    /// (`CodingAgentDetector`) is prose to the agent, not a command: clean
+    /// it up like Plain text. RewriteProtectedText still keeps paths, flags,
+    /// and identifiers exact.
+    ///
+    /// Only the default Terminal behaviour changes. A rule whose rules,
+    /// cleanup policy, level, or prompt the user set keeps them: they chose
+    /// how that terminal's text should come out.
+    static func applyingCodingAgent(_ resolved: ResolvedWritingStyle, detected: Bool) -> ResolvedWritingStyle {
+        guard detected, resolved.style == .terminal, resolved.rules == WritingStyle.terminal.defaultRules,
+              resolved.cleanup == .inherit, resolved.cleanupLevel == nil,
+              resolved.cleanupPrompt?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true
+        else { return resolved }
+        var prose = resolved
+        prose.codingAgent = true
+        return prose
     }
 
     /// Website rules override the receiving browser's app rule. Matching uses

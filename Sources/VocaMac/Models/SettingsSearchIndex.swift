@@ -161,6 +161,13 @@ enum SettingsSearchIndex {
             keywords: ["default", "style", "plain", "fallback", "style everywhere else"]
         ),
         SettingsSearchEntry(
+            id: "coding-agents",
+            page: .writingStyles,
+            title: "Treat coding agents in terminals as prose",
+            subtitle: "Clean up what you say to Claude Code, Codex and other agents",
+            keywords: ["claude code", "codex", "gemini", "aider", "agent", "terminal", "ghostty", "iterm", "prose", "coding agent"]
+        ),
+        SettingsSearchEntry(
             id: "writing-wording",
             page: .writingStyles,
             title: "Reword to sound Formal or Casual",
