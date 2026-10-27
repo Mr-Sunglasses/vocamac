@@ -150,6 +150,10 @@ final class DictationOutputPipelineTests: XCTestCase {
         // A command repeats arguments; only sentences lose a repeat.
         let terminal = await process("git add the the docs", cleaner: MockTranscriptCleanup(), format: .terminal, enabled: false)
         XCTAssertEqual(terminal.text, "git add the the docs")
+        // Even when the command reads like a sentence: "the" may be a file.
+        let sentenceLike = await process("cat the the and other files", cleaner: MockTranscriptCleanup(),
+                                         format: .terminal, enabled: false)
+        XCTAssertEqual(sentenceLike.text, "cat the the and other files")
     }
 
     func testRepeatedPhraseRules() {
@@ -164,6 +168,9 @@ final class DictationOutputPipelineTests: XCTestCase {
             ("thank you, thank you", "thank you, thank you"),
             ("we need to, we need to ship", "we need to, we need to ship"),
             ("come on come on", "come on come on"),
+            // Not even shifted inside a run that is meant.
+            ("come on come on come on", "come on come on come on"),
+            ("no wait no wait no wait", "no wait no wait no wait"),
             ("no no no", "no no no"),
             ("I know that that works", "I know that that works"),
             ("she had had enough", "she had had enough"),
@@ -184,6 +191,16 @@ final class DictationOutputPipelineTests: XCTestCase {
         XCTAssertNotNil(RewriteValidation.rejectionReason(
             "The team builds and ships.", original: "the team builds and the team ships"
         ))
+        // Keeping the copy is fine too: the style change is what matters.
+        XCTAssertNil(RewriteValidation.rejectionReason(
+            "We can, we can resolve this.", original: "We can, we can fix this."
+        ))
+        // A sentence said twice was said twice.
+        XCTAssertNotNil(RewriteValidation.rejectionReason(
+            "Do not touch it.", original: "Do not touch it. Do not touch it."
+        ))
+        XCTAssertEqual(RewriteValidation.collapsingAdjacentRepeats(in: "come on come on come on"),
+                       "come on come on come on")
     }
 
     func testCutOffWordRules() {

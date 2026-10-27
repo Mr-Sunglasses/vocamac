@@ -432,10 +432,12 @@ struct DictationOutputPipeline {
         // "you can see you can see", "the the": a phrase said twice in a row.
         // Rule-based and English only, like cut-off words, because the
         // phrases it leaves alone ("no no no", "thank you, thank you") are
-        // English ones.
+        // English ones. Prose only: in Code and Terminal a repeated word may
+        // be a command argument.
         var removedRepeats = 0
-        if profile.cleanup == .inherit, effectiveLevel.removesHesitations, isEnglishText {
-            (input, removedRepeats) = WritingStyleEngine.removeRepeatedPhrases(input, prose: profile.format.supportsWording)
+        if profile.cleanup == .inherit, effectiveLevel.removesHesitations, isEnglishText,
+           profile.format.supportsWording {
+            (input, removedRepeats) = WritingStyleEngine.removeRepeatedPhrases(input)
         }
 
         // "let's do it tomorrow, oh, no, Wednesday" → "let's do it Wednesday".
@@ -1257,13 +1259,18 @@ enum RewriteValidation {
         guard substrings(#"\d+(?:[.,:/-]\d+)*"#, in: candidate)
                 == substrings(#"\d+(?:[.,:/-]\d+)*"#, in: original) else { return "numbers changed" }
         // A copy said by accident ("I don't, I don't know") need not come
-        // back; everything said once, or again on purpose, must.
+        // back, nor need it go: a rewrite may match either the original or
+        // the original without such copies. Everything said once, or again
+        // on purpose, must stay.
         let spoken = collapsingAdjacentRepeats(in: original)
-        guard negations(candidate) == negations(spoken) else { return "negation changed" }
-        guard participants(candidate) == participants(spoken) else { return "pronouns changed" }
+        func keeps<T: Equatable>(_ measure: (String) -> T) -> Bool {
+            let rewritten = measure(candidate)
+            return rewritten == measure(original) || rewritten == measure(spoken)
+        }
+        guard keeps(negations) else { return "negation changed" }
+        guard keeps(participants) else { return "pronouns changed" }
         let qualifiers = #"(?i)\b(?:might|may|must|perhaps|probably|possibly|always|sometimes|only|unless)\b"#
-        guard substrings(qualifiers, in: candidate.lowercased())
-            == substrings(qualifiers, in: spoken.lowercased()) else { return "qualifier changed" }
+        guard keeps({ substrings(qualifiers, in: $0.lowercased()) }) else { return "qualifier changed" }
         // The small shipped models have no multilingual style qualification.
         if containsNonLatinLetters(original), candidate != original { return "non-Latin text changed" }
         guard candidate.filter({ $0 == "?" }).count >= original.filter({ $0 == "?" }).count else {
@@ -1291,17 +1298,30 @@ enum RewriteValidation {
 
     /// `text` with each phrase said again right after itself by accident
     /// (see `CleanupSalvage.repeatedPhraseLength`) cut to its last copy.
+    ///
+    /// A copy that ends a sentence stays ("Do not touch it. Do not touch
+    /// it."), and so does every word of a run refused as meant: in "come on
+    /// come on come on", "on come on come" is not a repeat either.
     static func collapsingAdjacentRepeats(in text: String) -> String {
         let tokens = text.split(whereSeparator: \.isWhitespace)
         let keys = tokens.map { words(String($0)).joined(separator: "'") }
         var kept: [Substring] = []
         var index = 0
+        var refusedUntil = 0
         while index < tokens.count {
-            let longest = min(CleanupSalvage.longestRepeatedPhrase, (tokens.count - index) / 2)
-            let repeated = stride(from: longest, through: 1, by: -1).first { length in
+            let longest = index < refusedUntil ? 0 : min(CleanupSalvage.longestRepeatedPhrase, (tokens.count - index) / 2)
+            var repeated: Int?
+            for length in stride(from: longest, through: 1, by: -1) {
                 let unit = Array(keys[index..<(index + length)])
-                return !unit.contains("") && Array(keys[(index + length)..<(index + 2 * length)]) == unit
-                    && CleanupSalvage.repeatedPhraseLength(unit, following: unit, preceding: []) == length
+                guard !unit.contains(""), Array(keys[(index + length)..<(index + 2 * length)]) == unit else { continue }
+                let endsSentence = tokens[index..<(index + length)].contains { $0.last.map { ".!?…".contains($0) } ?? false }
+                guard !endsSentence,
+                      CleanupSalvage.repeatedPhraseLength(unit, following: unit, preceding: []) == length else {
+                    refusedUntil = max(refusedUntil, index + 2 * length)
+                    continue
+                }
+                repeated = length
+                break
             }
             if let repeated {
                 index += repeated

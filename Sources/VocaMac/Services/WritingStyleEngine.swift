@@ -271,10 +271,13 @@ enum WritingStyleEngine {
     /// - Never a phrase opening with a word people double on purpose ("no no
     ///   no", "come on come on"), one with a capital in the copy kept ("New
     ///   York New York"), or one with a number in it ("four two four two").
-    /// - In Code and Terminal text only when it reads as sentences: a command
-    ///   may repeat an argument.
-    static func removeRepeatedPhrases(_ text: String, prose: Bool = true) -> (text: String, removed: Int) {
-        guard let expression = cutOffTokenExpression, prose || readsAsProse(text) else { return (text, 0) }
+    /// - Never inside a run of copies refused as a whole: "come on come on
+    ///   come on" is meant, so "on come on come" in it is not a repeat.
+    /// - Prose only. In Code and Terminal a repeated word may be a command
+    ///   argument ("cat the the and other files"), and losing one breaks the
+    ///   command, so only a deletion the model points at goes there.
+    static func removeRepeatedPhrases(_ text: String) -> (text: String, removed: Int) {
+        guard let expression = cutOffTokenExpression else { return (text, 0) }
         let ns = text as NSString
         let tokens = expression.matches(in: text, range: NSRange(location: 0, length: ns.length)).map {
             (range: $0.range, word: ns.substring(with: $0.range))
@@ -290,6 +293,8 @@ enum WritingStyleEngine {
         }
         var removals: [NSRange] = []
         var index = 0
+        // The end of the last run of copies refused as meant.
+        var refusedUntil = 0
         while index < tokens.count {
             var matched = false
             let longest = min(CleanupSalvage.longestRepeatedPhrase, (tokens.count - index) / 2)
@@ -305,22 +310,25 @@ enum WritingStyleEngine {
                     last += length
                 }
                 let removedWords = Array(keys[index..<last])
+                let kept = last..<(last + length)
+                let isMeant = CleanupSalvage.repeatedPhraseLength(removedWords, following: unit, preceding: []) != length
+                    || !kept.allSatisfy({ !tokens[$0].word.contains(where: \.isUppercase) || keys[$0] == "i" || keys[$0].hasPrefix("i'") })
+                if isMeant {
+                    refusedUntil = max(refusedUntil, last + length)
+                    continue
+                }
                 guard length > 1 || neverDoubled.contains(unit[0])
                         || (CleanupSalvage.grammaticalDoubles.contains(unit[0]) && removedWords.count >= 2),
-                      CleanupSalvage.repeatedPhraseLength(removedWords, following: unit, preceding: []) == length
-                else { continue }
-                let kept = last..<(last + length)
-                guard kept.allSatisfy({ !tokens[$0].word.contains(where: \.isUppercase) || keys[$0] == "i" || keys[$0].hasPrefix("i'") }),
                       (index..<last).allSatisfy(isPlain) else { continue }
                 removals.append(NSUnionRange(tokens[index].range, tokens[last - 1].range))
                 index = last
                 matched = true
                 break
             }
-            if !matched { index += 1 }
+            if !matched { index = max(index + 1, refusedUntil) }
         }
         guard !removals.isEmpty else { return (text, 0) }
-        return (removeWordRuns(removals, from: text, prose: prose), removals.count)
+        return (removeWordRuns(removals, from: text), removals.count)
     }
 
     /// Small words a sentence never says twice in a row.
