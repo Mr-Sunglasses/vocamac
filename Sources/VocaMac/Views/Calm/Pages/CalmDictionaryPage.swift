@@ -268,7 +268,14 @@ enum CalmDictionarySuggestionText {
     /// “You changed “cube or netties” to “Kubernetes” 3 times.”
     static func help(for suggestion: CorrectionSuggestion) -> String {
         let times = suggestion.occurrences > 1 ? " \(suggestion.occurrences) times" : ""
-        return "You changed “\(suggestion.heard)” to “\(suggestion.corrected)”\(times)."
+        switch suggestion.source {
+        case .screen:
+            return "“\(suggestion.heard)” was heard where the screen showed “\(suggestion.corrected)”. Add it so it’s spelled right when it isn’t on screen."
+        case .frequent:
+            return "You say “\(suggestion.corrected)” often, and it isn’t in the dictionary. Add it so every speech model listens for it."
+        case nil:
+            return "You changed “\(suggestion.heard)” to “\(suggestion.corrected)”\(times)."
+        }
     }
 }
 
@@ -287,7 +294,7 @@ private struct CalmDictionarySuggestedStrip: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 10) {
                 Text("Suggested").calmType(.rowTitle)
-                Text("Words you fixed after dictating")
+                Text("Words you fixed or keep saying")
                     .font(CalmFont.description)
                     .foregroundStyle(CalmColor.muted)
                     .lineLimit(1)

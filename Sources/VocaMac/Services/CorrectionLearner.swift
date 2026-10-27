@@ -18,6 +18,8 @@ enum CorrectionLearner {
         /// The language of the dictation it corrects, when known: whether
         /// `heard` is an ordinary word depends on it.
         var language: String?
+        /// Nil for an edit the user made.
+        var source: CorrectionSuggestion.Source?
     }
 
     /// Longest edited region, in words, that is still treated as a fix

@@ -33,6 +33,15 @@ private struct CalmStylesToneGroup: View {
                     description: "When off, every app gets the same text.",
                     isOn: $appState.writingStyleEnabled
                 )
+                if AppDistribution.canReadOtherProcesses {
+                    CalmToggleRow(
+                        "Treat coding agents in terminals as prose",
+                        description: "When Claude Code, Codex or another agent runs in the terminal, clean up what you say to it like any message.",
+                        isOn: $appState.codingAgentsAsProse
+                    )
+                    .calmDisabledByParent(!appState.writingStyleEnabled)
+                    .settingsTarget("coding-agents")
+                }
                 CalmToggleRow(
                     "Reword to sound Formal or Casual",
                     description: "Uses the Smart Cleanup model. Names, facts and code stay the same.",

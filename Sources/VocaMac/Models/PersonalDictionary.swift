@@ -45,6 +45,17 @@ struct CorrectionSuggestion: Identifiable, Codable, Equatable {
     /// The language of the dictation it was seen in; nil in suggestions
     /// saved before this was recorded.
     var language: String?
+    /// Where the suggestion came from; nil for an edit the user made.
+    var source: Source?
+
+    /// Evidence for a term other than the user's own edit (see
+    /// `TermSuggestionFinder`).
+    enum Source: String, Codable {
+        /// A name or identifier on screen replaced what was heard.
+        case screen
+        /// A name the spell checker doesn't know, said in several dictations.
+        case frequent
+    }
 
     var id: String { Self.key(heard: heard, corrected: corrected) }
 

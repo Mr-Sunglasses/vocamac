@@ -428,7 +428,7 @@ struct MenuBarView: View {
 
     private var writingStyleLabel: String {
         let resolved = appState.activeWritingStyle
-        var style = resolved.style.displayName
+        var style = resolved.displayName
         if appState.writingRewriteEnabled,
            resolved.profile.allowsRewrite,
            resolved.intent != .preserve {
