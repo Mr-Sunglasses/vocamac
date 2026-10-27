@@ -99,6 +99,43 @@ final class DictationOutputPipelineTests: XCTestCase {
         XCTAssertNil(screen.lastGlossary)
     }
 
+    func testARefusedRewriteSaysWhy() async {
+        let cleaner = MockTranscriptCleanup()
+        cleaner.cleanHandler = { _ in "Proceed with merging the pull request." }
+        let result = await process("I have reviewed it and we can merge the pull request.",
+                                   cleaner: cleaner, intent: .professional)
+        XCTAssertTrue(result.summary.contains("Formal rewrite refused — pronouns changed"), result.summary)
+        let named = await process("Hey Sarah, I have reviewed it and we can merge the pull request.",
+                                  cleaner: cleaner, intent: .professional)
+        XCTAssertTrue(named.summary.contains("rewrite refused — a name or protected term was lost"), named.summary)
+    }
+
+    func testAPartRefusedBesideARewrittenOneStillSaysWhy() async {
+        let cleaner = MockTranscriptCleanup()
+        cleaner.cleanHandler = { text in
+            text.hasPrefix("thanks") ? "Thanks for the very quick review." : "Proceed with merging the pull request."
+        }
+        let result = await process("thanks for the quick review\n\nI think we can merge the pull request now",
+                                   cleaner: cleaner, intent: .professional)
+        XCTAssertTrue(result.summary.hasPrefix("Formal wording applied"), result.summary)
+        XCTAssertTrue(result.summary.contains("rewrite refused for a part — pronouns changed"), result.summary)
+    }
+
+    func testTheReadAheadIncludesTheUsersOwnTerms() async {
+        let cleaner = MockTranscriptCleanup()
+        cleaner.isLoaded = true
+        await DictationOutputPipeline(cleaner: cleaner, snippets: SnippetExpander()).warmUp(
+            options: DictationOutputOptions(
+                profile: WritingProfile(format: .plain, rules: WritingStyle.plain.defaultRules),
+                snippetList: [], cleanupEnabled: true, rewritingEnabled: false, model: .defaultKind,
+                customPrompt: "", language: "en", autoCapitalize: true, trailingSpace: false,
+                dictionary: DictionaryContext(vocabulary: ["Claude"], replacements: [], contextTerms: ["useEffect"],
+                                              isKnownWord: { _ in true })
+            )
+        )
+        XCTAssertEqual(cleaner.primedGlossaries, [["Claude"]], "Screen terms aren't known yet")
+    }
+
     func testRawBypassesEveryTransformation() async {
         let cleaner = MockTranscriptCleanup()
         let text = "  um config dot json.\n"
