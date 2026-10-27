@@ -19,6 +19,9 @@ import Foundation
 /// - a capital at the start of a sentence, and "i" → "I"
 /// - a misspelling corrected to a real word ("expender" → "expander")
 /// - "do not" ↔ "don't" and other contractions
+/// - a misheard word respelled as a name or term the speaker listed ("ask
+///   cloud" → "ask Claude" when Claude is in the glossary), spelled close to
+///   what was heard
 /// - hesitations, fillers, stutters ("if if", "what what what", "you can
 ///   see you can see", "diff different"), and
 ///   restarts the speaker abandoned; "scratch that" at the High level
@@ -42,6 +45,7 @@ enum EditMerge {
         level: CleanupLevel,
         allowsEnglishGrammar: Bool = false,
         names: Set<String> = [],
+        glossary: [String] = [],
         isKnownWord: (String) -> Bool
     ) -> Result {
         let source = tokens(in: original)
@@ -61,7 +65,8 @@ enum EditMerge {
             var applied = 0, skipped = 0
             for (sourcePart, targetPart) in zip(originals, candidates) {
                 let result = merge(original: sourcePart, candidate: targetPart, level: level,
-                                   allowsEnglishGrammar: allowsEnglishGrammar, names: names, isKnownWord: isKnownWord)
+                                   allowsEnglishGrammar: allowsEnglishGrammar, names: names,
+                                   glossary: glossary, isKnownWord: isKnownWord)
                 parts.append(TranscriptCleanup.preservingOuterWhitespace(of: sourcePart, in: result.text))
                 applied += result.applied
                 skipped += result.skipped
@@ -138,8 +143,11 @@ enum EditMerge {
             // judge of a "fix" to one.
             let respellsName = hunk.addedWords.count == 1 && hunk.removedWords.count == 1
                 && names.contains(hunk.removedWords[0].key)
-            if !respellsName, isSafe(hunk, level: level, isKnownWord: isKnownWord)
-                || (level == .grammar && allowsEnglishGrammar && isGrammarRepair(hunk, isKnownWord: isKnownWord)) {
+            // A listed term is spelled the way the speaker said to spell it,
+            // so it may respell even a name.
+            let respellsToListedTerm = level != .light && isGlossaryRespelling(hunk, glossary: glossary)
+            if respellsToListedTerm || !respellsName && (isSafe(hunk, level: level, isKnownWord: isKnownWord)
+                || (level == .grammar && allowsEnglishGrammar && isGrammarRepair(hunk, isKnownWord: isKnownWord))) {
                 pendingLineBreak = deepestBreak(hunk.removed.map(\.leading) + [pendingLineBreak].compactMap { $0 })
                 for token in hunk.added { write(token, leading: token.leading) }
                 applied += 1
@@ -188,7 +196,7 @@ enum EditMerge {
         // retry without grammar rather than applying half a grammatical rewrite.
         if level == .grammar, allowsEnglishGrammar, skipped > 0 {
             return merge(original: original, candidate: candidate, level: level,
-                         allowsEnglishGrammar: false, names: names, isKnownWord: isKnownWord)
+                         allowsEnglishGrammar: false, names: names, glossary: glossary, isKnownWord: isKnownWord)
         }
         return Result(text: render(output), applied: applied, skipped: skipped)
     }
@@ -401,6 +409,28 @@ enum EditMerge {
             preceding: hunk.precedingInSentence.map(\.key), following: hunk.following.map(\.key),
             isKnownWord: isKnownWord
         )
+    }
+
+    /// Whether the edit writes a listed term, exactly as listed, over the
+    /// words that were heard for it: spelled close ("cloud" → "Claude",
+    /// "Prya" → "Priya") or the same letters ("open ai" → "OpenAI"). Even
+    /// a name may be respelled this way: the speaker said how it is spelled.
+    private static func isGlossaryRespelling(_ hunk: Hunk, glossary: [String]) -> Bool {
+        guard !glossary.isEmpty,
+              (1...3).contains(hunk.removedWords.count), (1...3).contains(hunk.addedWords.count),
+              !hunk.removed.contains(where: \.isProtected), !hunk.added.contains(where: \.isProtected),
+              preservesStructuralPunctuation(hunk),
+              hunk.added.filter({ !$0.isWord }).allSatisfy({ allowedPunctuation.contains($0.text) }),
+              hunk.added.filter({ $0.text == "?" }).count >= hunk.removed.filter({ $0.text == "?" }).count,
+              hunk.added.filter({ $0.text == "!" }).count == hunk.removed.filter({ $0.text == "!" }).count
+        else { return false }
+        let written = hunk.addedWords.map(\.text)
+        guard let term = glossary.first(where: {
+            $0 == written.joined(separator: " ") || $0 == written.joined()
+        }) else { return false }
+        let heard = DictionaryCorrector.normalized(hunk.removedWords.map(\.text).joined())
+        let listed = DictionaryCorrector.normalized(term)
+        return heard == listed || ParakeetVocabularyBoost.isSpelledClose(heard: heard, term: listed)
     }
 
     /// The mark the speaker dictated, when the model replaced the spoken word

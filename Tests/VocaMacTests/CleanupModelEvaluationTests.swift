@@ -14,6 +14,9 @@ final class CleanupModelEvaluationTests: XCTestCase {
         let mustPreserve: [String]
         /// Supply only for audio-derived transcripts with a human verbatim reference.
         var verbatimReference: String?
+        /// The speaker's Dictionary and the terms read off the screen.
+        var vocabulary: [String]?
+        var screenTerms: [String]?
     }
 
     struct Measurement: Codable {
@@ -102,7 +105,11 @@ final class CleanupModelEvaluationTests: XCTestCase {
                     probe.raw, profile: WritingProfile(format: .plain, rules: .passthrough),
                     snippetList: [], cleanupEnabled: true, rewritingEnabled: false,
                     model: kind, customPrompt: prompt, cleanupLevel: level, language: probe.language,
-                    autoCapitalize: true, trailingSpace: false, preview: true
+                    autoCapitalize: true, trailingSpace: false, preview: true,
+                    dictionary: probe.vocabulary == nil && probe.screenTerms == nil ? nil : DictionaryContext(
+                        vocabulary: probe.vocabulary ?? [], replacements: [], contextTerms: probe.screenTerms ?? [],
+                        isKnownWord: { SpellingOracle.shared.isKnownWord($0, language: "en") }
+                    )
                 )
                 if let sent = observer.lastPrompt { prompts[level.rawValue] = sent }
                 measurements.append(Measurement(
@@ -167,6 +174,15 @@ final class CleanupModelEvaluationTests: XCTestCase {
         Probe(id: "emphasis-no", raw: "no no no don't push that branch", editedReference: "No, no, no, don't push that branch.", language: "en", mustPreserve: ["no", "push that branch"]),
         Probe(id: "had-had", raw: "she had had enough of the delays", editedReference: "She had had enough of the delays.", language: "en", mustPreserve: ["had had"]),
         Probe(id: "that-that", raw: "I know that that fix works", editedReference: "I know that that fix works.", language: "en", mustPreserve: ["that that"]),
+        // A glossary of the speaker's terms and the screen's: respell only a misheard one.
+        Probe(id: "glossary-claude", raw: "ask cloud to review the pull request", editedReference: "Ask Claude to review the pull request.", language: "en", mustPreserve: ["Claude"], vocabulary: ["Claude"]),
+        Probe(id: "glossary-cloud", raw: "our servers run in the cloud", editedReference: "Our servers run in the cloud.", language: "en", mustPreserve: ["cloud"], vocabulary: ["Claude"]),
+        Probe(id: "glossary-both", raw: "ask Claude why the cloud bill went up", editedReference: "Ask Claude why the cloud bill went up.", language: "en", mustPreserve: ["Claude", "cloud bill"], vocabulary: ["Claude"]),
+        Probe(id: "glossary-just", raw: "I just pushed the fix", editedReference: "I just pushed the fix.", language: "en", mustPreserve: ["just pushed"], vocabulary: ["Jest"]),
+        Probe(id: "glossary-jest", raw: "the just tests are failing on the main branch", editedReference: "The Jest tests are failing on the main branch.", language: "en", mustPreserve: ["Jest tests"], vocabulary: ["Jest"]),
+        Probe(id: "glossary-screen", raw: "then update the use effect hook in the settings view", editedReference: "Then update the useEffect hook in the settings view.", language: "en", mustPreserve: ["useEffect"], screenTerms: ["useEffect", "SettingsView", "fetchUser"]),
+        Probe(id: "glossary-unrelated", raw: "can you send me the report by friday", editedReference: "Can you send me the report by Friday?", language: "en", mustPreserve: ["report"], vocabulary: ["Namrata", "VocaMac"], screenTerms: ["useEffect", "SettingsView"]),
+        Probe(id: "glossary-name", raw: "please loop in nam rata on the thread", editedReference: "Please loop in Namrata on the thread.", language: "en", mustPreserve: ["Namrata"], vocabulary: ["Namrata"]),
     ]
 
     /// Observe the exact candidate used by the pipeline, without a second
@@ -183,7 +199,10 @@ final class CleanupModelEvaluationTests: XCTestCase {
         nonisolated func inputBudget(forPrompt prompt: String) -> Int { 64_000 }
         func clean(_ text: String, prompt: String) async -> String { await preview(text, prompt: prompt).output }
         func preview(_ text: String, prompt: String) async -> CleanupAttempt {
-            let result = await service.preview(text, prompt: prompt)
+            await preview(text, prompt: prompt, glossary: [])
+        }
+        func preview(_ text: String, prompt: String, glossary: [String]) async -> CleanupAttempt {
+            let result = await service.preview(text, prompt: prompt, glossary: glossary)
             last = result
             lastPrompt = prompt
             return result

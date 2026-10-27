@@ -263,9 +263,13 @@ protocol SpeechTranscribing: AnyObject, Sendable {
     /// Start a live session. With `commit`, finished pieces are decoded while
     /// recording (see `StreamingCommitOptions`); without it, a session exists
     /// only for engines that stream natively or to show partial words.
+    /// `liveVocabulary`, when given, replaces `vocabulary` once screen
+    /// context arrives: Apple Speech is handed the new terms mid-session and
+    /// Parakeet's final decode reads them.
     func startStreaming(
         language: String?,
         vocabulary: String,
+        liveVocabulary: LiveVocabulary?,
         onPartial: (@Sendable (String) -> Void)?,
         commit: StreamingCommitOptions?
     ) -> RecordingTranscription?
@@ -286,16 +290,26 @@ extension SpeechTranscribing {
     func startStreaming(
         language: String?,
         vocabulary: String,
+        liveVocabulary: LiveVocabulary?,
         onPartial: (@Sendable (String) -> Void)?,
         commit: StreamingCommitOptions?
     ) -> RecordingTranscription? { nil }
 
     func startStreaming(
         language: String?,
+        vocabulary: String,
+        onPartial: (@Sendable (String) -> Void)?,
+        commit: StreamingCommitOptions?
+    ) -> RecordingTranscription? {
+        startStreaming(language: language, vocabulary: vocabulary, liveVocabulary: nil, onPartial: onPartial, commit: commit)
+    }
+
+    func startStreaming(
+        language: String?,
         vocabulary: String = "",
         onPartial: (@Sendable (String) -> Void)? = nil
     ) -> RecordingTranscription? {
-        startStreaming(language: language, vocabulary: vocabulary, onPartial: onPartial, commit: nil)
+        startStreaming(language: language, vocabulary: vocabulary, liveVocabulary: nil, onPartial: onPartial, commit: nil)
     }
 
     func loadModel(name: String? = nil, folder: URL? = nil, onPhaseChange: (@Sendable (String) -> Void)? = nil) async throws {
@@ -467,6 +481,12 @@ protocol TranscriptCleaning: TextTransforming {
     func speculate(_ text: String, prompt: String) async -> CleanupAttempt
     /// Count a speculative answer the dictation used, as `attempt` would have.
     func recordOutcome(_ attempt: CleanupAttempt)
+    /// `attempt`, `preview`, and `speculate` with a glossary: how the speaker
+    /// spells names and terms, given to the model beside the text (see
+    /// `TranscriptCleanup.formatInput`). Cleaners that can't use one ignore it.
+    func attempt(_ text: String, prompt: String, glossary: [String]) async -> CleanupAttempt
+    func preview(_ text: String, prompt: String, glossary: [String]) async -> CleanupAttempt
+    func speculate(_ text: String, prompt: String, glossary: [String]) async -> CleanupAttempt
     /// Stop a dictation cleanup pass in flight; it returns the raw text.
     func cancelCleanup()
     func availabilityProblem(for kind: CleanupModelKind) -> String?
@@ -502,6 +522,15 @@ extension TranscriptCleaning {
         await preview(text, prompt: prompt)
     }
     func recordOutcome(_ attempt: CleanupAttempt) {}
+    func attempt(_ text: String, prompt: String, glossary: [String]) async -> CleanupAttempt {
+        await attempt(text, prompt: prompt)
+    }
+    func preview(_ text: String, prompt: String, glossary: [String]) async -> CleanupAttempt {
+        await preview(text, prompt: prompt)
+    }
+    func speculate(_ text: String, prompt: String, glossary: [String]) async -> CleanupAttempt {
+        await speculate(text, prompt: prompt)
+    }
 
     func availabilityProblem(for kind: CleanupModelKind) -> String? {
         isDownloaded(kind) ? nil : "download a local cleanup model in Settings"

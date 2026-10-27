@@ -331,6 +331,39 @@ final class AppStateHistoryTests: XCTestCase {
         XCTAssertTrue(appState.wordReplacements.isEmpty, "A casing fix needs no replacement")
     }
 
+    func testAnOrdinaryWordIsLearnedAsATermNotAReplacement() {
+        let (appState, _) = AppState.makeTestState()
+        appState.isKnownWord = { word, _ in ["cloud", "get", "hub"].contains(word) }
+        appState.learnCorrectionsMode = .automatic
+        // Fixing "cloud" to "Claude" once must not rewrite every cloud.
+        appState._receiveCorrectionsForTesting([.init(heard: "cloud", corrected: "Claude")])
+        XCTAssertEqual(appState.vocabularyTerms, ["Claude"])
+        XCTAssertTrue(appState.wordReplacements.isEmpty)
+        // A phrase is still worth a replacement, and so is a word that isn't one.
+        appState._receiveCorrectionsForTesting([
+            .init(heard: "get hub", corrected: "GitHub"), .init(heard: "Namratha", corrected: "Namrata"),
+        ])
+        XCTAssertEqual(appState.wordReplacements.map(\.replacement), ["GitHub", "Namrata"])
+    }
+
+    func testScreenTermsReachALiveSessionAfterItStarts() async {
+        let reader = MockScreenContextReader()
+        reader.text = "let userId = request.userId"
+        let (appState, mocks) = AppState.makeTestState(screenContextReader: reader)
+        mocks.whisperService.streamingFactory = { language in
+            RecordingTranscription(language: language) { chunks in
+                for try await _ in chunks {}
+                return VocaTranscription(text: "", duration: 0, detectedLanguage: "en", audioLengthSeconds: 0, modelUsed: .tiny)
+            }
+        }
+        appState.overlayStyle = .live
+        await appState.startRecording()
+        let live = try? XCTUnwrap(mocks.whisperService.lastStreamingLiveVocabulary)
+        for _ in 0..<50 where live?.isSettled == false { try? await Task.sleep(nanoseconds: 10_000_000) }
+        XCTAssertTrue(live?.read().contains("userId") == true)
+        await appState.cancelRecording()
+    }
+
     func testVocabularyTermsDeduplicateIgnoringCase() {
         let (appState, _) = AppState.makeTestState()
         appState.addVocabularyTerm("github")

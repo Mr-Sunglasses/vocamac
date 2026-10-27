@@ -146,6 +146,13 @@ enum DictionaryCorrector {
                 if length > 1, !candidate.isUserTerm, isIdentifierShaped(candidate.term), !allowIdentifierJoins {
                     continue
                 }
+                // "email" stays "email" when the screen shows "e-mail" or a
+                // `setUp` method: outside Code and Terminal, an ordinary word
+                // is only respelled as a screen identifier when it isn't one.
+                if length == 1, !candidate.isUserTerm, isIdentifierShaped(candidate.term), !allowIdentifierJoins,
+                   isKnownWord(normalized(window[window.startIndex].text)) {
+                    continue
+                }
                 let range = span(of: window)
                 let spoken = source.substring(with: range)
                 if spoken != candidate.term {

@@ -260,6 +260,17 @@ final class RecognitionVocabularyTests: XCTestCase {
         XCTAssertLessThanOrEqual(prompt.count, AppState.recognitionPromptCharacterBudget)
     }
 
+    func testScreenTermsFillEveryEnginesBudgetMostRelevantLast() {
+        let screen = (0..<150).map { "termNumber\($0)" }
+        let prompt = AppState.recognitionVocabulary("VocaMac", contextTerms: screen)
+        let terms = RecognitionHints.terms(from: prompt)
+        // Apple Speech and Parakeet take 100 terms from the end; screen terms reach them.
+        XCTAssertEqual(terms.count, AppState.maximumRecognitionContextTerms + 1)
+        XCTAssertEqual(Array(terms.suffix(2)), ["termNumber0", "VocaMac"])
+        XCTAssertEqual(terms.first, "termNumber99")
+        XCTAssertTrue(RecognitionHints.contextualStrings(from: prompt).contains("termNumber0"))
+    }
+
     func testScreenTermsAreDeduplicatedAgainstVocabulary() {
         let prompt = AppState.recognitionVocabulary("GitHub", contextTerms: ["github", "userId", "userId"])
         XCTAssertEqual(prompt, "userId, GitHub")

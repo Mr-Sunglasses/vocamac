@@ -91,12 +91,19 @@ enum TranscriptCleanup {
     /// words. Any `<USER-INPUT>` tag the user actually dictated is stripped
     /// first — otherwise a closing tag mid-transcript ends the fence early and
     /// the rest reads as instructions.
-    static func formatInput(_ text: String) -> String {
-        """
+    ///
+    /// A glossary goes on a line of its own before the fence, in the user
+    /// turn: the system prompt stays the same from one dictation to the next,
+    /// so llama.cpp keeps it read (see `TranscriptCleanupService.prime`).
+    static func formatInput(_ text: String, glossary: [String] = []) -> String {
+        let fenced = """
         <USER-INPUT>
         \(stripUserInputTags(text))
         </USER-INPUT>
         """
+        let terms = glossary.map { $0.filter { $0 != "<" && $0 != ">" && !$0.isNewline } }.filter { !$0.isEmpty }
+        guard !terms.isEmpty else { return fenced }
+        return "<TERMS>" + terms.joined(separator: ", ") + "</TERMS>\n" + fenced
     }
 
     static func sanitize(_ text: String) -> String {

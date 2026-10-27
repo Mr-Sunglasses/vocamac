@@ -4,9 +4,10 @@
 // Shapes Dictionary vocabulary into the recognition hint each engine accepts.
 //
 // Whisper takes the terms as prompt tokens (see `WhisperService`), Apple
-// Speech as `AnalysisContext` contextual strings, and Parakeet as a CTC
-// vocabulary boost. The specialized ONNX models take no hint; every engine
-// still gets `DictionaryCorrector` after transcription.
+// Speech as `AnalysisContext` contextual strings, Parakeet as a CTC
+// vocabulary boost, Qwen3-ASR as hotwords (`SherpaService.hotwords`), and a
+// custom endpoint as a "Glossary:" prompt. The other ONNX models take no
+// hint; every engine still gets `DictionaryCorrector` after transcription.
 
 import Foundation
 

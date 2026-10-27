@@ -534,22 +534,43 @@ final class SpellingOracle {
     static let shared = SpellingOracle()
 
     private var cache: [String: Bool] = [:]
+    private var checkerLanguages: [String: String?] = [:]
 
-    /// `language` is an ISO code such as "en". Outside English every word is
-    /// treated as known, which turns off single-word fuzzy corrections rather
-    /// than trusting a checker for the wrong language.
+    /// `language` is an ISO code such as "en"; nil means English. A language
+    /// the system spell checker has is checked in that language. Any other
+    /// counts every word as known, which turns off single-word fuzzy
+    /// corrections rather than trusting a checker for the wrong language.
     func isKnownWord(_ word: String, language: String?) -> Bool {
-        if let language, !language.lowercased().hasPrefix("en") { return true }
-        let key = word.lowercased()
+        let code = language?.lowercased().split(separator: "-").first.map(String.init) ?? "en"
+        guard let checkerLanguage = checkerLanguage(for: code) else { return true }
+        let lowercased = word.lowercased()
+        let key = checkerLanguage + ":" + lowercased
         if let cached = cache[key] { return cached }
-        let checker = NSSpellChecker.shared
-        let misspelled = checker.checkSpelling(
-            of: key, startingAt: 0, language: "en", wrap: false,
-            inSpellDocumentWithTag: 0, wordCount: nil
-        )
-        let known = misspelled.location == NSNotFound
+        // Callers pass words lowercased. German writes every noun with a
+        // capital, so outside English the capitalized form counts too.
+        var known = isSpelledCorrectly(lowercased, language: checkerLanguage)
+        if !known, checkerLanguage != "en" {
+            known = isSpelledCorrectly(lowercased.prefix(1).uppercased() + lowercased.dropFirst(), language: checkerLanguage)
+        }
         if cache.count > 5_000 { cache.removeAll() }
         cache[key] = known
         return known
+    }
+
+    private func isSpelledCorrectly(_ word: String, language: String) -> Bool {
+        NSSpellChecker.shared.checkSpelling(
+            of: word, startingAt: 0, language: language, wrap: false,
+            inSpellDocumentWithTag: 0, wordCount: nil
+        ).location == NSNotFound
+    }
+
+    /// The spell checker's name for `code`, or nil when it has none.
+    private func checkerLanguage(for code: String) -> String? {
+        if code == "en" { return "en" }
+        if let cached = checkerLanguages[code] { return cached }
+        let available = NSSpellChecker.shared.availableLanguages
+        let found = available.first { $0 == code } ?? available.first { $0.hasPrefix(code + "_") }
+        checkerLanguages[code] = found
+        return found
     }
 }

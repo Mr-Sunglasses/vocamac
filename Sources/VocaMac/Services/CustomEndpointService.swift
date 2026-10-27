@@ -122,8 +122,9 @@ final class CustomEndpointService: SpeechTranscribing, @unchecked Sendable {
 
     /// Upload the recording and return the endpoint's transcript.
     ///
-    /// `translate` and `vocabulary` belong to the on-device engines and are
-    /// not part of either endpoint contract, so they are dropped here.
+    /// `vocabulary` goes as the `prompt` field both contracts accept, the
+    /// same "Glossary:" Whisper gets on this Mac (see `prompt(for:)`).
+    /// `translate` belongs to the on-device engines and is dropped.
     func transcribe(
         audioData: [Float],
         language: String?,
@@ -152,6 +153,7 @@ final class CustomEndpointService: SpeechTranscribing, @unchecked Sendable {
             form.appendField("response_format", "json")
             if let language { form.appendField("language", language) }
         }
+        if let prompt = Self.prompt(for: vocabulary) { form.appendField("prompt", prompt) }
         form.close()
 
         var request = URLRequest(url: url, timeoutInterval: Self.requestTimeout)
@@ -190,6 +192,24 @@ final class CustomEndpointService: SpeechTranscribing, @unchecked Sendable {
             audioLengthSeconds: Double(audioData.count) / Double(Self.sampleRate),
             modelUsed: .customEndpoint
         )
+    }
+
+    /// Longest glossary sent, in characters. OpenAI reads only the last 224
+    /// tokens of a Whisper prompt; this stays well inside that.
+    static let maximumPromptCharacters = 600
+
+    /// The "Glossary:" prompt for a comma/newline vocabulary, keeping the
+    /// terms at its end (the user's own, see `AppState.recognitionVocabulary`)
+    /// when it is too long. Nil when there are no terms.
+    static func prompt(for vocabulary: String) -> String? {
+        var kept: [String] = []
+        var used = 0
+        for term in RecognitionHints.terms(from: vocabulary).reversed() {
+            guard used + term.count + 2 <= maximumPromptCharacters else { break }
+            kept.insert(term, at: 0)
+            used += term.count + 2
+        }
+        return kept.isEmpty ? nil : "Glossary: " + kept.joined(separator: ", ")
     }
 
     /// Pull the transcript out of a 2xx answer. `text` is the documented

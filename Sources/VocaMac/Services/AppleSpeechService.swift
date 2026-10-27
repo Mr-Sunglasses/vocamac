@@ -184,6 +184,7 @@ final class AppleSpeechService: @unchecked Sendable {
         chunks: AsyncThrowingStream<[Float], Error>,
         language: String?,
         vocabulary: String = "",
+        vocabularyUpdates: LiveVocabulary? = nil,
         onPiece: (@Sendable (Int, TranscribedPiece) -> Void)? = nil
     ) async throws -> VocaTranscription {
         #if compiler(>=6.2)
@@ -221,7 +222,9 @@ final class AppleSpeechService: @unchecked Sendable {
             let tracker = FinalizedPieceTracker(
                 language: detectedLanguage, onPiece: onPiece ?? { _, _ in }
             )
-            let (text, count) = try await session.transcribe(chunks, contextualStrings: hints) { text, endSeconds in
+            let (text, count) = try await session.transcribe(
+                chunks, contextualStrings: hints, contextUpdates: vocabularyUpdates
+            ) { text, endSeconds in
                 tracker.finalized(text, endSeconds: endSeconds)
             }
             let pieces = tracker.pieces(sampleCount: count)
@@ -362,11 +365,22 @@ private actor ApplePreparedSpeechSession: PreparedSpeechSession {
     func transcribe(
         _ chunks: AsyncThrowingStream<[Float], Error>,
         contextualStrings: [String],
+        contextUpdates: LiveVocabulary?,
         onFinal: @escaping @Sendable (String, Double) -> Void
     ) async throws -> (String, Int) {
         guard !started else { throw AppleSpeechError.modelNotLoaded }
         started = true
         await applyContext(contextualStrings)
+        // Screen terms arrive a moment after recording starts. The audio
+        // analyzed before then keeps the first context; the rest gets both.
+        contextUpdates?.onUpdate { [weak self] vocabulary in
+            Task { await self?.applyContext(RecognitionHints.contextualStrings(from: vocabulary)) }
+        }
+        // Terms that arrived before the observer was in place.
+        if let latest = contextUpdates.map({ RecognitionHints.contextualStrings(from: $0.read()) }),
+           latest != contextualStrings {
+            await applyContext(latest)
+        }
         let collector = Task { [transcriber] in
             var pieces: [String] = []
             for try await result in transcriber.results where result.isFinal {
@@ -512,6 +526,7 @@ private protocol PreparedSpeechSession: Sendable {
     func transcribe(
         _ chunks: AsyncThrowingStream<[Float], Error>,
         contextualStrings: [String],
+        contextUpdates: LiveVocabulary?,
         onFinal: @escaping @Sendable (String, Double) -> Void
     ) async throws -> (String, Int)
     func cancel() async

@@ -25,6 +25,26 @@ final class DictionaryCorrectorTests: XCTestCase {
         )
     }
 
+    // MARK: Screen identifiers
+
+    func testAnOrdinaryWordIsNotRespelledAsAScreenIdentifier() {
+        let common: Set<String> = ["send", "the", "email", "setup", "now"]
+        func correct(_ text: String, context: [String], joins: Bool = false) -> String {
+            DictionaryCorrector.correct(
+                text,
+                context: DictionaryContext(vocabulary: [], replacements: [], contextTerms: context,
+                                           isKnownWord: { common.contains($0.lowercased()) }),
+                allowIdentifierJoins: joins
+            ).text
+        }
+        XCTAssertEqual(correct("send the email now", context: ["e-mail"]), "send the email now")
+        XCTAssertEqual(correct("send the setup now", context: ["setUp"]), "send the setup now")
+        // A word that isn't one still takes the screen's spelling, and Code
+        // and Terminal still match the identifier.
+        XCTAssertEqual(correct("open vocamac now", context: ["voca-mac"]), "open voca-mac now")
+        XCTAssertEqual(correct("send the setup now", context: ["setUp"], joins: true), "send the setUp now")
+    }
+
     // MARK: Replacements
 
     func testReplacementIgnoresCaseAndUsesUserSpelling() {

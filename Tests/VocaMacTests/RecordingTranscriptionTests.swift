@@ -1,4 +1,5 @@
 import XCTest
+import os
 @testable import VocaMac
 
 final class RecordingTranscriptionTests: XCTestCase {
@@ -397,6 +398,16 @@ extension RecordingTranscriptionTests {
         vocabulary.update("VocaMac, Parakeet")
         XCTAssertEqual(vocabulary.read(), "VocaMac, Parakeet")
         XCTAssertFalse(vocabulary.servedOnly("VocaMac, Parakeet"), "the first piece missed the context terms")
+    }
+
+    func testLiveVocabularyTellsObserversAboutAChange() {
+        let vocabulary = LiveVocabulary("VocaMac", settled: false)
+        let heard = OSAllocatedUnfairLock(initialState: [String]())
+        vocabulary.onUpdate { value in heard.withLock { $0.append(value) } }
+        vocabulary.update("VocaMac")
+        vocabulary.update("userId, VocaMac")
+        XCTAssertEqual(heard.withLock { $0 }, ["userId, VocaMac"], "Only a change is passed on")
+        XCTAssertTrue(vocabulary.isSettled)
     }
 }
 

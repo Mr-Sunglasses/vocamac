@@ -1095,15 +1095,17 @@ extension IncrementalAudioTranscriber {
     }
 }
 
-/// Recognition vocabulary for a commit-mode Whisper session. Screen context
-/// terms arrive after recording starts, so pieces decoded later read the
-/// newer vocabulary. At stop the session's pieces are only trusted if every
-/// piece was decoded with the vocabulary the batch path would have used.
+/// Recognition vocabulary for a live session. Screen context terms arrive
+/// after recording starts, so pieces decoded later read the newer
+/// vocabulary, and Apple Speech is handed the new terms mid-session. At stop
+/// a commit-mode Whisper session's pieces are only trusted if every piece
+/// was decoded with the vocabulary the batch path would have used.
 final class LiveVocabulary: @unchecked Sendable {
     private struct State {
         var current: String
         var served: Set<String> = []
         var isSettled: Bool
+        var observers: [@Sendable (String) -> Void] = []
     }
     private let state: OSAllocatedUnfairLock<State>
 
@@ -1121,12 +1123,22 @@ final class LiveVocabulary: @unchecked Sendable {
         }
     }
 
-    /// The final vocabulary for the recording.
+    /// The final vocabulary for the recording. Observers hear about it
+    /// when it differs from what they were last given.
     func update(_ vocabulary: String) {
-        state.withLock {
-            $0.current = vocabulary
-            $0.isSettled = true
+        let observers = state.withLock { state -> [@Sendable (String) -> Void] in
+            let changed = state.current != vocabulary
+            state.current = vocabulary
+            state.isSettled = true
+            return changed ? state.observers : []
         }
+        for observer in observers { observer(vocabulary) }
+    }
+
+    /// Call `handler` with the vocabulary each time `update` changes it, for
+    /// an engine that is handed its hints once rather than per decode.
+    func onUpdate(_ handler: @escaping @Sendable (String) -> Void) {
+        state.withLock { $0.observers.append(handler) }
     }
 
     /// Whether the vocabulary can no longer change before stop.
