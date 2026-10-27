@@ -170,6 +170,7 @@ final class DictationOutputPipelineTests: XCTestCase {
             ("come on come on", "come on come on"),
             // Not even shifted inside a run that is meant.
             ("come on come on come on", "come on come on come on"),
+            ("you can see you can see you can see you can see the the result", "you can see the result"),
             ("no wait no wait no wait", "no wait no wait no wait"),
             ("no no no", "no no no"),
             ("I know that that works", "I know that that works"),
@@ -201,6 +202,14 @@ final class DictationOutputPipelineTests: XCTestCase {
         ))
         XCTAssertEqual(RewriteValidation.collapsingAdjacentRepeats(in: "come on come on come on"),
                        "come on come on come on")
+        // A six-word unit that is a three-word phrase twice is no refusal:
+        // every copy but the last may go, and a style change is kept.
+        XCTAssertEqual(RewriteValidation.collapsingAdjacentRepeats(
+            in: "you can see, you can see, you can see, you can see the result"
+        ), "you can see the result")
+        XCTAssertNil(RewriteValidation.rejectionReason(
+            "You can see the outcome.", original: "you can see, you can see, you can see, you can see the result"
+        ))
     }
 
     func testCutOffWordRules() {

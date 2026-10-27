@@ -1310,20 +1310,27 @@ enum RewriteValidation {
         var refusedUntil = 0
         while index < tokens.count {
             let longest = index < refusedUntil ? 0 : min(CleanupSalvage.longestRepeatedPhrase, (tokens.count - index) / 2)
+            let refusedBefore = refusedUntil
             var repeated: Int?
             for length in stride(from: longest, through: 1, by: -1) {
                 let unit = Array(keys[index..<(index + length)])
                 guard !unit.contains(""), Array(keys[(index + length)..<(index + 2 * length)]) == unit else { continue }
                 let endsSentence = tokens[index..<(index + length)].contains { $0.last.map { ".!?…".contains($0) } ?? false }
-                guard !endsSentence,
-                      CleanupSalvage.repeatedPhraseLength(unit, following: unit, preceding: []) == length else {
+                let phraseLength = CleanupSalvage.repeatedPhraseLength(unit, following: unit, preceding: [])
+                // Only a run that is meant is refused. A unit that is itself
+                // a shorter phrase twice ("you can see, you can see") is
+                // matched at that shorter length below.
+                guard !endsSentence, phraseLength != nil else {
                     refusedUntil = max(refusedUntil, index + 2 * length)
                     continue
                 }
+                guard phraseLength == length else { continue }
                 repeated = length
                 break
             }
             if let repeated {
+                // A copy dropped here is no part of a run refused at this word.
+                refusedUntil = refusedBefore
                 index += repeated
             } else {
                 kept.append(tokens[index])

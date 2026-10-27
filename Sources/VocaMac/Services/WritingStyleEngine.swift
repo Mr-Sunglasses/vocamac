@@ -297,6 +297,7 @@ enum WritingStyleEngine {
         var refusedUntil = 0
         while index < tokens.count {
             var matched = false
+            let refusedBefore = refusedUntil
             let longest = min(CleanupSalvage.longestRepeatedPhrase, (tokens.count - index) / 2)
             for length in stride(from: longest, through: 1, by: -1) {
                 let unit = Array(keys[index..<(index + length)])
@@ -311,16 +312,21 @@ enum WritingStyleEngine {
                 }
                 let removedWords = Array(keys[index..<last])
                 let kept = last..<(last + length)
-                let isMeant = CleanupSalvage.repeatedPhraseLength(removedWords, following: unit, preceding: []) != length
+                let phraseLength = CleanupSalvage.repeatedPhraseLength(removedWords, following: unit, preceding: [])
+                let isMeant = phraseLength == nil
                     || !kept.allSatisfy({ !tokens[$0].word.contains(where: \.isUppercase) || keys[$0] == "i" || keys[$0].hasPrefix("i'") })
                 if isMeant {
                     refusedUntil = max(refusedUntil, last + length)
                     continue
                 }
+                // The unit is a shorter phrase said twice: matched at that length below.
+                guard phraseLength == length else { continue }
                 guard length > 1 || neverDoubled.contains(unit[0])
                         || (CleanupSalvage.grammaticalDoubles.contains(unit[0]) && removedWords.count >= 2),
                       (index..<last).allSatisfy(isPlain) else { continue }
                 removals.append(NSUnionRange(tokens[index].range, tokens[last - 1].range))
+                // A copy dropped here is no part of a run refused at this word.
+                refusedUntil = refusedBefore
                 index = last
                 matched = true
                 break
