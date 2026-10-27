@@ -19,7 +19,8 @@ import Foundation
 /// - a capital at the start of a sentence, and "i" → "I"
 /// - a misspelling corrected to a real word ("expender" → "expander")
 /// - "do not" ↔ "don't" and other contractions
-/// - hesitations, fillers, stutters ("if if", "diff different"), and
+/// - hesitations, fillers, stutters ("if if", "what what what", "you can
+///   see you can see", "diff different"), and
 ///   restarts the speaker abandoned; "scratch that" at the High level
 ///
 /// Everything else — a changed number, name, or word, an added word, a dropped
@@ -316,10 +317,14 @@ enum EditMerge {
         if CleanupSalvage.commaFillers.contains(phrase), commaNearby {
             return true
         }
-        // "if if", "the the": the same words sit right beside the deletion.
-        if keys.count <= 3, !CleanupSalvage.intentionalRepeats.contains(first.key) {
-            if Array(hunk.following.prefix(keys.count)).map(\.key) == keys { return true }
-            if Array(hunk.preceding.suffix(keys.count)).map(\.key) == keys { return true }
+        // "if if", "what what what", "you can see you can see": the same
+        // words sit right beside the deletion.
+        if CleanupSalvage.repeatedPhraseLength(
+            keys,
+            following: hunk.following.prefix(CleanupSalvage.longestRepeatedPhrase).map(\.key),
+            preceding: hunk.preceding.suffix(CleanupSalvage.longestRepeatedPhrase).map(\.key)
+        ) != nil {
+            return true
         }
         // "diff different", "sor sorry", "S see", "sn scan", "web website": a
         // cut-off start of the next word, with nothing between them. A lone letter only

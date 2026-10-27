@@ -136,6 +136,56 @@ final class DictationOutputPipelineTests: XCTestCase {
         XCTAssertEqual(unguarded.text, "My address is here")
     }
 
+    /// #389: phrases said twice in a row go without the model, at Medium
+    /// and above, in every app that cleans up.
+    func testRepeatedPhrasesGoWithoutTheModel() async {
+        let result = await process(
+            "for voice to voice to text and you can see you can see the the text",
+            cleaner: MockTranscriptCleanup(), enabled: false
+        )
+        XCTAssertEqual(result.text, "For voice to text and you can see the text")
+        XCTAssertTrue(result.summary.contains("repeated words removed"), result.summary)
+        let light = await process("you can see you can see", cleaner: MockTranscriptCleanup(), enabled: false, level: .light)
+        XCTAssertTrue(light.text.lowercased().contains("you can see you can see"), light.text)
+        // A command repeats arguments; only sentences lose a repeat.
+        let terminal = await process("git add the the docs", cleaner: MockTranscriptCleanup(), format: .terminal, enabled: false)
+        XCTAssertEqual(terminal.text, "git add the the docs")
+    }
+
+    func testRepeatedPhraseRules() {
+        let cases: [(String, String)] = [
+            ("You can see you can see the result.", "You can see the result."),
+            ("and you can see you can see.", "and you can see."),
+            ("in the in the morning", "in the morning"),
+            ("I want to I want to go", "I want to go"),
+            ("go to to the store", "go to the store"),
+            ("what what what there is", "what there is"),
+            // Meant, or for the model to judge.
+            ("thank you, thank you", "thank you, thank you"),
+            ("we need to, we need to ship", "we need to, we need to ship"),
+            ("come on come on", "come on come on"),
+            ("no no no", "no no no"),
+            ("I know that that works", "I know that that works"),
+            ("she had had enough", "she had had enough"),
+            ("bye bye", "bye bye"),
+            ("cleanup cleanup tab", "cleanup cleanup tab"),
+            ("New York New York is a song", "New York New York is a song"),
+            ("the code is four two four two", "the code is four two four two"),
+        ]
+        for (input, expected) in cases {
+            XCTAssertEqual(WritingStyleEngine.removeRepeatedPhrases(input).text, expected, input)
+        }
+    }
+
+    func testAFormalRewriteMayDropAnAccidentalCopy() {
+        XCTAssertNil(RewriteValidation.rejectionReason(
+            "You can see the result.", original: "you can see you can see the result"
+        ))
+        XCTAssertNotNil(RewriteValidation.rejectionReason(
+            "The team builds and ships.", original: "the team builds and the team ships"
+        ))
+    }
+
     func testCutOffWordRules() {
         let known: Set<String> = [
             "please", "improve", "sorry", "supporting", "are", "diff", "different", "them", "theme",

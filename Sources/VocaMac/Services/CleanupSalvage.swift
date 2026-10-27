@@ -69,8 +69,51 @@ enum CleanupSalvage {
     static let intentionalRepeats: Set<String> = [
         "very", "really", "so", "much", "many", "more", "no", "yes", "yeah", "bye", "ha",
         "hey", "please", "go", "again", "far", "long", "too", "super", "now", "well",
-        "right", "okay", "ok", "wait", "come", "knock", "what", "why", "that", "had",
+        "right", "okay", "ok", "wait", "come", "knock", "what", "why", "that", "had", "thank",
     ]
+
+    /// Words of `intentionalRepeats` that are doubled by grammar or surprise
+    /// rather than for emphasis: "I know that that works", "had had", "what
+    /// what?". Two copies stay; a third ("what what what is this") or a
+    /// longer phrase they open ("what is it what is it") is a stutter.
+    static let grammaticalDoubles: Set<String> = ["what", "why", "that", "had"]
+
+    /// Digits read out repeat on purpose: "four two four two" is a code.
+    static let numberWords: Set<String> = [
+        "zero", "oh", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+        "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen",
+        "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety", "hundred", "thousand",
+        "million", "billion", "double", "triple",
+    ]
+
+    /// Longest phrase, in words, whose accidental repeat may be removed: "you
+    /// can see you can see", "I was going to say I was going to say".
+    static let longestRepeatedPhrase = 6
+
+    /// The length in words of the phrase `removed` repeats, when `removed` is
+    /// one or more copies of a phrase said again right beside it, so taking
+    /// it out leaves one copy: "if if", "what what what", "voice to voice to
+    /// text". Nil when it isn't, or when the repeat is likely on purpose
+    /// ("very very", "no no no", "four two four two").
+    ///
+    /// - Parameters:
+    ///   - removed: The deleted words, lowercased, in order.
+    ///   - following: The kept words right after the deletion.
+    ///   - preceding: The kept words right before it.
+    static func repeatedPhraseLength(_ removed: [String], following: [String], preceding: [String]) -> Int? {
+        guard let first = removed.first else { return nil }
+        for length in 1...min(longestRepeatedPhrase, removed.count) where removed.count % length == 0 {
+            let unit = Array(removed.prefix(length))
+            guard !unit.contains(where: numberWords.contains),
+                  stride(from: length, to: removed.count, by: length)
+                    .allSatisfy({ Array(removed[$0..<($0 + length)]) == unit }),
+                  Array(following.prefix(length)) == unit || Array(preceding.suffix(length)) == unit else { continue }
+            guard intentionalRepeats.contains(first) else { return length }
+            let copies = removed.count / length + 1
+            return grammaticalDoubles.contains(first) && (length > 1 || copies >= 3) ? length : nil
+        }
+        return nil
+    }
 
     /// What to delete for one run of words the model left out, or nil when
     /// the run isn't safely filler. Usually the run itself; for a repeat, the
@@ -103,23 +146,28 @@ enum CleanupSalvage {
         if openingFillers.contains(phrase), atSentenceStart, commaAfter {
             return wholeRun
         }
-        // "gone gone": the deleted copy sits beside a kept copy.
-        if words.count <= 3, !intentionalRepeats.contains(source[first].core),
-           !source[last].text.contains(where: { ".!?".contains($0) }) {
-            let copy = words.map { source[$0].core }
-            if let next, next + copy.count <= source.count,
-               (next..<next + copy.count).allSatisfy({ kept.contains($0) }),
-               Array(source[next..<next + copy.count]).map(\.core) == copy {
+        // "gone gone", "what what what": the deleted copies sit beside a kept
+        // copy.
+        if !source[last].text.contains(where: { ".!?".contains($0) }) {
+            let copies = words.map { source[$0].core }
+            let window = longestRepeatedPhrase
+            let after = next.map { next in
+                Array((next..<min(next + window, source.count)).prefix { kept.contains($0) }).map { source[$0].core }
+            } ?? []
+            if repeatedPhraseLength(copies, following: after, preceding: []) != nil {
                 return wholeRun
             }
-            // The model dropped the second copy; drop the first instead, the
-            // one the speaker abandoned, along with its trailing comma.
-            if let previous, previous - copy.count + 1 >= 0 {
-                let earlier = (previous - copy.count + 1)...previous
-                if Array(source[earlier]).map(\.core) == copy,
-                   earlier.allSatisfy({ kept.contains($0) }),
-                   !source[previous].text.contains(where: { ".!?".contains($0) }) {
-                    return [NSUnionRange(source[earlier.lowerBound].range, source[previous].range)] + hesitations
+            // The model dropped the later copies; drop the earlier ones
+            // instead, so the one the speaker abandoned goes with its
+            // trailing comma and the last copy keeps its own punctuation.
+            if let previous, !source[previous].text.contains(where: { ".!?".contains($0) }) {
+                let lowest = max(0, previous - window + 1)
+                let before = Array((lowest...previous).reversed().prefix { kept.contains($0) }.reversed())
+                if let length = repeatedPhraseLength(copies, following: [], preceding: before.map { source[$0].core }) {
+                    let start = before[before.count - length]
+                    let end = words.count > length ? words[words.count - length - 1] : previous
+                    return [NSUnionRange(source[start].range, source[end].range)]
+                        + hesitations.filter { $0.location > source[end].range.location }
                 }
             }
         }

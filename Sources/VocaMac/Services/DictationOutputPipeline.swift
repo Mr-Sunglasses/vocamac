@@ -329,6 +329,7 @@ struct DictationOutputPipeline {
         let resolvedCorrections: Int
         let collapsedStutters: Int
         let removedCutOffWords: Int
+        let removedRepeats: Int
         let isEnglishText: Bool
         let effectiveLevel: CleanupLevel
 
@@ -342,6 +343,9 @@ struct DictationOutputPipeline {
             if collapsedStutters > 0 { notes.append("stutter collapsed") }
             if removedCutOffWords > 0 {
                 notes.append(removedCutOffWords == 1 ? "cut-off word removed" : "\(removedCutOffWords) cut-off words removed")
+            }
+            if removedRepeats > 0 {
+                notes.append("repeated words removed")
             }
             return ([summary] + notes).joined(separator: " · ")
         }
@@ -425,6 +429,15 @@ struct DictationOutputPipeline {
             )
         }
 
+        // "you can see you can see", "the the": a phrase said twice in a row.
+        // Rule-based and English only, like cut-off words, because the
+        // phrases it leaves alone ("no no no", "thank you, thank you") are
+        // English ones.
+        var removedRepeats = 0
+        if profile.cleanup == .inherit, effectiveLevel.removesHesitations, isEnglishText {
+            (input, removedRepeats) = WritingStyleEngine.removeRepeatedPhrases(input, prose: profile.format.supportsWording)
+        }
+
         // "let's do it tomorrow, oh, no, Wednesday" → "let's do it Wednesday".
         // Rule-based, so like hesitation removal it runs without a model, at
         // Medium and High, and in any language the resolver knows. Prose
@@ -457,7 +470,7 @@ struct DictationOutputPipeline {
             masked: converted.masked, closingGlyph: converted.closingGlyph,
             removedHesitations: removedHesitations, resolvedCorrections: resolvedCorrections,
             collapsedStutters: collapsedStutters, removedCutOffWords: removedCutOffWords,
-            isEnglishText: isEnglishText, effectiveLevel: effectiveLevel
+            removedRepeats: removedRepeats, isEnglishText: isEnglishText, effectiveLevel: effectiveLevel
         ))
     }
 
@@ -1243,11 +1256,14 @@ enum RewriteValidation {
         guard TranscriptCleanup.isUsable(candidate, original: original) else { return "unusable output" }
         guard substrings(#"\d+(?:[.,:/-]\d+)*"#, in: candidate)
                 == substrings(#"\d+(?:[.,:/-]\d+)*"#, in: original) else { return "numbers changed" }
-        guard negations(candidate) == negations(original) else { return "negation changed" }
-        guard participants(candidate) == participants(original) else { return "pronouns changed" }
+        // A copy said by accident ("I don't, I don't know") need not come
+        // back; everything said once, or again on purpose, must.
+        let spoken = collapsingAdjacentRepeats(in: original)
+        guard negations(candidate) == negations(spoken) else { return "negation changed" }
+        guard participants(candidate) == participants(spoken) else { return "pronouns changed" }
         let qualifiers = #"(?i)\b(?:might|may|must|perhaps|probably|possibly|always|sometimes|only|unless)\b"#
         guard substrings(qualifiers, in: candidate.lowercased())
-            == substrings(qualifiers, in: original.lowercased()) else { return "qualifier changed" }
+            == substrings(qualifiers, in: spoken.lowercased()) else { return "qualifier changed" }
         // The small shipped models have no multilingual style qualification.
         if containsNonLatinLetters(original), candidate != original { return "non-Latin text changed" }
         guard candidate.filter({ $0 == "?" }).count >= original.filter({ $0 == "?" }).count else {
@@ -1260,7 +1276,8 @@ enum RewriteValidation {
         let after = words(candidate)
         let expendable: Set<String> = ["um", "uh", "erm", "hmm", "a", "an", "the", "so"]
         let meaningful = before.filter { !expendable.contains($0) }
-        let sourceCounts = meaningful.reduce(into: [String: Int]()) { $0[$1, default: 0] += 1 }
+        let sourceCounts = words(spoken).filter { !expendable.contains($0) }
+            .reduce(into: [String: Int]()) { $0[$1, default: 0] += 1 }
         let outputCounts = after.reduce(into: [String: Int]()) { $0[$1, default: 0] += 1 }
         for (word, count) in sourceCounts where count > 1 {
             guard outputCounts[word, default: 0] >= count else { return "repeated word dropped (\(word))" }
@@ -1270,6 +1287,30 @@ enum RewriteValidation {
             return "too much rewording"
         }
         return nil
+    }
+
+    /// `text` with each phrase said again right after itself by accident
+    /// (see `CleanupSalvage.repeatedPhraseLength`) cut to its last copy.
+    static func collapsingAdjacentRepeats(in text: String) -> String {
+        let tokens = text.split(whereSeparator: \.isWhitespace)
+        let keys = tokens.map { words(String($0)).joined(separator: "'") }
+        var kept: [Substring] = []
+        var index = 0
+        while index < tokens.count {
+            let longest = min(CleanupSalvage.longestRepeatedPhrase, (tokens.count - index) / 2)
+            let repeated = stride(from: longest, through: 1, by: -1).first { length in
+                let unit = Array(keys[index..<(index + length)])
+                return !unit.contains("") && Array(keys[(index + length)..<(index + 2 * length)]) == unit
+                    && CleanupSalvage.repeatedPhraseLength(unit, following: unit, preceding: []) == length
+            }
+            if let repeated {
+                index += repeated
+            } else {
+                kept.append(tokens[index])
+                index += 1
+            }
+        }
+        return kept.joined(separator: " ")
     }
 
     static func containsLiteralEscape(_ text: String) -> Bool {

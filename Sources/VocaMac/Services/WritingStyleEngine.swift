@@ -253,6 +253,81 @@ enum WritingStyleEngine {
         return (removeWordRuns(removals, from: text, prose: false), removals.count)
     }
 
+    // MARK: - Repeated phrases
+
+    /// Remove a phrase said twice in a row, without a model, keeping the last
+    /// copy: "you can see you can see the result" → "you can see the result",
+    /// "voice to voice to text", "the the text". A small cleanup model often
+    /// leaves these in, and Smart Cleanup may be off.
+    ///
+    /// Deliberately narrow, since nothing checks it afterwards:
+    ///
+    /// - A phrase of two to six words, or one of the small words that are
+    ///   never doubled in a sentence ("the the", "to to"). "had had", "that
+    ///   that", and "bye bye" are left for the model to judge; "what what
+    ///   what" is not grammar, so three copies go.
+    /// - Copies of plain words only, with nothing between them: "thank you,
+    ///   thank you" is set off by a comma, so it was meant.
+    /// - Never a phrase opening with a word people double on purpose ("no no
+    ///   no", "come on come on"), one with a capital in the copy kept ("New
+    ///   York New York"), or one with a number in it ("four two four two").
+    /// - In Code and Terminal text only when it reads as sentences: a command
+    ///   may repeat an argument.
+    static func removeRepeatedPhrases(_ text: String, prose: Bool = true) -> (text: String, removed: Int) {
+        guard let expression = cutOffTokenExpression, prose || readsAsProse(text) else { return (text, 0) }
+        let ns = text as NSString
+        let tokens = expression.matches(in: text, range: NSRange(location: 0, length: ns.length)).map {
+            (range: $0.range, word: ns.substring(with: $0.range))
+        }
+        func isPlain(_ index: Int) -> Bool {
+            let word = tokens[index].word
+            return word.first?.isLetter == true && word.allSatisfy { $0.isLetter || $0 == "'" || $0 == "’" }
+        }
+        // The copy kept may end the sentence: "… you can see you can see."
+        let keys = tokens.map {
+            String($0.word.lowercased().replacingOccurrences(of: "’", with: "'")
+                .reversed().drop { ",.!?;:…".contains($0) }.reversed())
+        }
+        var removals: [NSRange] = []
+        var index = 0
+        while index < tokens.count {
+            var matched = false
+            let longest = min(CleanupSalvage.longestRepeatedPhrase, (tokens.count - index) / 2)
+            for length in stride(from: longest, through: 1, by: -1) {
+                let unit = Array(keys[index..<(index + length)])
+                guard (index..<(index + length)).allSatisfy(isPlain),
+                      Array(keys[(index + length)..<(index + 2 * length)]) == unit else { continue }
+                // Further copies go too; the last one stays.
+                var last = index + length
+                while last + 2 * length <= tokens.count,
+                      (last..<(last + length)).allSatisfy(isPlain),
+                      Array(keys[(last + length)..<(last + 2 * length)]) == unit {
+                    last += length
+                }
+                let removedWords = Array(keys[index..<last])
+                guard length > 1 || neverDoubled.contains(unit[0])
+                        || (CleanupSalvage.grammaticalDoubles.contains(unit[0]) && removedWords.count >= 2),
+                      CleanupSalvage.repeatedPhraseLength(removedWords, following: unit, preceding: []) == length
+                else { continue }
+                let kept = last..<(last + length)
+                guard kept.allSatisfy({ !tokens[$0].word.contains(where: \.isUppercase) || keys[$0] == "i" || keys[$0].hasPrefix("i'") }),
+                      (index..<last).allSatisfy(isPlain) else { continue }
+                removals.append(NSUnionRange(tokens[index].range, tokens[last - 1].range))
+                index = last
+                matched = true
+                break
+            }
+            if !matched { index += 1 }
+        }
+        guard !removals.isEmpty else { return (text, 0) }
+        return (removeWordRuns(removals, from: text, prose: prose), removals.count)
+    }
+
+    /// Small words a sentence never says twice in a row.
+    private static let neverDoubled: Set<String> = [
+        "the", "a", "an", "to", "of", "for", "and", "or", "with", "from", "at", "my", "your", "our", "their",
+    ]
+
     // MARK: - Cut-off words
 
     /// Remove a word the speaker cut off and then said in full, without a

@@ -158,6 +158,15 @@ final class CleanupModelEvaluationTests: XCTestCase {
         Probe(id: "number-correction", raw: "We sold twenty five, no, thirty units last week.", editedReference: "We sold thirty units last week.", language: "en", mustPreserve: ["thirty units"]),
         Probe(id: "apology", raw: "Sorry, Daniel can't make it on Tuesday.", editedReference: "Sorry, Daniel can't make it on Tuesday.", language: "en", mustPreserve: ["Sorry", "Daniel", "can't"]),
         Probe(id: "names", raw: "Invite Rachel, Daniel, and Priya to the review.", editedReference: "Invite Rachel, Daniel, and Priya to the review.", language: "en", mustPreserve: ["Rachel", "Daniel", "Priya"]),
+        // Accidental repeats (#389) and the doubles that are meant.
+        Probe(id: "repeat-word", raw: "I gave it to the cleanup cleanup tab yesterday", editedReference: "I gave it to the cleanup tab yesterday.", language: "en", mustPreserve: ["cleanup tab"]),
+        Probe(id: "repeat-triple", raw: "what what what is this", editedReference: "What is this?", language: "en", mustPreserve: ["is this"]),
+        Probe(id: "repeat-phrase", raw: "and you can see you can see the result", editedReference: "And you can see the result.", language: "en", mustPreserve: ["you can see the result"]),
+        Probe(id: "repeat-number", raw: "I am using the ministral three three billion model", editedReference: "I am using the ministral three billion model.", language: "en", mustPreserve: ["billion model"]),
+        Probe(id: "repeat-long", raw: "This was the prompt I gave to the cleanup cleanup tab for voice to voice to text transcription and you can see you can see it will not clear the repetitive text and what what what there is the the text will be marked down twice or thrice as well.", editedReference: "This was the prompt I gave to the cleanup tab for voice to text transcription, and you can see it will not clear the repetitive text and what there is, the text will be marked down twice or thrice as well.", language: "en", mustPreserve: ["cleanup tab", "voice to text", "you can see it will not clear", "twice or thrice"]),
+        Probe(id: "emphasis-no", raw: "no no no don't push that branch", editedReference: "No, no, no, don't push that branch.", language: "en", mustPreserve: ["no", "push that branch"]),
+        Probe(id: "had-had", raw: "she had had enough of the delays", editedReference: "She had had enough of the delays.", language: "en", mustPreserve: ["had had"]),
+        Probe(id: "that-that", raw: "I know that that fix works", editedReference: "I know that that fix works.", language: "en", mustPreserve: ["that that"]),
     ]
 
     /// Observe the exact candidate used by the pipeline, without a second

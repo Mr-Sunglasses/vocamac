@@ -19,6 +19,26 @@ final class EditMergeTests: XCTestCase {
         XCTAssertEqual(merge("doesn't look even look like it", "doesn't look like it").text, "doesn't look even look like it")
     }
 
+    /// #389: "what what what" and longer phrases said twice were left in,
+    /// because a deleted run had to match the same number of words after it.
+    func testAccidentalRepeatsOfAnyLengthGo() {
+        XCTAssertEqual(merge("what what what is this", "What is this?").text, "What is this?")
+        XCTAssertEqual(merge("for voice to voice to text", "for voice to text").text, "for voice to text")
+        XCTAssertEqual(merge("and you can see you can see the result", "and you can see the result").text,
+                       "and you can see the result")
+        XCTAssertEqual(merge("I was going to say I was going to say no", "I was going to say no").text,
+                       "I was going to say no")
+        XCTAssertEqual(merge("the the the text", "the text").text, "the text")
+        // Meant: emphasis, grammar, and digits read out.
+        XCTAssertEqual(merge("this is very very important", "this is very important").text,
+                       "this is very very important")
+        XCTAssertEqual(merge("no no no don't", "no don't").text, "no no no don't")
+        XCTAssertEqual(merge("I know that that works", "I know that works").text, "I know that that works")
+        XCTAssertEqual(merge("she had had enough", "she had enough").text, "she had had enough")
+        XCTAssertEqual(merge("the code is four two four two", "the code is four two").text,
+                       "the code is four two four two")
+    }
+
     /// The system spell checker accepts every single letter, so a fragment
     /// rule that asked it about "S" never fired in the app.
     func testClippedStartsGoEvenWhenTheSpellCheckerKnowsEveryLetter() {
