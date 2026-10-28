@@ -237,6 +237,17 @@ extension ModelManaging {
     func bundledModelFolder(for size: ModelSize) -> URL? { nil }
 }
 
+/// Imported models, for managers that support them. The defaults keep fakes
+/// that don't care about imports compiling.
+protocol CustomModelManaging {
+    func importedModels() -> [InstalledCustomModel]
+    func importCustomModel(from source: URL) async throws -> InstalledCustomModel
+    func deleteCustomModel(id: String) async throws
+    func activateCustomModel(id: String, persist: Bool) throws
+}
+
+extension ModelManager: CustomModelManaging {}
+
 extension ModelManaging {
     func cancelDownload(for size: ModelSize) {}
 }

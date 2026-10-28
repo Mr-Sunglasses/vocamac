@@ -233,6 +233,8 @@ enum CalmNavigation {
         "command-mode-share": .settings(.models),
         // Your own server is a row in All models.
         "custom-endpoint": .settings(.allModels),
+        // Imported models sit under the list in All models.
+        "imported-models": .settings(.allModels),
     ]
 
     /// Entries that open Models on its Writing AI tab.

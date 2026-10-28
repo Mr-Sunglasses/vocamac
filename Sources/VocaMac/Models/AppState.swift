@@ -1821,8 +1821,10 @@ final class AppState: ObservableObject {
     private func modelCatalog() -> [ModelSize] {
         var catalog = ModelSize.standardCatalog.filter { $0.isAvailableOnThisSystem }
 
+        // An import slot is listed only while it has a model to run.
         for size in ModelSize.allCases
-        where size.isAvailableOnThisSystem && modelManager.isModelSupported(size) {
+        where size.isAvailableOnThisSystem && modelManager.isModelSupported(size)
+            && (!size.isCustom || size.activeCustomModel != nil) {
             if !catalog.contains(size) {
                 catalog.append(size)
             }
@@ -1837,7 +1839,7 @@ final class AppState: ObservableObject {
     }
 
     /// Recreate model UI state from the latest catalog and local cache status.
-    private func rebuildAvailableModels() {
+    func rebuildAvailableModels() {
         availableModels = modelCatalog().map { size in
             // A folder is only returned once its files check out, so it
             // answers "downloaded" too; asking again walked every file twice.
@@ -1853,7 +1855,7 @@ final class AppState: ObservableObject {
     }
 
     /// Resolve WhisperKit's recommended exact model variant into app metadata.
-    private func recommendedModelSize() -> ModelSize? {
+    func recommendedModelSize() -> ModelSize? {
         guard let recommended = deviceRecommendedModel,
               let size = modelManager.modelSize(from: recommended),
               modelManager.isModelSupported(size) else {
@@ -3966,7 +3968,7 @@ final class AppState: ObservableObject {
         showTemporaryError(message)
     }
 
-    private func showTemporaryError(_ message: String, duration: TimeInterval = 5.0) {
+    func showTemporaryError(_ message: String, duration: TimeInterval = 5.0) {
         errorMessage = message
         // Set here as well as on the status change, for an error that
         // follows another before the first one cleared.
@@ -4255,6 +4257,8 @@ final class AppState: ObservableObject {
         // a cold CoreML compile can take minutes.
         let updateCheck = Task<Void, Never> { @MainActor [weak self] in
             await self?.updateChecker.checkOnLaunchIfNeeded()
+            // Same schedule and gate as the update check; a 304 when unchanged.
+            await self?.refreshCommunityModelsIfNeeded()
         }
 
         whisperService.removeRetiredEngineState()

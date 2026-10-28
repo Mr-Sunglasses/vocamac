@@ -165,7 +165,8 @@ final class HeadlessTranscriber: @unchecked Sendable {
     /// Return the complete known model catalog with current runtime state.
     func listModels() -> CLIModelListResponse {
         let selectedModel = try? resolveModel(identifier: preferences.selectedModelIdentifier)
-        let entries = ModelSize.allCases.map { model in
+        // Import slots are listed as the models they hold, below.
+        var entries = ModelSize.allCases.filter { !$0.isCustom }.map { model in
             CLIModelResponse(
                 id: model.rawValue,
                 name: model.displayName,
@@ -176,6 +177,21 @@ final class HeadlessTranscriber: @unchecked Sendable {
                 systemManaged: model.isSystemManaged
             )
         }
+        if let imports = modelManager as? CustomModelManaging {
+            for imported in imports.importedModels() {
+                guard let slot = imported.manifest.engine.modelSlot else { continue }
+                let isActive = slot.activeCustomModel?.id == imported.id
+                entries.append(CLIModelResponse(
+                    id: imported.id,
+                    name: imported.manifest.name,
+                    engine: slot.engine.cliIdentifier,
+                    selected: selectedModel == slot && isActive,
+                    downloaded: true,
+                    supported: slot.isAvailableOnThisSystem,
+                    systemManaged: false
+                ))
+            }
+        }
         return CLIModelListResponse(models: entries)
     }
 
@@ -185,10 +201,18 @@ final class HeadlessTranscriber: @unchecked Sendable {
             // prefs that never persisted the key) behaves the same headlessly.
             return .tiny
         }
-        guard let model = ModelSize(rawValue: identifier) ?? modelManager.modelSize(from: identifier) else {
-            throw CLIError(.modelNotFound, "Unknown model: \(identifier)")
+        if let model = ModelSize(rawValue: identifier) ?? modelManager.modelSize(from: identifier) {
+            return model
         }
-        return model
+        // An imported model, named by its manifest id: run it in its slot for
+        // this process only, leaving the app's choice alone.
+        if let imports = modelManager as? CustomModelManaging,
+           let imported = imports.importedModels().first(where: { $0.id == identifier }),
+           let slot = imported.manifest.engine.modelSlot {
+            try? imports.activateCustomModel(id: imported.id, persist: false)
+            return slot
+        }
+        throw CLIError(.modelNotFound, "Unknown model: \(identifier)")
     }
 
     private func validateAvailability(of model: ModelSize) throws {

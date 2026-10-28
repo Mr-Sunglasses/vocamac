@@ -581,6 +581,13 @@ enum SettingsSearchIndex {
             keywords: ["streak", "words", "history", "share", "social", "linkedin", "usage stats"]
         ),
         SettingsSearchEntry(
+            id: "imported-models",
+            page: .speechModel,
+            title: "Your own models",
+            subtitle: "Import a Whisper fine-tune, an ONNX model or a GGUF",
+            keywords: ["import", "custom model", "fine-tune", "finetune", "gguf", "onnx", "coreml", "community", "vocamodel"]
+        ),
+        SettingsSearchEntry(
             id: "mcp-server",
             page: .advanced,
             title: "Coding agents (MCP)",
