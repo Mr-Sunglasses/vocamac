@@ -202,6 +202,14 @@ struct CustomModelManifest: Codable, Equatable, Sendable {
                 problems.append("A sherpa-onnx model needs a “sherpa” section naming its type and files.")
                 break
             }
+            // Every file the engine opens must be inside the model's folder.
+            let names = [sherpa.model, sherpa.encoder, sherpa.decoder, sherpa.mergedDecoder,
+                         sherpa.convFrontend, sherpa.tokenizer].compactMap { $0 }
+            let outside = names.filter { !Self.isInsideFolder($0) }
+            guard outside.isEmpty else {
+                for name in outside { problems.append("“\(name)” must name a file inside the model's folder.") }
+                break
+            }
             guard let kind = sherpa.kind else {
                 let types = SherpaConfiguration.knownTypes.joined(separator: ", ")
                 problems.append("The sherpa type “\(sherpa.type)” is unknown or is missing a file name. Known types: \(types).")
@@ -243,6 +251,14 @@ struct CustomModelManifest: Codable, Equatable, Sendable {
         }
         return "The GGUF architecture “\(architecture)” is a hybrid attention/recurrent design. VocaMac reuses the model's "
             + "cache between dictations, which those models can't do: they return empty text after the first one."
+    }
+
+    /// A relative path that stays inside the folder: not absolute, no
+    /// "~", and no ".." component.
+    static func isInsideFolder(_ relative: String) -> Bool {
+        let trimmed = relative.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !trimmed.hasPrefix("/"), !trimmed.hasPrefix("~") else { return false }
+        return !trimmed.split(separator: "/").contains("..")
     }
 
     static func isHexDigest(_ value: String) -> Bool {

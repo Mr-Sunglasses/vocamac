@@ -174,8 +174,8 @@ struct MeetingCaptureView: View {
         VStack(alignment: .leading, spacing: 14) {
             TranscriptionWorkflowHeader(
                 title: "New Note",
-                subtitle: "Record a meeting, a call or a memo. It is transcribed with "
-                    + appState.speechProcessingDescription + " and saved to Notes.",
+                subtitle: "Record a meeting, a call or a memo, saved to Notes. "
+                    + appState.speechProcessingDescription + ".",
                 systemImage: "note.text"
             )
             Picker("Record", selection: $session.input) {

@@ -234,4 +234,27 @@ extension AppState {
             VocaLogger.warning(.appState, "Could not write a note to the export folder: \(error.localizedDescription)")
         }
     }
+
+    // MARK: - Privacy
+
+    /// Where a note's recording and text go, for the Notes page. Notes use
+    /// the dictation model and the Command Mode engine, and either can be a
+    /// server the user set up.
+    var notesPrivacyNote: String {
+        let speechIsRemote = ModelSize(rawValue: selectedModelSize)?.engine == .customEndpoint
+        let summaryIsRemote: Bool = {
+            if case .endpoint = commandModeEngine { return true }
+            return false
+        }()
+        switch (speechIsRemote, summaryIsRemote) {
+        case (false, false):
+            return "Nothing leaves this Mac."
+        case (true, false):
+            return "Recordings go to your Custom Endpoint to be transcribed. Summaries are written on this Mac."
+        case (false, true):
+            return "Transcripts are written on this Mac. Summaries are written by the server Command Mode uses."
+        case (true, true):
+            return "Recordings go to your Custom Endpoint, and summaries are written by the server Command Mode uses."
+        }
+    }
 }

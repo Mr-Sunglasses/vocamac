@@ -38,7 +38,7 @@ struct CalmNotesPage: View {
     private func list(_ notes: [VoiceNote]) -> some View {
         let shown = VoiceNoteStore.notes(notes, matching: query)
         return CalmPage(.list, spacing: 22) {
-            CalmPageHeader("Notes", description: "Meetings, calls and memos, transcribed and summarized on this Mac.") {
+            CalmPageHeader("Notes", description: "Meetings, calls and memos, transcribed and summarized. \(appState.notesPrivacyNote)") {
                 HStack(spacing: 8) {
                     if !notes.isEmpty { searchControl }
                     Button {
@@ -51,7 +51,7 @@ struct CalmNotesPage: View {
             }
             if notes.isEmpty {
                 CalmEmptyState(icon: .notes, title: "No notes yet") {
-                    Text("Record a meeting, a call or a memo. VocaMac writes the transcript, tells the speakers apart, and summarizes it. Nothing leaves this Mac.")
+                    Text("Record a meeting, a call or a memo. VocaMac writes the transcript, tells the speakers apart, and summarizes it.")
                 }
             } else if shown.isEmpty {
                 CalmNoResults(message: "No notes match “\(query)”.") { query = "" }
@@ -370,7 +370,7 @@ private struct CalmNotesSettingsGroup: View {
                             .calmButton(.secondary)
                     }
                 }
-                Text("Notes follow History's retention setting (Settings → Privacy and History).")
+                Text("Notes follow History’s retention setting (Settings › Privacy and History).")
                     .font(CalmFont.note)
                     .foregroundStyle(CalmColor.muted)
                     .padding(.horizontal, 16)

@@ -131,6 +131,17 @@ final class ModelManifestTests: XCTestCase {
         XCTAssertEqual(manifest.problems(in: folder), [])
     }
 
+    func testSherpaFileNamesStayInsideTheFolder() throws {
+        let folder = CustomModelFixtures.temporaryDirectory(self).appendingPathComponent("escape")
+        var manifest = CustomModelManifest(id: "escape-model", name: "Escape", engine: .sherpaOnnx)
+        try CustomModelFixtures.write(manifest, to: folder)
+        for name in ["../model.onnx", "/etc/model.onnx", "~/model.onnx", "sub/../../model.onnx"] {
+            manifest.sherpa = .init(type: "nemoCtc", model: name)
+            XCTAssertEqual(manifest.problems(in: folder), ["“\(name)” must name a file inside the model's folder."], name)
+        }
+        XCTAssertTrue(CustomModelManifest.isInsideFolder("tokenizer/vocab.json"))
+    }
+
     func testHybridGGUFArchitecturesAreRefused() throws {
         let parent = CustomModelFixtures.temporaryDirectory(self)
         let refused = try CustomModelFixtures.ggufFolder(in: parent, id: "qwen35-small", architecture: "qwen35")
