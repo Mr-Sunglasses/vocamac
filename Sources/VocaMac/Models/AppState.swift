@@ -1229,6 +1229,8 @@ final class AppState: ObservableObject {
                 .receive(on: DispatchQueue.main)
                 .sink { [weak self] _ in self?.refreshActiveWritingStyle() }
                 .store(in: &cancellables)
+            // The MCP server adds Dictionary terms from its own process.
+            externalDictionaryChanges().store(in: &cancellables)
         }
 
         updateChecker.isDictationBusy = { [weak self] in

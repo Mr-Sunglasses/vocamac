@@ -17,15 +17,18 @@ struct AppCLIPreferencesReader: CLIPreferencesReading {
     private let defaults: UserDefaults
 
     init(defaults: UserDefaults? = nil) {
-        if let defaults {
-            self.defaults = defaults
-        } else if Bundle.main.bundleIdentifier == Self.applicationDomain {
+        self.defaults = defaults ?? Self.applicationDefaults()
+    }
+
+    /// VocaMac's own preferences, from the app binary or from a separately
+    /// built CLI binary.
+    static func applicationDefaults() -> UserDefaults {
+        if Bundle.main.bundleIdentifier == applicationDomain {
             // Inside the app, .standard already is com.vocamac.app. Asking
             // UserDefaults for its own identifier as a suite emits a warning.
-            self.defaults = .standard
-        } else {
-            self.defaults = UserDefaults(suiteName: Self.applicationDomain) ?? .standard
+            return .standard
         }
+        return UserDefaults(suiteName: applicationDomain) ?? .standard
     }
 
     var selectedModelIdentifier: String? {

@@ -581,6 +581,13 @@ enum SettingsSearchIndex {
             keywords: ["streak", "words", "history", "share", "social", "linkedin", "usage stats"]
         ),
         SettingsSearchEntry(
+            id: "mcp-server",
+            page: .advanced,
+            title: "Coding agents (MCP)",
+            subtitle: "Let Claude Code, Cursor and other local agents use VocaMac",
+            keywords: ["mcp", "model context protocol", "claude code", "cursor", "codex", "agent", "server", "api"]
+        ),
+        SettingsSearchEntry(
             id: "logs",
             page: .advanced,
             title: "Logs",
