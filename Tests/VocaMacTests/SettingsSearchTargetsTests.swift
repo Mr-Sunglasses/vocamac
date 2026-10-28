@@ -16,6 +16,7 @@ final class SettingsSearchTargetsTests: XCTestCase {
     /// from this table fails `testEveryViewWithTargetsIsOnAPage`.
     private static let pageOfView: [String: CalmDestination] = [
         "CalmHomePage": .main(.home),
+        "CalmNotesSettingsGroup": .main(.notes),
         "CalmInsightsPage": .main(.insights),
         "CalmDictionaryPage": .main(.dictionary),
         "CalmSnippetsPage": .main(.snippets),

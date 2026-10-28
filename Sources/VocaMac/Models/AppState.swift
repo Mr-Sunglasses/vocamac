@@ -1026,6 +1026,10 @@ final class AppState: ObservableObject {
     let frontmostAppResolver: any FrontmostAppResolving
     /// Past dictations, their text, and their audio.
     let historyStore: DictationHistoryStore
+    /// Meetings, calls and memos with their transcripts and summaries.
+    let voiceNoteStore: VoiceNoteStore
+    /// Tells speakers apart in a note.
+    let speakerDiarizer: any SpeakerDiarizing
     /// Reads names and identifiers from the screen; nil when disabled.
     let screenContextReader: (any ScreenContextReading)?
     /// Notices the user fixing dictated words; nil when disabled.
@@ -1162,6 +1166,8 @@ final class AppState: ObservableObject {
         // the same reason `cursorOverlay` has no default either.
         frontmostAppResolver: (any FrontmostAppResolving)? = nil,
         historyStore: DictationHistoryStore? = nil,
+        voiceNoteStore: VoiceNoteStore? = nil,
+        speakerDiarizer: (any SpeakerDiarizing)? = nil,
         screenContextReader: (any ScreenContextReading)? = nil,
         correctionObserver: (any CorrectionObserving)? = nil,
         selectedTextService: (any SelectedTextAccessing)? = nil,
@@ -1197,6 +1203,13 @@ final class AppState: ObservableObject {
                 directory: skipSystemIntegration ? nil : DictationHistoryStore.defaultDirectory,
                 loadInBackground: !skipSystemIntegration
             )
+        // Like History, notes load off the main thread at launch.
+        self.voiceNoteStore = voiceNoteStore
+            ?? VoiceNoteStore(
+                directory: skipSystemIntegration ? nil : VoiceNoteStore.defaultDirectory,
+                loadInBackground: !skipSystemIntegration
+            )
+        self.speakerDiarizer = speakerDiarizer ?? FluidSpeakerDiarizer()
         self.screenContextReader = screenContextReader ?? (skipSystemIntegration ? nil : ScreenContextReader())
         self.correctionObserver = correctionObserver ?? (skipSystemIntegration ? nil : CorrectionObserver())
         self.selectedTextService = selectedTextService
@@ -1265,6 +1278,12 @@ final class AppState: ObservableObject {
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &cancellables)
         self.historyStore.applyRetention(historyRetention)
+        // Notes keep History's retention; applied once they have loaded.
+        let notes = self.voiceNoteStore, retention = historyRetention
+        Task { @MainActor in
+            await notes.waitUntilLoaded()
+            notes.applyRetention(retention)
+        }
     }
 
     /// Single production AppState instance for the process.
@@ -5012,6 +5031,7 @@ extension AppState {
     /// Apply a retention change right away rather than at the next dictation.
     func applyHistoryRetention() {
         historyStore.applyRetention(historyRetention)
+        voiceNoteStore.applyRetention(historyRetention)
     }
 
     /// The loaded speech model's name as the model list shows it. Engines
@@ -5215,6 +5235,45 @@ extension AppState {
     func usesSeparateCommandSlot(for kind: CleanupModelKind) -> Bool {
         commandModelSlot != nil && cleanupUsesLocalModel && kind != selectedCleanupModelKind
             && (systemCapabilities?.physicalMemoryGB ?? SystemInfo.physicalMemoryGB) >= CleanupModelCatalog.sharedModelMemoryGB
+    }
+
+    /// Run `body` on the Command Mode engine outside an edit (a note's
+    /// summary): its local model loaded, borrowing cleanup's slot as an edit
+    /// would, and given back afterwards. `budget` is roughly how many
+    /// characters of text one pass can read beside `prompt`. Returns nil and
+    /// why when the engine can't run now.
+    func runOnCommandEngine<Value>(
+        prompt: String,
+        _ body: @MainActor (_ transformer: TextTransforming, _ budget: Int) async -> Value
+    ) async -> (value: Value?, problem: String?) {
+        guard activeCommandEngine == nil, !isRecording else {
+            return (nil, "VocaMac is busy with a dictation or an edit. Try again when it finishes.")
+        }
+        let engine = commandModeEngine
+        if let problem = commandModeProblem(for: engine) { return (nil, problem) }
+        activeCommandEngine = engine
+        // Remote engines and Apple Intelligence read far more than a small
+        // local context; a few pages a pass keeps each answer focused.
+        var budget = 12_000
+        if case .local(let kind) = engine {
+            commandModelIdleUnload?.cancel()
+            var service = commandModelService(for: kind)
+            activeCommandService = service
+            await service.load(kind)
+            if service.loadedKind != kind, service !== transcriptCleanup {
+                service = transcriptCleanup
+                activeCommandService = service
+                await service.load(kind)
+            }
+            guard service.loadedKind == kind else {
+                finishCommandModelUse(engine)
+                return (nil, "\(kind.descriptor.displayName) could not be loaded.")
+            }
+            budget = service.inputBudget(forPrompt: prompt, model: kind)
+        }
+        let value = await body(commandTransformer(for: engine), budget)
+        finishCommandModelUse(engine)
+        return (value, nil)
     }
 
     private func commandModelService(for kind: CleanupModelKind) -> TranscriptCleaning {

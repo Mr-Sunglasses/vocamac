@@ -239,7 +239,7 @@ extension ModelManaging {
 
 /// Imported models, for managers that support them. The defaults keep fakes
 /// that don't care about imports compiling.
-protocol CustomModelManaging {
+protocol CustomModelManaging: Sendable {
     func importedModels() -> [InstalledCustomModel]
     func importCustomModel(from source: URL) async throws -> InstalledCustomModel
     func deleteCustomModel(id: String) async throws
@@ -450,6 +450,13 @@ protocol TextTransforming: AnyObject {
 }
 
 extension TextTransforming {
+    /// Summarize `text` under a summary prompt (a voice note's): one pass
+    /// through the edit path, never split, since a summary of each part is
+    /// not a summary. Long text is cut into parts by `NoteSummarizer`.
+    func summarize(_ text: String, prompt: String) async -> CleanupAttempt {
+        await transform(text, prompt: prompt, options: TransformOptions())
+    }
+
     func cancelTransform() {}
 
     func transform(_ text: String, prompt: String, options: TransformOptions) async -> CleanupAttempt {

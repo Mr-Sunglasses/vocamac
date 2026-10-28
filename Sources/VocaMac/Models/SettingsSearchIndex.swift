@@ -581,6 +581,13 @@ enum SettingsSearchIndex {
             keywords: ["streak", "words", "history", "share", "social", "linkedin", "usage stats"]
         ),
         SettingsSearchEntry(
+            id: "notes-settings",
+            page: .notes,
+            title: "Notes",
+            subtitle: "Speakers, summaries, and a folder to save notes to",
+            keywords: ["notes", "meeting", "memo", "summary", "speakers", "diarization", "obsidian", "export", "transcript"]
+        ),
+        SettingsSearchEntry(
             id: "imported-models",
             page: .speechModel,
             title: "Your own models",
