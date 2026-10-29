@@ -55,6 +55,8 @@ final class CalibrationRunner {
     /// - Parameters:
     ///   - isFirstLoad: Whether a model compiles before it loads, for the
     ///     progress line.
+    ///   - canLoad: Whether there is memory for the model now; one that
+    ///     doesn't fit is reported instead of loaded.
     ///   - didLoad: Called after a model loads, so the app can remember it
     ///     has compiled.
     func run(
@@ -63,6 +65,7 @@ final class CalibrationRunner {
         passage: CalibrationPassage,
         language: String?,
         isFirstLoad: (ModelSize) -> Bool = { _ in false },
+        canLoad: (ModelSize) -> Bool = { _ in true },
         didLoad: (ModelSize) -> Void = { _ in },
         progress: (CalibrationProgress) -> Void = { _ in }
     ) async -> [CalibrationRow] {
@@ -73,6 +76,15 @@ final class CalibrationRunner {
                 modelName: candidate.name, index: index, total: candidates.count,
                 isFirstLoad: isFirstLoad(candidate.size)
             ))
+            // Memory is checked again right before each load: the Mac may
+            // have less free than when the test began.
+            guard canLoad(candidate.size) else {
+                rows.append(.failed(
+                    modelID: candidate.size.rawValue, modelName: candidate.name,
+                    reason: "Needs more free memory than this Mac has right now."
+                ))
+                continue
+            }
             let transcriber = makeTranscriber(language)
             do {
                 try await transcriber.loadModel(name: candidate.identifier, folder: candidate.folder)

@@ -513,9 +513,14 @@ final class AppState: ObservableObject {
     @UserDefault(PreferenceKey.dictationModes) var dictationModesJSON: String = ""
     /// JSON `CalibrationResult`; read through `lastCalibration`.
     @UserDefault(PreferenceKey.calibrationResult) var calibrationResultJSON: String = ""
-    /// The accuracy test owns the microphone and the test models; dictation
-    /// waits until it is done.
-    @Published var isCalibrating = false
+    /// The accuracy test that owns the microphone and the test models, by
+    /// token; dictation and another test wait until it ends. Set only by
+    /// `beginCalibration()` and `endCalibration(_:)`.
+    @Published private(set) var calibrationToken: UUID?
+    var isCalibrating: Bool { calibrationToken != nil }
+    /// The input a recording would use now, given the chosen one (nil for
+    /// the system default). Tests replace it.
+    var inputDeviceUIDResolver: (String?) -> String? = { AudioEngine.currentInputDeviceUID(preferredUID: $0) }
     /// Opt-in: let a spoken instruction open apps and pages, search the web,
     /// run allow-listed Shortcuts, and add reminders.
     @UserDefault(PreferenceKey.voiceActionsEnabled) var voiceActionsEnabled: Bool = false
@@ -679,7 +684,8 @@ final class AppState: ObservableObject {
     private struct QueuedRecordingStart {
         let injectResult: Bool
         let outputDestination: ScratchpadOutputDestination
-        let isHandsFree: Bool
+        /// Set later too, when a mode's shortcut was only tapped.
+        var isHandsFree: Bool
         let verifiesShortcut: Bool
         let trigger: DictationTrigger
         /// The mode whose shortcut asked for this dictation.
@@ -991,7 +997,11 @@ final class AppState: ObservableObject {
     /// Replaced by every new recording, so a stale one never carries over.
     var recordingModeID: UUID?
     /// When a mode's shortcut went down, to tell a hold from a quick press.
+    /// Non-nil while the keys are held.
     var modePressStartedAt: Date?
+    /// A mode's shortcut was tapped before its recording began (the model
+    /// was still loading): the recording is hands-free once it starts.
+    var pendingModeHandsFree = false
     /// Whether the microphone has sent only silence so far this recording.
     var silentInputMonitor = SilentInputMonitor()
     private var recordingVerifiesShortcut = false
@@ -1424,7 +1434,10 @@ final class AppState: ObservableObject {
         audioEngine.onSilenceDetected = { [weak self] in
             Task { @MainActor in
                 guard let self = self else { return }
-                if (self.activationMode == .doubleTapToggle || self.isHandsFreeSession) && self.isRecording {
+                // A mode's shortcut still held is push-to-talk, whatever the
+                // main shortcut does: letting go ends it, not a pause.
+                if (self.activationMode == .doubleTapToggle || self.isHandsFreeSession) && self.isRecording
+                    && self.modePressStartedAt == nil {
                     VocaLogger.info(.appState, "Silence detected — auto-stopping recording (toggle session)")
                     await self.stopRecordingAndTranscribe()
                 }
@@ -2442,6 +2455,8 @@ final class AppState: ObservableObject {
         let generation = recordingGeneration
         // Only a dictation (not a Command Mode edit) takes a mode.
         recordingModeID = activeCommandTarget == nil ? pendingModeID : nil
+        if recordingModeID != nil, pendingModeHandsFree { isHandsFreeSession = true }
+        pendingModeHandsFree = false
         recordingInjectsResult = injectResult
         recordingVerifiesShortcut = verifiesShortcut
         nonInjectedOutputDestination = outputDestination
@@ -3543,12 +3558,31 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// Claim the microphone and the test models for one accuracy test.
+    /// Nil while another test still holds them.
+    func beginCalibration() -> UUID? {
+        guard calibrationToken == nil else { return nil }
+        let token = UUID()
+        calibrationToken = token
+        return token
+    }
+
+    /// Give them back. Only the test that claimed them can.
+    func endCalibration(_ token: UUID) {
+        if calibrationToken == token { calibrationToken = nil }
+    }
+
     /// Open the microphone for the accuracy test, with the same device and
-    /// channel choices as a dictation. Nothing is transcribed or typed.
-    func startCalibrationCapture() async -> Bool {
-        guard !isCapturingAudio, !isTranscribing, micPermission == .granted else { return false }
+    /// channel choices as a dictation, and say which input actually opened.
+    /// Nothing is transcribed or typed. Nil when it didn't start.
+    func startCalibrationCapture() async -> CalibrationInput? {
+        guard !isCapturingAudio, !isTranscribing, micPermission == .granted else { return nil }
         audioEngine.onAudioSamples = nil
-        return await startConfiguredAudioEngine()
+        guard await startConfiguredAudioEngine() else { return nil }
+        let preferred = selectedAudioDeviceID.isEmpty ? nil : selectedAudioDeviceID
+        let uid = audioEngine.activeInputDeviceUID ?? inputDeviceUIDResolver(preferred) ?? selectedAudioDeviceID
+        let name = availableInputDevices().first { $0.id == uid }?.name ?? calibrationDeviceName
+        return CalibrationInput(uid: uid, name: name)
     }
 
     /// Close the accuracy test's microphone and hand back what it heard.
@@ -5296,12 +5330,17 @@ extension AppState {
         guard let mode = dictationModes.first(where: { $0.id == id }) else { return }
         // Command Mode owns the microphone while it runs.
         guard activeCommandTarget == nil, pendingReviewEdit == nil else { return }
-        if isCapturingAudio || isStartingAudio {
+        // A dictation already on its way (recording, opening the microphone,
+        // waiting for the model or for the previous one): this press stops
+        // it, keeping its mode, rather than starting another.
+        if isCapturingAudio || isStartingAudio || isLoadingModelForRecording || queuedRecordingStart != nil {
             modePressStartedAt = nil
+            pendingModeHandsFree = false
             await stopRecordingAndTranscribe()
             return
         }
         VocaLogger.info(.appState, "Dictating in \(mode.summaryLabel)")
+        pendingModeHandsFree = false
         modePressStartedAt = Date()
         pendingModeID = mode.id
         defer { pendingModeID = nil }
@@ -5318,7 +5357,14 @@ extension AppState {
         modePressStartedAt = nil
         guard Date().timeIntervalSince(startedAt) >= commandModeHoldThreshold else {
             VocaLogger.debug(.appState, "Mode shortcut quick press — waiting for a second press")
-            if isCapturingAudio { isHandsFreeSession = true }
+            // Keep the choice for a recording that hasn't begun yet.
+            if isCapturingAudio {
+                isHandsFreeSession = true
+            } else if queuedRecordingStart != nil {
+                queuedRecordingStart?.isHandsFree = true
+            } else {
+                pendingModeHandsFree = true
+            }
             cursorOverlay.setStopHint(overlayStopHint)
             return
         }

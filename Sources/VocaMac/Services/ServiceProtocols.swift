@@ -36,6 +36,8 @@ protocol AudioRecording: AnyObject {
     func requestPermission(completion: @escaping @Sendable (Bool) -> Void)
     /// Why the most recent `startRecording` returned false, when it is known.
     var lastStartFailure: AudioStartFailure? { get }
+    /// The UID of the input device the engine has open, or nil.
+    var activeInputDeviceUID: String? { get }
 }
 
 extension AudioRecording {
@@ -46,6 +48,7 @@ extension AudioRecording {
     }
 
     var lastStartFailure: AudioStartFailure? { nil }
+    var activeInputDeviceUID: String? { nil }
 }
 
 /// Why the microphone did not start, so the user is told what to do about it.

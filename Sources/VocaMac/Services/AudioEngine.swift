@@ -290,6 +290,20 @@ final class AudioEngine: @unchecked Sendable {
         lifecycleQueue.sync { _lastStartFailure }
     }
 
+    /// The UID of the input the engine has open, or nil when it has none.
+    var activeInputDeviceUID: String? {
+        lifecycleQueue.sync { configuredInputDeviceID.flatMap(Self.audioDeviceUID(for:)) }
+    }
+
+    /// The input a recording would use now: `preferredUID` while that device
+    /// is connected, otherwise the system default. Nil when there is no input.
+    static func currentInputDeviceUID(preferredUID: String?) -> String? {
+        if let preferredUID, !preferredUID.isEmpty, inputAudioDeviceID(forUID: preferredUID) != nil {
+            return preferredUID
+        }
+        return defaultInputAudioDeviceID().flatMap(audioDeviceUID(for:))
+    }
+
     var isEngineAllocatedForTesting: Bool {
         lifecycleQueue.sync { engine != nil }
     }

@@ -14,6 +14,7 @@ struct CalmCalibrationDialog: View {
 
     private enum Step: Equatable {
         case choose
+        case starting
         case recording(startedAt: Date)
         case testing(CalibrationProgress?)
         case results(CalibrationResult)
@@ -22,8 +23,9 @@ struct CalmCalibrationDialog: View {
 
     @State private var step: Step = .choose
     @State private var passageID = CalibrationPassage.everyday.id
-    @State private var runner = CalibrationRunner()
-    @State private var task: Task<Void, Never>?
+    /// Outlives the dialog: a test closed mid-way still has to give back
+    /// the microphone and its claim (see `CalibrationFlow`).
+    @State private var flow = CalibrationFlow()
 
     private var passage: CalibrationPassage {
         CalibrationPassage.passage(withID: passageID) ?? .everyday
@@ -33,6 +35,7 @@ struct CalmCalibrationDialog: View {
         Group {
             switch step {
             case .choose: choose
+            case .starting: starting
             case .recording(let startedAt): recording(startedAt: startedAt)
             case .testing(let progress): testing(progress)
             case .results(let result): results(result)
@@ -73,13 +76,15 @@ struct CalmCalibrationDialog: View {
                 .calmType(.description)
                 .foregroundStyle(CalmColor.muted)
                 .fixedSize(horizontal: false, vertical: true)
-            if candidates.count < 2 {
+            if appState.isCalibrating {
+                CalmInlineNotice("The last test is still finishing a model. Try again in a moment.", tone: .info)
+            } else if candidates.count < 2 {
                 CalmInlineNotice("Download another model to have something to compare.", tone: .info)
             }
         } footer: {
             CalmDialogFooter(
                 primaryTitle: "Start reading",
-                isPrimaryEnabled: !candidates.isEmpty && appState.micPermission == .granted,
+                isPrimaryEnabled: !candidates.isEmpty && appState.micPermission == .granted && !appState.isCalibrating,
                 dismissesOnPrimary: false,
                 onPrimary: startRecording
             ) { EmptyView() }
@@ -94,6 +99,19 @@ struct CalmCalibrationDialog: View {
     }
 
     // MARK: Record
+
+    private var starting: some View {
+        CalmDialog("Opening the microphone", description: "Get ready to read.") {
+            HStack(spacing: 10) {
+                CalmSpinner()
+                Text(appState.calibrationDeviceName).font(CalmFont.note).foregroundStyle(CalmColor.muted)
+            }
+        } footer: {
+            CalmDialogFooter(primaryTitle: "Cancel", primaryKind: .secondary, cancelTitle: nil, onPrimary: abandon) {
+                EmptyView()
+            }
+        }
+    }
 
     private func recording(startedAt: Date) -> some View {
         CalmDialog(
@@ -119,7 +137,8 @@ struct CalmCalibrationDialog: View {
                         .foregroundStyle(CalmColor.muted)
                 }
                 Spacer(minLength: 0)
-                Text(appState.calibrationDeviceName).font(CalmFont.note).foregroundStyle(CalmColor.muted).lineLimit(1)
+                Text(flow.input?.name ?? appState.calibrationDeviceName)
+                    .font(CalmFont.note).foregroundStyle(CalmColor.muted).lineLimit(1)
             }
         } footer: {
             CalmDialogFooter(
@@ -151,7 +170,7 @@ struct CalmCalibrationDialog: View {
         } footer: {
             CalmDialogFooter(
                 primaryTitle: "Stop after this model", primaryKind: .secondary, cancelTitle: nil,
-                dismissesOnPrimary: false, onPrimary: { runner.cancel() }, leading: { EmptyView() }
+                dismissesOnPrimary: false, onPrimary: { flow.runner.cancel() }, leading: { EmptyView() }
             )
         }
     }
@@ -163,7 +182,10 @@ struct CalmCalibrationDialog: View {
         let current = appState.currentModel?.size.rawValue
         return CalmDialog(
             "Results",
-            description: best.map { "\($0.modelName) heard you best." } ?? "No model could be tested.",
+            description: best.map { row in
+                let phrase = CalibrationPassage.passage(withID: result.passageID)?.winnerPhrase ?? "heard you best"
+                return "\(row.modelName) \(phrase)."
+            } ?? "No model could be tested.",
             width: CalmMetrics.dialogListWidth
         ) {
             VStack(spacing: 0) {
@@ -242,31 +264,50 @@ struct CalmCalibrationDialog: View {
     // MARK: Flow
 
     private func startRecording() {
-        appState.isCalibrating = true
-        task = Task { @MainActor in
-            guard await appState.startCalibrationCapture() else {
-                appState.isCalibrating = false
+        guard let token = appState.beginCalibration() else {
+            step = .problem("The last test is still finishing a model. Try again in a moment.")
+            return
+        }
+        let flow = flow
+        flow.token = token
+        step = .starting
+        Task { @MainActor in
+            let input = await appState.startCalibrationCapture()
+            // Closed while the microphone was opening: close it again.
+            if flow.isAbandoned {
+                if input != nil { _ = await appState.stopCalibrationCapture() }
+                appState.endCalibration(token)
+                return
+            }
+            guard let input else {
+                appState.endCalibration(token)
                 let failure = appState.lastMicrophoneStartFailure
                 step = .problem(failure?.message ?? "Couldn’t start \(appState.calibrationDeviceName). Pick another microphone in Settings › General.")
                 return
             }
+            flow.input = input
             step = .recording(startedAt: Date())
         }
     }
 
     private func finishRecording() {
+        guard let token = flow.token, let input = flow.input else { return }
         let chosen = passage
+        let flow = flow
         step = .testing(nil)
-        task = Task { @MainActor in
+        Task { @MainActor in
             let samples = await appState.stopCalibrationCapture()
-            if let problem = CalibrationScoring.recordingProblem(samples, deviceName: appState.calibrationDeviceName) {
-                appState.isCalibrating = false
+            if let problem = CalibrationScoring.recordingProblem(samples, deviceName: input.name) {
+                appState.endCalibration(token)
                 step = .problem(problem)
                 return
             }
             let runner = CalibrationRunner()
-            self.runner = runner
-            let result = await appState.runCalibration(samples: samples, passage: chosen, runner: runner) { progress in
+            flow.runner = runner
+            // `runCalibration` ends the claim itself, even with the dialog closed.
+            let result = await appState.runCalibration(
+                samples: samples, passage: chosen, input: input, token: token, runner: runner
+            ) { progress in
                 step = .testing(progress)
             }
             step = .results(result)
@@ -279,18 +320,34 @@ struct CalmCalibrationDialog: View {
     }
 
     /// Closing the dialog mid-way: stop the microphone, stop after the model
-    /// being tested, and let dictation run again.
+    /// being tested, and give back the claim once nothing uses it.
     private func abandon() {
-        runner.cancel()
-        if case .recording = step {
+        let flow = flow
+        flow.isAbandoned = true
+        flow.runner.cancel()
+        guard let token = flow.token else { return }
+        switch step {
+        case .recording:
             Task { @MainActor in
                 _ = await appState.stopCalibrationCapture()
-                appState.isCalibrating = false
+                appState.endCalibration(token)
             }
-        } else if case .choose = step {
-            appState.isCalibrating = false
-        } else if case .problem = step {
-            appState.isCalibrating = false
+        case .choose, .problem, .results:
+            appState.endCalibration(token)
+        case .starting, .testing:
+            // The start task, or `runCalibration`, ends it.
+            break
         }
     }
+}
+
+/// One test's state that has to outlive the dialog's views: whether it was
+/// abandoned, its claim on the test models, the input it recorded with, and
+/// the runner to stop.
+@MainActor
+final class CalibrationFlow {
+    var isAbandoned = false
+    var token: UUID?
+    var input: CalibrationInput?
+    var runner = CalibrationRunner()
 }

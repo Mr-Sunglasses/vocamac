@@ -176,6 +176,21 @@ final class CalibrationRunnerTests: XCTestCase {
         XCTAssertNotNil(rows.first?.wordErrorRate)
     }
 
+    func testAModelThatNoLongerFitsIsReportedNotLoaded() async {
+        var made = 0
+        let runner = CalibrationRunner(makeTranscriber: { _ in
+            made += 1
+            return MockWhisperService()
+        })
+        let rows = await runner.run(
+            candidates: [candidate(.largeV3Latest), candidate(.tiny)], samples: samples,
+            passage: .everyday, language: "en", canLoad: { $0 != .largeV3Latest }
+        )
+        XCTAssertEqual(made, 1, "The model that doesn't fit is never loaded")
+        XCTAssertEqual(rows.last?.modelID, ModelSize.largeV3Latest.rawValue)
+        XCTAssertEqual(rows.last?.failure, "Needs more free memory than this Mac has right now.")
+    }
+
     func testCancelStopsBeforeTheNextModel() async {
         var runner: CalibrationRunner?
         runner = CalibrationRunner(makeTranscriber: { _ in MockWhisperService() })
@@ -211,10 +226,24 @@ final class AppStateCalibrationTests: XCTestCase {
         XCTAssertNotNil(skipped.first?.failure)
     }
 
-    func testRunningStoresTheResultAndRestoresDictation() async {
+    func testCandidatesCountTheMemoryTheDictationModelFrees() {
+        let (appState, mocks) = AppState.makeTestState()
+        appState.availableModels = [info(.base)]
+        mocks.whisperService.isModelLoaded = true
+        appState.currentModel = info(.largeV3Latest)
+        // Fits only with the outgoing model's memory credited.
+        appState.modelFitsInMemory = { _, freeing in freeing >= ModelSize.largeV3Latest.ramRequiredGB }
+        XCTAssertEqual(appState.calibrationCandidates().candidates.map(\.size), [.base])
+
+        mocks.whisperService.isModelLoaded = false
+        XCTAssertTrue(appState.calibrationCandidates().candidates.isEmpty, "Nothing to free when nothing is loaded")
+    }
+
+    func testRunningStoresTheResultAndRestoresDictation() async throws {
         let (appState, mocks) = AppState.makeTestState()
         appState.availableModels = [info(.tiny)]
         appState.modelFitsInMemory = { _, _ in true }
+        appState.inputDeviceUIDResolver = { _ in "usb-mic" }
         let runner = CalibrationRunner(makeTranscriber: { _ in
             let service = MockWhisperService()
             service.mockTranscriptionResult = VocaTranscription(
@@ -223,28 +252,49 @@ final class AppStateCalibrationTests: XCTestCase {
             )
             return service
         })
+        let token = try XCTUnwrap(appState.beginCalibration())
 
         let result = await appState.runCalibration(
-            samples: [Float](repeating: 0.1, count: 80_000), passage: .everyday, runner: runner, progress: { _ in }
+            samples: [Float](repeating: 0.1, count: 80_000), passage: .everyday,
+            input: CalibrationInput(uid: "usb-mic", name: "USB Mic"), token: token, runner: runner, progress: { _ in }
         )
 
         XCTAssertEqual(result.best?.modelID, ModelSize.tiny.rawValue)
+        XCTAssertEqual(result.deviceUID, "usb-mic", "The input that recorded, not the saved choice")
+        XCTAssertEqual(result.deviceName, "USB Mic")
         XCTAssertEqual(appState.lastCalibration, result)
         XCTAssertEqual(appState.calibrationNote(for: .tiny), "0.0% word errors on your voice")
-        XCTAssertFalse(appState.isCalibrating)
+        XCTAssertFalse(appState.isCalibrating, "The test gives back its claim")
         XCTAssertTrue(mocks.whisperService.isModelLoaded, "The dictation model is loaded again")
 
-        appState.selectedAudioDeviceID = "another-mic"
-        XCTAssertNil(appState.calibrationNote(for: .tiny), "A result from another microphone isn't shown")
-        appState.selectedAudioDeviceID = ""
+        // The system input moved to another device: the result is for the old one.
+        appState.inputDeviceUIDResolver = { _ in "built-in" }
+        XCTAssertNil(appState.calibrationNote(for: .tiny))
     }
 
-    func testDictationWaitsForTheTest() async {
+    func testOnlyOneTestAtATimeAndOnlyItsOwnerEndsIt() throws {
+        let (appState, _) = AppState.makeTestState()
+        let first = try XCTUnwrap(appState.beginCalibration())
+        XCTAssertNil(appState.beginCalibration(), "A second test waits for the first")
+        appState.endCalibration(UUID())
+        XCTAssertTrue(appState.isCalibrating, "Another dialog can't end someone else's test")
+        appState.endCalibration(first)
+        XCTAssertFalse(appState.isCalibrating)
+        XCTAssertNotNil(appState.beginCalibration())
+    }
+
+    func testDictationWaitsForTheTest() async throws {
         let (appState, mocks) = AppState.makeTestState()
-        appState.isCalibrating = true
+        let token = try XCTUnwrap(appState.beginCalibration())
         await appState.startRecording()
         XCTAssertFalse(appState.isRecording)
         XCTAssertEqual(mocks.audioEngine.lastPreferredInputChannelCount, nil, "The microphone was never opened")
-        appState.isCalibrating = false
+        appState.endCalibration(token)
+    }
+
+    func testHinglishIsLabelledAsARomanScriptTest() {
+        XCTAssertTrue(CalibrationPassage.hinglish.title.contains("Roman script"))
+        XCTAssertTrue(CalibrationPassage.hinglish.note?.contains("Devanagari") == true)
+        XCTAssertEqual(CalibrationPassage.everyday.winnerPhrase, "heard you best")
     }
 }

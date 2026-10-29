@@ -55,6 +55,13 @@ final class ModePrefixTests: XCTestCase {
         XCTAssertEqual(match?.remainder, "Hi Sam")
     }
 
+    func testHyphenatedNamesMatchTheSameSpelling() {
+        let email = DictationMode(name: "E-mail", style: .email)
+        XCTAssertEqual(ModePrefix.match("E-mail, hello Sam", modes: [email])?.remainder, "Hello Sam")
+        XCTAssertNil(ModePrefix.match("E mail, hello", modes: [email]), "Split the way the name is written")
+        XCTAssertNil(DictationModeStore.nameProblem("one two three-four", id: UUID(), in: []), "Three words as heard")
+    }
+
     func testCaseAndAccentsAreIgnored() {
         let resume = DictationMode(name: "Résumé", style: .notes)
         XCTAssertEqual(ModePrefix.match("RESUME: worked at Acme", modes: [resume])?.mode, resume)
@@ -203,6 +210,71 @@ final class DictationModeFlowTests: XCTestCase {
         await appState.handleShortcut(.dictationMode(mode.id))
         XCTAssertFalse(appState.isRecording)
         XCTAssertEqual(mocks.textInjector.lastInjectedText, "hands free in a mode")
+    }
+
+    private func mode(_ appState: AppState) -> DictationMode {
+        let mode = DictationMode(name: "Exact", cleanup: .raw, shortcut: "14:\(HotKeyModifiers([.control, .option]).rawValue)")
+        appState.dictationModes = [mode]
+        return mode
+    }
+
+    func testASecondPressWhileTheModelLoadsStopsWithoutLosingTheMode() async {
+        let (appState, mocks) = AppState.makeTestState()
+        let mode = mode(appState)
+        mocks.whisperService.isModelLoaded = false
+        let gate = StepGate()
+        mocks.whisperService.loadGate = gate
+        prepare(mocks, text: "said while loading")
+
+        let first = Task { await appState.handleShortcut(.dictationMode(mode.id)) }
+        _ = await gate.waitUntilReached()
+        XCTAssertTrue(appState.isLoadingModelForRecording)
+        await appState.handleShortcut(.dictationMode(mode.id))
+        XCTAssertEqual(appState.pendingModeID, mode.id, "The second press doesn't erase the first press's mode")
+        XCTAssertEqual(mocks.whisperService.loadRequests.count, 1, "It doesn't start another dictation")
+
+        gate.open()
+        await first.value
+        XCTAssertNil(appState.pendingModeID)
+    }
+
+    func testAQuickPressWhileTheModelLoadsMakesTheRecordingHandsFree() async {
+        let (appState, mocks) = AppState.makeTestState()
+        appState.commandModeHoldThreshold = 60
+        appState.activationMode = .pushToTalk
+        let mode = mode(appState)
+        mocks.whisperService.isModelLoaded = false
+        let gate = StepGate()
+        mocks.whisperService.loadGate = gate
+        prepare(mocks, text: "tapped while loading")
+
+        let first = Task { await appState.handleShortcut(.dictationMode(mode.id)) }
+        _ = await gate.waitUntilReached()
+        await appState.handleShortcutReleased(.dictationMode(mode.id))
+        gate.open()
+        await first.value
+
+        XCTAssertTrue(appState.isRecording)
+        XCTAssertTrue(appState.isHandsFreeSession, "The tap is remembered for the recording it started")
+        await appState.handleShortcut(.dictationMode(mode.id))
+        XCTAssertFalse(appState.isRecording)
+    }
+
+    func testSilenceDoesntEndAModeRecordingWhileItsKeysAreHeld() async {
+        let (appState, mocks) = AppState.makeTestState()
+        appState.activationMode = .doubleTapToggle
+        appState.commandModeHoldThreshold = 0
+        let mode = mode(appState)
+        prepare(mocks, text: "a long thought with pauses")
+
+        await appState.handleShortcut(.dictationMode(mode.id))
+        mocks.audioEngine.onSilenceDetected?()
+        for _ in 0..<20 { await Task.yield() }
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertTrue(appState.isRecording, "Held keys mean push to talk")
+
+        await appState.handleShortcutReleased(.dictationMode(mode.id))
+        XCTAssertFalse(appState.isRecording)
     }
 
     func testTheNextDictationIsBackToNormal() async {

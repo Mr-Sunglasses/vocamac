@@ -15,9 +15,12 @@ extension AppState {
         CalibrationResult.decode(calibrationResultJSON)
     }
 
-    /// The last test, when it was recorded with the microphone selected now.
+    /// The last test, when it was recorded with the input a dictation would
+    /// use now (the chosen microphone, or whatever the system input is).
     var currentCalibration: CalibrationResult? {
-        guard let result = lastCalibration, !result.isStale(currentDeviceUID: selectedAudioDeviceID) else { return nil }
+        guard let result = lastCalibration,
+              let current = inputDeviceUIDResolver(selectedAudioDeviceID.isEmpty ? nil : selectedAudioDeviceID),
+              !result.isStale(currentDeviceUID: current) else { return nil }
         return result
     }
 
@@ -36,10 +39,12 @@ extension AppState {
     func calibrationCandidates() -> (candidates: [CalibrationCandidate], skipped: [CalibrationRow]) {
         var candidates: [CalibrationCandidate] = []
         var skipped: [CalibrationRow] = []
+        // The test unloads the dictation model first, so its memory counts.
+        let freeing = whisperService.isModelLoaded ? (currentModel?.size.ramRequiredGB ?? 0) : 0
         for info in availableModels where info.size.engine != .customEndpoint {
             let size = info.size
             guard info.isSupported, info.isDownloaded || size.isSystemManaged else { continue }
-            guard modelFitsInMemory(size, 0) else {
+            guard modelFitsInMemory(size, freeing) else {
                 skipped.append(.failed(
                     modelID: size.rawValue, modelName: size.displayName,
                     reason: "Needs more free memory than this Mac has right now."
@@ -56,39 +61,42 @@ extension AppState {
         return (candidates, skipped)
     }
 
-    /// Run the recording through every candidate and keep the result.
+    /// Run the recording through every candidate, keep the result, and end
+    /// the test `token` claimed.
     ///
     /// The dictation model is unloaded first, so a test model never shares
     /// memory with it, and loaded again afterwards.
     func runCalibration(
         samples: [Float],
         passage: CalibrationPassage,
+        input: CalibrationInput,
+        token: UUID,
         runner: CalibrationRunner,
         progress: @escaping (CalibrationProgress) -> Void
     ) async -> CalibrationResult {
         let (candidates, skipped) = calibrationCandidates()
-        isCalibrating = true
-        defer { isCalibrating = false }
         await unloadActiveModel(reason: .manual)
         let compiled = CompiledModelRecord()
+        let fits = modelFitsInMemory
         let rows = await runner.run(
             candidates: candidates,
             samples: samples,
             passage: passage,
             language: CalibrationScoring.transcriptionLanguage(for: passage),
             isFirstLoad: { !compiled.hasLoaded($0) },
+            canLoad: { fits($0, 0) },
             didLoad: { compiled.recordLoad($0) },
             progress: progress
         )
         let result = CalibrationResult(
             date: Date(),
             passageID: passage.id,
-            deviceUID: selectedAudioDeviceID,
-            deviceName: calibrationDeviceName,
+            deviceUID: input.uid,
+            deviceName: input.name,
             rows: CalibrationScoring.ranked(rows + skipped)
         )
         calibrationResultJSON = result.encoded()
-        isCalibrating = false
+        endCalibration(token)
         await ensureModelLoaded()
         return result
     }

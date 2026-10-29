@@ -24,6 +24,8 @@ struct CalibrationPassage: Identifiable, Equatable, Sendable {
     let mustKeep: [String]
     /// A note shown with the results, or nil.
     var note: String?
+    /// What the winner did best, for the results headline.
+    var winnerPhrase = "heard you best"
 
     static let everyday = CalibrationPassage(
         id: "everyday",
@@ -47,16 +49,21 @@ struct CalibrationPassage: Identifiable, Equatable, Sendable {
         mustKeep: ["GitHub", "Kubernetes", "PostgreSQL", "Priya", "TypeScript", "README", "API"]
     )
 
+    /// Scored against Roman script on purpose: it finds the model that
+    /// writes Hinglish the way Voca Hinglish does. A model that writes
+    /// Devanagari may have heard every word and still score badly, and the
+    /// title and note say so rather than calling it the most accurate.
     static let hinglish = CalibrationPassage(
         id: "hinglish",
-        title: "Hinglish",
+        title: "Hinglish in Roman script",
         language: "hi",
         text: "Kal subah team ki meeting hai, toh please apna laptop charge karke rakhna. "
             + "Main office thoda late aaunga kyunki traffic bahut zyada hai. Agar client call jaldi "
             + "start ho jaye, toh tum presentation share kar dena aur notes bhi le lena. "
             + "Baad mein hum budget pe baat karenge.",
         mustKeep: ["meeting", "laptop", "client", "presentation", "budget"],
-        note: "Romanized spellings vary (kyunki, kyonki), so every model loses a few words here. Compare the models with each other."
+        note: "This compares Hindi written in Roman letters. A model that writes Devanagari scores badly here even when it heard you right, and Roman spellings vary (kyunki, kyonki), so compare the models with each other.",
+        winnerPhrase: "wrote your Hinglish best in Roman script"
     )
 
     static let all: [CalibrationPassage] = [.everyday, .technical, .hinglish]
@@ -76,6 +83,13 @@ struct CalibrationPassage: Identifiable, Equatable, Sendable {
 }
 
 // MARK: - Results
+
+/// The input the accuracy test recorded with.
+struct CalibrationInput: Equatable, Sendable {
+    /// The device's UID, as Core Audio names it.
+    let uid: String
+    let name: String
+}
 
 /// One model's result on the recording.
 struct CalibrationRow: Codable, Equatable, Identifiable, Sendable {

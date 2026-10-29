@@ -140,7 +140,7 @@ enum DictationModeStore {
         if modes.contains(where: { $0.id != id && ModePrefix.normalized($0.name) == key }) {
             return "Another mode already has this name."
         }
-        if key.split(separator: " ").count > ModePrefix.maximumNameWords {
+        if ModePrefix.nameTokens(name).count > ModePrefix.maximumNameWords {
             return "Use at most \(ModePrefix.maximumNameWords) words, so it is quick to say."
         }
         return nil
@@ -167,16 +167,19 @@ enum ModePrefix {
     }
 
     static func match(_ transcript: String, modes: [DictationMode]) -> Match? {
-        let candidates = modes.filter { $0.listensForName && !normalized($0.name).isEmpty }
+        let candidates = modes.filter { $0.listensForName && !nameTokens($0.name).isEmpty }
         guard !candidates.isEmpty else { return nil }
         let leading = transcript.prefix { $0.isWhitespace }
         let text = transcript.dropFirst(leading.count)
         let words = leadingWords(text, count: maximumNameWords + 1)
         // The longest name wins, so "Formal email" beats "Formal".
-        let ordered = candidates.sorted { wordCount($0.name) > wordCount($1.name) }
+        let ordered = candidates.sorted { nameTokens($0.name).count > nameTokens($1.name).count }
         for mode in ordered {
-            let nameWords = normalized(mode.name).split(separator: " ").map(String.init)
-            guard words.count >= nameWords.count,
+            // Split the name the way the transcript is split, so "E-mail"
+            // is one word on both sides and "Formal" never matches the
+            // first half of "Formal-wear".
+            let nameWords = nameTokens(mode.name)
+            guard !nameWords.isEmpty, words.count >= nameWords.count,
                   zip(words, nameWords).allSatisfy({ normalized($0.text) == $1 }) else { continue }
             let nameEnd = words[nameWords.count - 1]
             guard let remainder = remainder(after: nameEnd, in: text, words: words, nameCount: nameWords.count)
@@ -203,8 +206,9 @@ enum ModePrefix {
         let end: String.Index
     }
 
-    private static func wordCount(_ name: String) -> Int {
-        normalized(name).split(separator: " ").count
+    /// A name's words, normalized, split where a transcript's words are.
+    static func nameTokens(_ name: String) -> [String] {
+        leadingWords(Substring(name), count: maximumNameWords + 1).map { normalized($0.text) }
     }
 
     /// The first `count` words, each with where it ends. A word is a run of
