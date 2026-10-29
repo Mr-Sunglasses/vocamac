@@ -21,7 +21,7 @@ final class VoiceNoteStoreTests: XCTestCase {
     func testBeginWritesAudioAndAPendingNote() async throws {
         let directory = temporaryDirectory()
         let store = VoiceNoteStore(directory: directory)
-        let id = await store.begin(audio: [Float](repeating: 0.1, count: 32_000), source: .meeting)
+        let id = try await store.begin(audio: [Float](repeating: 0.1, count: 32_000), source: .meeting)
         await store.flush()
 
         let note = try XCTUnwrap(store.note(id: id))
@@ -36,7 +36,7 @@ final class VoiceNoteStoreTests: XCTestCase {
     func testAPendingNoteFoundAtLaunchIsInterruptedAndKeepsItsAudio() async throws {
         let directory = temporaryDirectory()
         let store = VoiceNoteStore(directory: directory)
-        let id = await store.begin(audio: [0.2, 0.1, 0.3], source: .systemAudio)
+        let id = try await store.begin(audio: [0.2, 0.1, 0.3], source: .systemAudio)
         await store.flush()
 
         let reopened = VoiceNoteStore(directory: directory)
@@ -49,7 +49,7 @@ final class VoiceNoteStoreTests: XCTestCase {
     func testMissingAudioIsForgottenAndStrayFoldersRemoved() async throws {
         let directory = temporaryDirectory()
         let store = VoiceNoteStore(directory: directory)
-        let id = await store.begin(audio: [0.2], source: .microphone)
+        let id = try await store.begin(audio: [0.2], source: .microphone)
         store.complete(id, text: "Hi", segments: [], modelID: "tiny", language: "en")
         await store.flush()
         let note = try XCTUnwrap(store.note(id: id))
@@ -65,7 +65,7 @@ final class VoiceNoteStoreTests: XCTestCase {
 
     func testCompleteTitlesTheNoteFromItsWordsAndSearchFindsIt() async throws {
         let store = VoiceNoteStore(directory: nil)
-        let id = await store.begin(audio: [0.1], source: .meeting)
+        let id = try await store.begin(audio: [0.1], source: .meeting)
         store.complete(id, text: "Quarterly planning with the design team about the launch", segments: [], modelID: nil, language: nil)
         XCTAssertEqual(store.note(id: id)?.title, "Quarterly planning with the design team about the…")
         store.renameSpeaker(id, speaker: "1", to: "Priya")
@@ -78,9 +78,9 @@ final class VoiceNoteStoreTests: XCTestCase {
     func testRetentionAndDeleteRemoveFolders() async throws {
         let directory = temporaryDirectory()
         let store = VoiceNoteStore(directory: directory)
-        let old = await store.begin(audio: [0.1], source: .meeting, now: Date(timeIntervalSinceNow: -10 * 86_400))
+        let old = try await store.begin(audio: [0.1], source: .meeting, now: Date(timeIntervalSinceNow: -10 * 86_400))
         store.complete(old, text: "old", segments: [], modelID: nil, language: nil)
-        let recent = await store.begin(audio: [0.1], source: .meeting)
+        let recent = try await store.begin(audio: [0.1], source: .meeting)
         store.complete(recent, text: "new", segments: [], modelID: nil, language: nil)
 
         store.applyRetention(.week)
@@ -97,9 +97,9 @@ final class VoiceNoteStoreTests: XCTestCase {
     func testTheOldestNotesLoseTheirAudioFirstPastTheCap() async throws {
         let store = VoiceNoteStore(directory: temporaryDirectory())
         store.audioByteLimit = 100
-        let first = await store.begin(audio: [Float](repeating: 0.1, count: 20), source: .meeting, now: Date(timeIntervalSinceNow: -60))
+        let first = try await store.begin(audio: [Float](repeating: 0.1, count: 20), source: .meeting, now: Date(timeIntervalSinceNow: -60))
         store.complete(first, text: "a", segments: [], modelID: nil, language: nil)
-        let second = await store.begin(audio: [Float](repeating: 0.1, count: 20), source: .meeting)
+        let second = try await store.begin(audio: [Float](repeating: 0.1, count: 20), source: .meeting)
         XCTAssertFalse(try XCTUnwrap(store.note(id: first)).hasAudio)
         XCTAssertEqual(store.note(id: first)?.text, "a", "The words stay")
         XCTAssertTrue(try XCTUnwrap(store.note(id: second)).hasAudio)
@@ -424,7 +424,7 @@ final class AppStateVoiceNoteTests: XCTestCase {
         let (appState, _) = AppState.makeTestState(whisperService: whisper, speakerDiarizer: diarizer)
         appState.notesAutoSummarize = false
 
-        let id = await appState.voiceNoteStore.begin(audio: [Float](repeating: 0.1, count: 64_000), source: .meeting)
+        let id = try await appState.voiceNoteStore.begin(audio: [Float](repeating: 0.1, count: 64_000), source: .meeting)
         await appState.processNote(id, samples: [Float](repeating: 0.1, count: 64_000))
 
         let note = try XCTUnwrap(appState.voiceNoteStore.note(id: id))
@@ -442,7 +442,7 @@ final class AppStateVoiceNoteTests: XCTestCase {
         )
         let (appState, _) = AppState.makeTestState(whisperService: whisper, speakerDiarizer: diarizer)
         appState.notesAutoSummarize = false
-        let id = await appState.voiceNoteStore.begin(audio: [0.1], source: .microphone)
+        let id = try await appState.voiceNoteStore.begin(audio: [0.1], source: .microphone)
         await appState.processNote(id, samples: [Float](repeating: 0.1, count: 64_000))
         let note = try XCTUnwrap(appState.voiceNoteStore.note(id: id))
         XCTAssertEqual(note.segments.map(\.speaker), [nil])
@@ -454,7 +454,7 @@ final class AppStateVoiceNoteTests: XCTestCase {
         whisper.shouldThrow = true
         let (appState, _) = AppState.makeTestState(whisperService: whisper)
         appState.notesAutoSummarize = false
-        let id = await appState.voiceNoteStore.begin(audio: [0.1], source: .systemAudio)
+        let id = try await appState.voiceNoteStore.begin(audio: [0.1], source: .systemAudio)
         await appState.processNote(id, samples: [0.1, 0.2])
         let note = try XCTUnwrap(appState.voiceNoteStore.note(id: id))
         XCTAssertEqual(note.status, .failed)

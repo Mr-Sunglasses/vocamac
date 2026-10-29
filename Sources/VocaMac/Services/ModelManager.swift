@@ -1128,6 +1128,10 @@ extension ModelManager {
     func activateCustomModel(id: String, persist: Bool) throws {
         try customModels.setActive(id, persist: persist)
     }
+
+    func clearCustomModelOverrides() {
+        customModels.clearProcessOverrides()
+    }
 }
 
 // MARK: - ModelManaging Conformance

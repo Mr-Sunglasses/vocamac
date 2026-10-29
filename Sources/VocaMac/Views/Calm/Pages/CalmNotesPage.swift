@@ -227,7 +227,7 @@ private struct CalmNoteDetail: View {
                         }
                         bulletList("Decisions", summary.decisions)
                         bulletList("Action items", summary.actionItems)
-                        Text("Written on this Mac by \(summary.model ?? "the Command Mode model"). Check it against the transcript.")
+                        Text("\(summary.provenance) Check it against the transcript.")
                             .font(CalmFont.note)
                             .foregroundStyle(CalmColor.muted)
                     }

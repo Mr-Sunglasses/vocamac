@@ -45,6 +45,10 @@ final class MeetingCaptureSession: ObservableObject {
     /// The running save, so discarding the window can stop it.
     var transcriptionTask: Task<Void, Never>?
     private var systemStartedAt: Date?
+    /// Which inputs this recording uses. Kept after a recorder stops by
+    /// itself (the 20-minute limit), so its audio is still collected.
+    private var recordsSystemAudio = false
+    private var recordsMicrophone = false
 
     var isCapturing: Bool { capture.isCapturing || microphone.isRecording }
 
@@ -55,25 +59,39 @@ final class MeetingCaptureSession: ObservableObject {
         if input != .microphone {
             try capture.start()
             systemStartedAt = Date()
+            recordsSystemAudio = true
         }
         if input != .systemAudio {
             do {
                 try microphone.start()
+                recordsMicrophone = true
             } catch {
                 if capture.isCapturing { _ = capture.stop() }
+                recordsSystemAudio = false
                 throw error
             }
         }
     }
 
+    /// Test support: act as if `input`'s recorders were started, without
+    /// opening any audio device.
+    func markRecordingForTesting(system: Bool, microphone: Bool) {
+        recordsSystemAudio = system
+        recordsMicrophone = microphone
+    }
+
     /// Stop, and return one track: the two inputs lined up and mixed.
     func stop() -> [Float] {
-        let system = capture.isCapturing ? capture.stop() : []
+        // A recorder that stopped at the limit still holds its audio: ask
+        // every input that took part, not only the ones still running.
+        let system = recordsSystemAudio ? capture.stop() : []
         let micStarted = microphone.startedAt
-        let mic = microphone.isRecording ? microphone.stop() : []
+        let mic = recordsMicrophone ? microphone.stop() : []
         var offset = 0.0
         if let systemStartedAt, let micStarted { offset = micStarted.timeIntervalSince(systemStartedAt) }
         systemStartedAt = nil
+        recordsSystemAudio = false
+        recordsMicrophone = false
         return NoteAudioMixer.mix(system, mic, secondStartsAfter: offset)
     }
 
@@ -301,10 +319,16 @@ struct MeetingCaptureView: View {
         session.isTranscribing = true
         let source = session.input.noteSource
         session.transcriptionTask = Task { @MainActor in
-            let id = await appState.saveNote(samples: samples, source: source)
-            guard !Task.isCancelled else { return }
-            session.savedNoteID = id
-            session.capturedSamples = nil
+            do {
+                let id = try await appState.saveNote(samples: samples, source: source)
+                guard !Task.isCancelled else { return }
+                session.savedNoteID = id
+                session.capturedSamples = nil
+            } catch {
+                guard !Task.isCancelled else { return }
+                // The samples stay here, so Try Again can save them.
+                self.error = "The recording could not be saved: \(error.localizedDescription)"
+            }
             session.isTranscribing = false
             session.transcriptionTask = nil
         }

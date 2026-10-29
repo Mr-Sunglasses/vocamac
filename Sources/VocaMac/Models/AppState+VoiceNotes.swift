@@ -57,10 +57,11 @@ extension AppState {
 
     /// Save `samples` as a note and process it. Returns the note's id once
     /// the audio is on disk; transcription and the rest carry on after.
+    /// Throws when the note couldn't be saved, so the recording isn't lost.
     @discardableResult
-    func saveNote(samples: [Float], source: VoiceNoteSource) async -> UUID {
-        let id = await voiceNoteStore.begin(audio: samples, source: source)
-        voiceNoteStore.applyRetention(historyRetention)
+    func saveNote(samples: [Float], source: VoiceNoteSource) async throws -> UUID {
+        voiceNoteStore.retention = historyRetention
+        let id = try await voiceNoteStore.begin(audio: samples, source: source)
         Task { @MainActor [weak self] in await self?.processNote(id, samples: samples) }
         return id
     }
@@ -70,6 +71,7 @@ extension AppState {
     func saveScratchpadAsNote() -> UUID? {
         let text = scratchpadText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return nil }
+        voiceNoteStore.retention = historyRetention
         let id = voiceNoteStore.addText(text, source: .scratchpad)
         exportToFolder(id)
         return id
@@ -83,6 +85,7 @@ extension AppState {
     func saveHistoryEntryAsNote(_ entryID: UUID) async -> UUID? {
         guard let entry = historyStore.entry(id: entryID), let audio = historyStore.audioURL(for: entry) else { return nil }
         let segments = SpeakerAssignment.assign(segments: entry.segments ?? [], turns: [])
+        voiceNoteStore.retention = historyRetention
         guard let id = await voiceNoteStore.importRecording(
             from: audio, text: entry.displayText, segments: segments, durationSeconds: entry.audioSeconds,
             modelID: entry.modelID, language: entry.language, createdAt: entry.createdAt
@@ -188,7 +191,8 @@ extension AppState {
         guard let note = voiceNoteStore.note(id: id) else { return nil }
         let transcript = NoteSummarizer.transcriptText(for: note)
         guard !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return "There is nothing to summarize." }
-        let modelName = commandModeEngine.displayName
+        let engine = commandModeEngine
+        let modelName = engine.displayName
         let run = await runOnCommandEngine(prompt: NoteSummarizer.partPrompt) { transformer, budget in
             await NoteSummarizer.summarize(transcript, budget: budget, model: modelName) { text, prompt in
                 let attempt = await transformer.summarize(text, prompt: prompt)
@@ -205,7 +209,8 @@ extension AppState {
             return problem
         }
         switch run.value {
-        case .success(let summary)?:
+        case .success(var summary)?:
+            summary.place = VoiceNoteSummaryPlace(engine: engine)
             voiceNoteStore.setSummary(id, summary)
             exportToFolder(id)
             return nil

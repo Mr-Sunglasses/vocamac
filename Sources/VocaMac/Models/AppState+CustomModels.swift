@@ -22,13 +22,23 @@ extension AppState {
         return CustomModelRegistry.shared.activeModel(for: .cleanup)?.id == model.id
     }
 
-    /// Whether `model` is what dictation or cleanup uses right now.
+    /// Whether `model` is what dictation, cleanup or Command Mode uses now.
     func isImportedModelInUse(_ model: InstalledCustomModel) -> Bool {
         guard isActiveImportedModel(model) else { return false }
         if let slot = model.manifest.engine.modelSlot {
             return selectedModelSize == slot.rawValue
         }
-        return selectedCleanupModelKind == .customGGUF
+        let users = Self.importedGGUFUsers(cleanupKind: selectedCleanupModelKind, commandEngine: commandModeEngine)
+        return users.cleanup || users.command
+    }
+
+    /// Which of cleanup and Command Mode run the imported GGUF slot.
+    nonisolated static func importedGGUFUsers(
+        cleanupKind: CleanupModelKind, commandEngine: CommandModeEngine
+    ) -> (cleanup: Bool, command: Bool) {
+        var command = false
+        if case .local(.customGGUF) = commandEngine { command = true }
+        return (cleanupKind == .customGGUF, command)
     }
 
     // MARK: Importing
@@ -79,14 +89,25 @@ extension AppState {
     func deleteImportedModel(_ model: InstalledCustomModel) async {
         guard let manager = modelManager as? CustomModelManaging else { return }
         let wasInUse = isImportedModelInUse(model)
+        let ggufUsers = Self.importedGGUFUsers(cleanupKind: selectedCleanupModelKind, commandEngine: commandModeEngine)
         if wasInUse {
             if model.manifest.engine.modelSlot != nil {
                 let fallback = importedReplacement(for: model) == nil ? recommendedModelSize() : nil
                 await whisperService.unloadModel()
                 if let fallback { selectedModelSize = fallback.rawValue }
             } else {
-                transcriptCleanup.unload()
-                transcriptCleanupModel = CleanupModelKind.defaultKind.rawValue
+                // Services match a loaded model by kind alone, so one still
+                // holding this GGUF would keep serving it under the next
+                // model's name. Unload every slot that has it.
+                if transcriptCleanup.loadedKind == .customGGUF { transcriptCleanup.unload() }
+                if commandModelSlot?.loadedKind == .customGGUF { commandModelSlot?.unload() }
+                let hasReplacement = importedReplacement(for: model) != nil
+                if ggufUsers.cleanup, !hasReplacement {
+                    transcriptCleanupModel = CleanupModelKind.defaultKind.rawValue
+                }
+                if ggufUsers.command, !hasReplacement {
+                    commandModeEngine = .local(.defaultKind)
+                }
             }
         }
         do {

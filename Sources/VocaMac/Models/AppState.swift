@@ -957,6 +957,9 @@ final class AppState: ObservableObject {
     var dictationTrigger: DictationTrigger = .other
     /// Engine chosen when the current Command Mode session began.
     private var activeCommandEngine: CommandModeEngine?
+    /// A note's summary holds the Command Mode engine (`runOnCommandEngine`).
+    /// Edits wait for it, and ending an edit-less session never frees it.
+    private(set) var isSummarizingNote = false
     /// App whose selection is being edited, for the history entry.
     private var commandTargetApp: RunningAppSnapshot?
     /// A held shortcut came up while the selection was still being read.
@@ -1282,6 +1285,7 @@ final class AppState: ObservableObject {
         let notes = self.voiceNoteStore, retention = historyRetention
         Task { @MainActor in
             await notes.waitUntilLoaded()
+            notes.retention = retention
             notes.applyRetention(retention)
         }
     }
@@ -5031,6 +5035,7 @@ extension AppState {
     /// Apply a retention change right away rather than at the next dictation.
     func applyHistoryRetention() {
         historyStore.applyRetention(historyRetention)
+        voiceNoteStore.retention = historyRetention
         voiceNoteStore.applyRetention(historyRetention)
     }
 
@@ -5252,6 +5257,7 @@ extension AppState {
         let engine = commandModeEngine
         if let problem = commandModeProblem(for: engine) { return (nil, problem) }
         activeCommandEngine = engine
+        isSummarizingNote = true
         // Remote engines and Apple Intelligence read far more than a small
         // local context; a few pages a pass keeps each answer focused.
         var budget = 12_000
@@ -5266,12 +5272,14 @@ extension AppState {
                 await service.load(kind)
             }
             guard service.loadedKind == kind else {
+                isSummarizingNote = false
                 finishCommandModelUse(engine)
                 return (nil, "\(kind.descriptor.displayName) could not be loaded.")
             }
             budget = service.inputBudget(forPrompt: prompt, model: kind)
         }
         let value = await body(commandTransformer(for: engine), budget)
+        isSummarizingNote = false
         finishCommandModelUse(engine)
         return (value, nil)
     }
@@ -5310,6 +5318,10 @@ extension AppState {
         // An error banner from the last attempt is not a reason to ignore
         // this one; a dictation can start over it too.
         guard appStatus == .idle || appStatus == .error, !isRecording else { return }
+        guard !isSummarizingNote else {
+            failCommand(Self.summaryBusyMessage)
+            return
+        }
         dismissCommandReview()
         let engine = commandModeEngine
         if let problem = commandModeProblem(for: engine) {
@@ -5390,6 +5402,10 @@ extension AppState {
     /// a saved command's shortcut, or the Shortcuts action.
     func runCommand(instruction: String) async {
         guard appStatus == .idle || appStatus == .error, !isRecording, !isTranscribing else { return }
+        guard !isSummarizingNote else {
+            failCommand(Self.summaryBusyMessage)
+            return
+        }
         dismissCommandReview()
         let engine = commandModeEngine
         if let problem = commandModeProblem(for: engine) {
@@ -5934,8 +5950,11 @@ extension AppState {
         commandModePressStartedAt = nil
         activeCommandTransformer?.cancelTransform()
         activeCommandTransformer = nil
-        if let engine = activeCommandEngine { finishCommandModelUse(engine) }
+        // A note's summary owns the engine; it gives it back itself.
+        if let engine = activeCommandEngine, !isSummarizingNote { finishCommandModelUse(engine) }
     }
+
+    static let summaryBusyMessage = "A note is being summarized with the Command Mode model. Try again when it finishes."
 
     /// Give the cleanup model back after a Command Mode model borrowed the
     /// shared llama.cpp slot, or free a large model that nothing else needs.

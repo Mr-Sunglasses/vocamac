@@ -78,6 +78,16 @@ final class MicrophoneNoteRecorder: ObservableObject {
         return accumulator.takeNormalizedSamples()
     }
 
+    /// Test support: as if the tap delivered `samples` (16 kHz mono), and
+    /// optionally hit the 20-minute limit, without a microphone.
+    func receiveForTesting(_ samples: [Float], reachingLimit: Bool) {
+        accumulator.reset(sampleRate: 16_000)
+        _ = accumulator.appendMonoSamples(samples)
+        startedAt = startedAt ?? Date()
+        isRecording = true
+        if reachingLimit { stopAtLimit() }
+    }
+
     private func stopAtLimit() {
         guard isRecording else { return }
         tearDown()

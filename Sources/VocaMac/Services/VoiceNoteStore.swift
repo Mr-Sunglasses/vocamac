@@ -10,6 +10,19 @@
 import Combine
 import Foundation
 
+/// Why a note could not be saved.
+enum VoiceNoteStoreError: LocalizedError, Equatable {
+    case audioNotSaved(String)
+    case indexNotSaved(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .audioNotSaved(let reason): return "The audio could not be written (\(reason))."
+        case .indexNotSaved(let reason): return "The notes list could not be written (\(reason))."
+        }
+    }
+}
+
 @MainActor
 final class VoiceNoteStore: ObservableObject {
     /// Oldest notes beyond this count are deleted.
@@ -25,6 +38,10 @@ final class VoiceNoteStore: ObservableObject {
 
     /// The audio cap in force; tests lower it.
     var audioByteLimit = VoiceNoteStore.maximumAudioBytes
+
+    /// History's retention, applied after every note is added. Nil until
+    /// the app sets it (tests that don't care).
+    var retention: HistoryRetention?
 
     /// Newest first.
     @Published private(set) var notes: [VoiceNote] = []
@@ -110,13 +127,15 @@ final class VoiceNoteStore: ObservableObject {
     // MARK: - Recording
 
     /// Save a note before it is transcribed. Returns once the note and its
-    /// audio are on disk (in memory without a directory).
+    /// audio are on disk (in memory without a directory). Throws, leaving no
+    /// note behind, when either can't be written, so the caller keeps the
+    /// samples and can try again.
     @discardableResult
-    func begin(audio: [Float], source: VoiceNoteSource, title: String? = nil, now: Date = Date()) async -> UUID {
+    func begin(audio: [Float], source: VoiceNoteSource, title: String? = nil, now: Date = Date()) async throws -> UUID {
         // Loading removes folders the saved index doesn't know; let it finish
         // before this note's folder exists.
         await waitUntilLoaded()
-        var note = VoiceNote(
+        let note = VoiceNote(
             createdAt: now,
             title: title ?? VoiceNote.defaultTitle(source: source, date: now),
             source: source,
@@ -125,28 +144,56 @@ final class VoiceNoteStore: ObservableObject {
             audioFileName: audio.isEmpty ? nil : Self.audioFileName,
             audioBytes: audio.isEmpty ? nil : DictationHistoryStore.wavByteCount(sampleCount: audio.count)
         )
-        insert(note)
-        guard let folder = folder(for: note.id), !audio.isEmpty else { return note.id }
-        let written = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+        insert(note, applyingRetention: false)
+        do {
+            if let folder = folder(for: note.id), !audio.isEmpty {
+                try await writeAudio(audio, into: folder)
+            }
+            try await writeIndexNow()
+        } catch {
+            VocaLogger.error(.history, "Could not save a note: \(error.localizedDescription)")
+            notes.removeAll { $0.id == note.id }
+            save()
+            removeFolder(of: note.id)
+            throw error
+        }
+        applyRetentionIfSet()
+        enforceAudioCap()
+        return note.id
+    }
+
+    private func writeAudio(_ audio: [Float], into folder: URL) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             ioQueue.async {
                 do {
                     try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
                     try WAVEncoder.pcm16Mono(from: audio, sampleRate: Self.sampleRate)
                         .write(to: folder.appendingPathComponent(Self.audioFileName), options: .atomic)
-                    continuation.resume(returning: true)
+                    continuation.resume()
                 } catch {
-                    VocaLogger.error(.history, "Could not save a note's audio: \(error.localizedDescription)")
-                    continuation.resume(returning: false)
+                    continuation.resume(throwing: VoiceNoteStoreError.audioNotSaved(error.localizedDescription))
                 }
             }
         }
-        if !written {
-            note.audioFileName = nil
-            note.audioBytes = nil
-            update(note.id) { $0.audioFileName = nil; $0.audioBytes = nil }
+    }
+
+    /// Write the index now and say whether it worked, unlike `save()`,
+    /// which only logs: a new note isn't saved until the index names it.
+    private func writeIndexNow() async throws {
+        guard let directory else { return }
+        let snapshot = notes
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            ioQueue.async {
+                do {
+                    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                    try Self.makeEncoder().encode(snapshot)
+                        .write(to: directory.appendingPathComponent("index.json"), options: .atomic)
+                    continuation.resume()
+                } catch {
+                    continuation.resume(throwing: VoiceNoteStoreError.indexNotSaved(error.localizedDescription))
+                }
+            }
         }
-        enforceAudioCap()
-        return note.id
     }
 
     /// A note with words and no audio (the Scratchpad).
@@ -284,10 +331,17 @@ final class VoiceNoteStore: ObservableObject {
         }
     }
 
-    private func insert(_ note: VoiceNote) {
+    /// Add `note`, then apply the retention setting, so every source (a
+    /// recording, the Scratchpad, History) keeps to the same limits.
+    private func insert(_ note: VoiceNote, applyingRetention: Bool = true) {
         notes.insert(note, at: 0)
         notes.sort { $0.createdAt > $1.createdAt }
         save()
+        if applyingRetention { applyRetentionIfSet() }
+    }
+
+    private func applyRetentionIfSet() {
+        if let retention { applyRetention(retention) }
     }
 
     private func update(_ id: UUID, _ change: (inout VoiceNote) -> Void) {
@@ -330,7 +384,7 @@ final class VoiceNoteStore: ObservableObject {
                 notes = try makeDecoder().decode([VoiceNote].self, from: data)
             } catch {
                 // Keep the unreadable file, and every folder, for recovery.
-                let aside = directory.appendingPathComponent("index.corrupt.json")
+                let aside = directory.appendingPathComponent(corruptIndexName)
                 try? fileManager.removeItem(at: aside)
                 try? fileManager.moveItem(at: index, to: aside)
                 VocaLogger.error(.history, "Notes were unreadable and were set aside: \(error.localizedDescription)")
@@ -351,13 +405,21 @@ final class VoiceNoteStore: ObservableObject {
                 changed = true
             }
         }
-        let owned = Set(notes.map(\.id.uuidString))
-        let folders = (try? fileManager.contentsOfDirectory(atPath: directory.path)) ?? []
-        for folder in folders where UUID(uuidString: folder) != nil && !owned.contains(folder) {
-            try? fileManager.removeItem(at: directory.appendingPathComponent(folder))
+        // While an unreadable index is kept for recovery, the folders it
+        // names look unowned; removing them would destroy what it points at.
+        let hasSetAsideIndex = fileManager.fileExists(atPath: directory.appendingPathComponent(corruptIndexName).path)
+        if !hasSetAsideIndex {
+            let owned = Set(notes.map(\.id.uuidString))
+            let folders = (try? fileManager.contentsOfDirectory(atPath: directory.path)) ?? []
+            for folder in folders where UUID(uuidString: folder) != nil && !owned.contains(folder) {
+                try? fileManager.removeItem(at: directory.appendingPathComponent(folder))
+            }
         }
         return (notes.sorted { $0.createdAt > $1.createdAt }, changed)
     }
+
+    /// Where an unreadable index is moved, for recovery by hand.
+    nonisolated static let corruptIndexName = "index.corrupt.json"
 
     nonisolated private static func makeEncoder() -> JSONEncoder {
         let encoder = JSONEncoder()

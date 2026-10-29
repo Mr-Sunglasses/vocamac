@@ -157,6 +157,13 @@ final class CustomModelRegistry: @unchecked Sendable {
     }
 
     /// Forget the scan, after files changed outside `importModel`/`delete`.
+    /// Forget every process-only choice (`setActive(_:persist: false)`).
+    func clearProcessOverrides() {
+        lock.lock()
+        processOverrides.removeAll()
+        lock.unlock()
+    }
+
     func invalidate() {
         lock.lock()
         cachedModels = nil
@@ -202,7 +209,10 @@ final class CustomModelRegistry: @unchecked Sendable {
 
         let folder = try Self.modelFolder(in: unpacked)
         var manifest = try Self.readManifest(in: folder)
-        let problems = manifest.problems(in: folder)
+        var problems = manifest.problems(in: folder)
+        // A link could point anywhere: writing the completion marker through
+        // one truncated a file outside the folder. Only real files come in.
+        problems += Self.symbolicLinks(in: folder).map { "“\($0)” is a symbolic link. Import a folder of real files." }
         guard problems.isEmpty else { throw CustomModelError.invalid(problems) }
         guard model(id: manifest.id) == nil,
               !fileManager.fileExists(atPath: root.appendingPathComponent(manifest.id).path) else {
@@ -218,14 +228,18 @@ final class CustomModelRegistry: @unchecked Sendable {
         // mid-copy never leaves a folder that scans as a model.
         let copying = root.appendingPathComponent(".copy-\(UUID().uuidString)", isDirectory: true)
         try fileManager.copyItem(at: folder, to: copying)
-        manifest.fileSizeBytes = manifest.fileSizeBytes ?? CustomModelDigest.size(of: copying)
+        // Measured, not taken from the manifest: the memory check before a
+        // load estimates from it, and a wrong small number would pass it.
+        manifest.fileSizeBytes = CustomModelDigest.size(of: copying)
         do {
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             try encoder.encode(manifest).write(to: copying.appendingPathComponent(CustomModelManifest.fileName), options: .atomic)
             if manifest.engine == .sherpaOnnx {
                 // What SherpaService looks for before it trusts a folder.
-                try Data().write(to: copying.appendingPathComponent(SherpaService.completionMarkerName))
+                let marker = copying.appendingPathComponent(SherpaService.completionMarkerName)
+                try? fileManager.removeItem(at: marker)
+                try Data().write(to: marker, options: .withoutOverwriting)
             }
             try fileManager.moveItem(at: copying, to: root.appendingPathComponent(manifest.id, isDirectory: true))
         } catch {
@@ -249,6 +263,21 @@ final class CustomModelRegistry: @unchecked Sendable {
         lock.unlock()
         invalidate()
         VocaLogger.info(.modelManager, "Deleted custom model \(id)")
+    }
+
+    /// Paths (relative to `folder`) of every symbolic link inside it.
+    static func symbolicLinks(in folder: URL) -> [String] {
+        guard let items = FileManager.default.enumerator(
+            at: folder, includingPropertiesForKeys: [.isSymbolicLinkKey], options: []
+        ) else { return [] }
+        let base = folder.standardizedFileURL.path
+        var links: [String] = []
+        for case let item as URL in items
+        where (try? item.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true {
+            let path = item.standardizedFileURL.path
+            links.append(path.hasPrefix(base + "/") ? String(path.dropFirst(base.count + 1)) : item.lastPathComponent)
+        }
+        return links.sorted()
     }
 
     /// The folder holding `vocamodel.json`: `directory` itself, or its only

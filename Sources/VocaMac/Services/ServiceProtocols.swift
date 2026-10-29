@@ -244,6 +244,9 @@ protocol CustomModelManaging: Sendable {
     func importCustomModel(from source: URL) async throws -> InstalledCustomModel
     func deleteCustomModel(id: String) async throws
     func activateCustomModel(id: String, persist: Bool) throws
+    /// Forget choices made with `persist: false`, so a one-off request's
+    /// model doesn't carry over to the next request in the same process.
+    func clearCustomModelOverrides()
 }
 
 extension ModelManager: CustomModelManaging {}

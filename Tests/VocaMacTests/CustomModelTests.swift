@@ -340,6 +340,59 @@ final class ModelManagerCustomImportTests: XCTestCase {
         XCTAssertTrue(SherpaService.modelFilesExist(for: spec), "Import writes the completion marker")
     }
 
+    func testSymbolicLinksAreRefusedAndTheirTargetsUntouched() async throws {
+        let (manager, registry, sources) = makeManager()
+        let folder = sources.appendingPathComponent("linked")
+        try CustomModelFixtures.write(CustomModelManifest(
+            id: "linked-model", name: "Linked", engine: .sherpaOnnx, sherpa: .init(type: "nemoCtc", model: "model.onnx")
+        ), to: folder)
+        try Data("t".utf8).write(to: folder.appendingPathComponent("tokens.txt"))
+        try Data("m".utf8).write(to: folder.appendingPathComponent("model.onnx"))
+        let target = sources.appendingPathComponent("precious.txt")
+        try Data("keep me".utf8).write(to: target)
+        try FileManager.default.createSymbolicLink(
+            at: folder.appendingPathComponent(SherpaService.completionMarkerName), withDestinationURL: target
+        )
+        do {
+            _ = try await manager.importCustomModel(from: folder)
+            XCTFail("A folder with a symbolic link must be refused")
+        } catch let error as CustomModelError {
+            guard case .invalid(let problems) = error else { return XCTFail("Unexpected \(error)") }
+            XCTAssertTrue(problems.contains { $0.contains(SherpaService.completionMarkerName) }, "\(problems)")
+        }
+        XCTAssertEqual(try String(contentsOf: target, encoding: .utf8), "keep me")
+        XCTAssertNil(registry.model(id: "linked-model"))
+    }
+
+    func testTheInstalledSizeIsMeasuredNotTakenFromTheManifest() async throws {
+        let (manager, _, sources) = makeManager()
+        let folder = try CustomModelFixtures.whisperFolder(in: sources)
+        var manifest = try CustomModelRegistry.readManifest(in: folder)
+        manifest.fileSizeBytes = 1
+        try CustomModelFixtures.write(manifest, to: folder)
+        let installed = try await manager.importCustomModel(from: folder)
+        XCTAssertGreaterThan(installed.manifest.fileSizeBytes ?? 0, 1)
+    }
+
+    func testAOneOffCLIModelDoesNotOutliveItsRequest() async throws {
+        let (manager, registry, sources) = makeManager()
+        _ = try await manager.importCustomModel(from: CustomModelFixtures.whisperFolder(in: sources, id: "first-whisper"))
+        _ = try await manager.importCustomModel(from: CustomModelFixtures.whisperFolder(in: sources, id: "second-whisper"))
+        try manager.activateCustomModel(id: "first-whisper", persist: true)
+        let audio = sources.appendingPathComponent("clip.wav")
+        try WAVEncoder.pcm16Mono(from: [Float](repeating: 0.1, count: 16_000), sampleRate: 16_000).write(to: audio)
+        let headless = HeadlessTranscriber(
+            modelManager: manager,
+            preferences: AppCLIPreferencesReader(defaults: defaults),
+            audioLoader: AudioFileLoader(),
+            transcriber: MockWhisperService()
+        )
+
+        _ = try await headless.transcribe(fileURL: audio, modelOverride: "second-whisper", languageOverride: nil)
+
+        XCTAssertEqual(registry.activeModel(for: .whisperKit)?.id, "first-whisper", "The app's choice is back")
+    }
+
     func testImportedModelsAreNotDownloaded() async {
         let (manager, _, _) = makeManager()
         do {

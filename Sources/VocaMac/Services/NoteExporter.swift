@@ -97,7 +97,12 @@ enum NoteExporter {
     // MARK: Names
 
     /// "2026-10-28 14-05 Weekly sync.md": sortable, and safe on every file system.
-    static func fileName(_ note: VoiceNote, format: NoteExportFormat, timeZone: TimeZone = .current) -> String {
+    /// With `uniquing`, the start of the note's id follows the title
+    /// ("… Weekly sync 1A2B3C4D.md"), so two notes from the same minute with
+    /// the same opening words never replace each other in a folder.
+    static func fileName(
+        _ note: VoiceNote, format: NoteExportFormat, uniquing: Bool = false, timeZone: TimeZone = .current
+    ) -> String {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.timeZone = timeZone
@@ -106,7 +111,8 @@ enum NoteExporter {
         let title = note.title.unicodeScalars.map { forbidden.contains($0) ? "-" : String($0) }.joined()
             .trimmingCharacters(in: CharacterSet(charactersIn: " .-"))
         let trimmed = String(title.prefix(80))
-        let stem = formatter.string(from: note.createdAt) + (trimmed.isEmpty ? "" : " " + trimmed)
+        var stem = formatter.string(from: note.createdAt) + (trimmed.isEmpty ? "" : " " + trimmed)
+        if uniquing { stem += " " + note.id.uuidString.prefix(8) }
         return stem + "." + format.fileExtension
     }
 
@@ -166,7 +172,7 @@ struct NoteExportFolder {
         guard let folder = url else { return nil }
         let scoped = folder.startAccessingSecurityScopedResource()
         defer { if scoped { folder.stopAccessingSecurityScopedResource() } }
-        let destination = folder.appendingPathComponent(NoteExporter.fileName(note, format: .markdown))
+        let destination = folder.appendingPathComponent(NoteExporter.fileName(note, format: .markdown, uniquing: true))
         try NoteExporter.data(note, format: .markdown).write(to: destination, options: .atomic)
         return destination
     }

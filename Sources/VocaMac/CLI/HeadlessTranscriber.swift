@@ -98,6 +98,8 @@ final class HeadlessTranscriber: @unchecked Sendable {
         modelOverride: String?,
         languageOverride: String?
     ) async throws -> CLITranscriptionResponse {
+        // A model named for this request is chosen for this request only.
+        defer { (modelManager as? CustomModelManaging)?.clearCustomModelOverrides() }
         let prepared = try await prepareTranscription(
             fileURL: fileURL, modelOverride: modelOverride, languageOverride: languageOverride
         )
@@ -196,6 +198,9 @@ final class HeadlessTranscriber: @unchecked Sendable {
     }
 
     private func resolveModel(identifier: String?) throws -> ModelSize {
+        // Start from the app's saved choices: an earlier request's one-off
+        // model (MCP serves many requests in one process) must not linger.
+        (modelManager as? CustomModelManaging)?.clearCustomModelOverrides()
         guard let identifier, !identifier.isEmpty else {
             // Matches AppState's @AppStorage default, so a fresh install (or
             // prefs that never persisted the key) behaves the same headlessly.

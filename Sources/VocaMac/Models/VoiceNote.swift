@@ -63,6 +63,24 @@ struct VoiceNoteSegment: Codable, Equatable, Sendable {
     var speaker: String?
 }
 
+/// Where a note's summary was written.
+enum VoiceNoteSummaryPlace: String, Codable, Sendable {
+    /// A local model on this Mac.
+    case thisMac
+    /// Apple Intelligence.
+    case appleIntelligence
+    /// The server Command Mode is set to use.
+    case server
+
+    init(engine: CommandModeEngine) {
+        switch engine {
+        case .local: self = .thisMac
+        case .appleIntelligence: self = .appleIntelligence
+        case .endpoint: self = .server
+        }
+    }
+}
+
 /// What the local model made of a note.
 struct VoiceNoteSummary: Codable, Equatable, Sendable {
     /// Two or three sentences.
@@ -72,8 +90,21 @@ struct VoiceNoteSummary: Codable, Equatable, Sendable {
     /// The model that wrote it, for the record.
     var model: String?
     var createdAt: Date
+    /// Where it was written; nil for summaries saved before this was kept.
+    var place: VoiceNoteSummaryPlace?
 
     var isEmpty: Bool { overview.isEmpty && decisions.isEmpty && actionItems.isEmpty }
+
+    /// Who wrote it and where, for the line under it.
+    var provenance: String {
+        let writer = model ?? "the Command Mode model"
+        switch place {
+        case .thisMac?: return "Written on this Mac by \(writer)."
+        case .appleIntelligence?: return "Written by Apple Intelligence."
+        case .server?: return "Written by \(writer) on the server Command Mode uses."
+        case nil: return "Written by \(writer)."
+        }
+    }
 }
 
 /// One note.
