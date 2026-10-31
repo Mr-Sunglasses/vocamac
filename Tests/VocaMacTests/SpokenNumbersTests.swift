@@ -292,4 +292,3 @@ final class SpokenNumbersTests: XCTestCase {
         XCTAssertEqual(prose("back in nineteen ninety nine"), "back in 1999")
     }
 }
-
