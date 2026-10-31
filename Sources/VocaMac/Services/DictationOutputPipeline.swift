@@ -1069,16 +1069,22 @@ struct DictationOutputPipeline {
         return (collapsed, offsets)
     }
 
-    /// `formatted` with an email's greeting on a line of its own, when the
-    /// options lay out paragraphs. Takes text whose protected spans are still
-    /// placeholders, so a snippet or dictionary term stays exactly as saved.
-    /// `restore` puts the protected text back; it is only used to count words.
+    /// `formatted` laid out, when the options lay out paragraphs: a spoken
+    /// "first, … second, … third, …" as a numbered list, and an email's
+    /// greeting on a line of its own. Takes text whose protected spans are
+    /// still placeholders, so a snippet or dictionary term stays exactly as
+    /// saved. `restore` puts the protected text back; it is only used to
+    /// count words.
     static func layingOut(
         _ formatted: String, options: DictationOutputOptions, restore: (String) -> String
     ) -> String {
-        guard options.laysOutParagraphs, options.profile.format == .email,
+        guard options.laysOutParagraphs, options.profile.format.allowsParagraphs,
               options.profile.cleanup != .raw else { return formatted }
-        return PauseParagraphs.separatingGreeting(formatted, restore: restore)
+        var text = SpokenLists.numbered(formatted, restore: restore)
+        if options.profile.format == .email {
+            text = PauseParagraphs.separatingGreeting(text, restore: restore)
+        }
+        return text
     }
 
     private static let paragraphBreakExpression = try? NSRegularExpression(pattern: #"\s*\n[ \t]*\n\s*"#)
