@@ -58,6 +58,8 @@ struct CalmStylesPage: View {
 
             infoPanel
 
+            CalmLearnedCasingGroup()
+
             CalmStylesSettingsSections()
                 .padding(.top, 16)
         }

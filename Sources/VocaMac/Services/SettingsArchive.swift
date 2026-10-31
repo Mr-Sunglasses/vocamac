@@ -101,6 +101,8 @@ enum SettingsArchiveService {
         CalmStyleGroupStore.defaultsKey: .string,
         // JSON stored as data
         "vocamac.snippets": .data, PreferenceKey.wordReplacements: .data,
+        // Learned from the user's edits, and removable in Settings.
+        PreferenceKey.personalFillers: .data, PreferenceKey.learnedLowercaseApps: .data,
     ]
 
     static var keys: Set<String> { Set(kinds.keys) }

@@ -381,6 +381,13 @@ final class MockCursorOverlay: CursorOverlayManaging {
         stopHint = hint
     }
 
+    var learnedMessages: [String] = []
+    var learnedUndo: (@MainActor () -> Void)?
+    func showLearned(message: String, undo: @escaping @MainActor () -> Void) {
+        learnedMessages.append(message)
+        learnedUndo = undo
+    }
+
     func show(style: OverlayStyle, position: OverlayPosition) {
         showCallCount += 1
         commandSession = nil
@@ -1031,6 +1038,10 @@ extension AppState {
             PreferenceKey.escapeCancelsDictation, PreferenceKey.pasteLastShortcut, PreferenceKey.handsFreeShortcut,
             PreferenceKey.mouseTriggerButton, PreferenceKey.wordReplacements, PreferenceKey.dictionarySuggestions,
             PreferenceKey.dismissedDictionarySuggestions, PreferenceKey.learnCorrectionsMode,
+            PreferenceKey.learnModeDefaultSettled, PreferenceKey.personalFillers,
+            PreferenceKey.personalFillerCounts, PreferenceKey.rejectedPersonalFillers,
+            PreferenceKey.learnedLowercaseApps, PreferenceKey.lowercaseStartCounts,
+            PreferenceKey.rejectedLowercaseApps,
             PreferenceKey.useScreenContext, "vocamac.customVocabulary",
             PreferenceKey.transcriptCleanupLevel, PreferenceKey.cleanupEndpoint,
             PreferenceKey.speechEndpoint,
@@ -1250,16 +1261,22 @@ final class MockSelectedTextService: SelectedTextAccessing {
 @MainActor
 final class MockCorrectionObserver: CorrectionObserving {
     var onCorrections: (([CorrectionLearner.Correction]) -> Void)?
+    var onEdit: ((DictationEditObservation) -> Void)?
     var observedTexts: [String] = []
     var flushCallCount = 0
 
     var observedLanguages: [String?] = []
+    var observedHistoryIDs: [UUID?] = []
+    var observedApps: [RunningAppSnapshot?] = []
     func observe(
         insertedText text: String, processID: pid_t, language: String?,
+        historyID: UUID?, app: RunningAppSnapshot?,
         isKnownWord: @escaping @MainActor @Sendable (String) -> Bool
     ) {
         observedTexts.append(text)
         observedLanguages.append(language)
+        observedHistoryIDs.append(historyID)
+        observedApps.append(app)
     }
 
     func flush() {

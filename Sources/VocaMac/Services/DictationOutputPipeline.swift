@@ -267,13 +267,13 @@ struct DictationOutputPipeline {
         func format(_ text: String) -> String {
             masked.restore(in: Self.layingOut(WritingStyleEngine.format(
                 text, rules: finalRules, globalAutoCapitalize: options.autoCapitalize,
-                globalTrailingSpace: options.trailingSpace
+                globalTrailingSpace: options.trailingSpace, isKnownWord: Self.ordinaryWords(options)
             ), options: options, restore: masked.restore))
         }
         func finish(_ formatting: MaskedText) -> String {
             let formatted = WritingStyleEngine.format(
                 formatting.text, rules: finalRules, globalAutoCapitalize: options.autoCapitalize,
-                globalTrailingSpace: options.trailingSpace
+                globalTrailingSpace: options.trailingSpace, isKnownWord: Self.ordinaryWords(options)
             )
             return masked.restore(in: formatting.restore(in: Self.layingOut(
                 formatted, options: options, restore: { masked.restore(in: formatting.restore(in: $0)) }
@@ -452,6 +452,18 @@ struct DictationOutputPipeline {
                 )
             }
         }
+        // Words this user deletes from every dictation ("basically",
+        // "actually"), learned from their edits. Prose only: in Code and
+        // Terminal "right" or "so" may be part of a command.
+        if profile.cleanup == .inherit, effectiveLevel.removesHesitations, profile.format.supportsWording,
+           let fillers = options.dictionary?.removedWords, !fillers.isEmpty {
+            let removal = PersonalFillers.remove(fillers, from: input)
+            // Never the whole dictation: "Actually." on its own is an answer.
+            if removal.removed > 0, !removal.text.isEmpty {
+                input = removal.text
+                removedHesitations = true
+            }
+        }
         if removedHesitations, input.isEmpty {
             return .finished(text: "", summary: "Only “um” or “uh” was heard — nothing typed")
         }
@@ -559,7 +571,7 @@ struct DictationOutputPipeline {
         let noting = prepared.noting
         let fallback = masked.restore(in: Self.layingOut(WritingStyleEngine.format(
             masked.text, rules: profile.rules, globalAutoCapitalize: options.autoCapitalize,
-            globalTrailingSpace: options.trailingSpace
+            globalTrailingSpace: options.trailingSpace, isKnownWord: Self.ordinaryWords(options)
         ), options: options, restore: masked.restore))
         // Code and Terminal text may be a command. The model may only point
         // at filler there; see `CleanupSalvage`.
@@ -1215,6 +1227,14 @@ struct DictationOutputPipeline {
 
     nonisolated static func isEnglish(_ language: String?) -> Bool {
         language?.lowercased().split(separator: "-").first == "en"
+    }
+
+    /// Whether a lowercase word is ordinary vocabulary in this dictation's
+    /// language, for a learned lowercase start: names keep their capital.
+    static func ordinaryWords(_ options: DictationOutputOptions) -> (String) -> Bool {
+        if let isKnownWord = options.dictionary?.isKnownWord { return isKnownWord }
+        let language = knownLanguage(options.language)
+        return { SpellingOracle.shared.isKnownWord($0, language: language) }
     }
 
     /// A language code that actually names a language; nil for the "auto",
