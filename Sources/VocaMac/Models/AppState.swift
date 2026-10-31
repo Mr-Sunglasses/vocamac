@@ -2090,10 +2090,16 @@ final class AppState: ObservableObject {
             return nil
         }
         // A known app without a rule follows its kind (automatic styles), so
-        // removing the rule wouldn't give it the default style: save the
-        // default style for it instead.
+        // removing the rule wouldn't give it the default style: save a fresh
+        // rule with the default style instead — nothing of the old rule, so
+        // a Formal tone or custom prompt doesn't survive the reset.
         if automaticWritingStyles, WritingStyleCatalog.suggestion(matching: target) != nil {
-            return bindFrontmostApp(to: writingStyleDefault)
+            var bindings = writingStyleBindings
+            bindings.removeAll { $0.matches(target) }
+            bindings.append(AppStyleBinding.from(snapshot: target, style: writingStyleDefault))
+            writingStyleBindings = bindings
+            VocaLogger.info(.appState, "Reset \(target.displayName) to the default style")
+            return target.displayName
         }
         let bindings = writingStyleBindings
         let remaining = bindings.filter { !$0.matches(target) }

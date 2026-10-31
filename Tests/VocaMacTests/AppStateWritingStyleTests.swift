@@ -621,6 +621,22 @@ final class AppStateWritingStyleTests: XCTestCase {
         XCTAssertTrue(appState.writingStyleBindings.isEmpty)
     }
 
+    func testUnbindingAnAutomaticAppDropsTheOldRulesToneAndPrompt() {
+        let (appState, mocks) = AppState.makeTestState()
+        appState.automaticWritingStyles = true
+        mocks.frontmostAppResolver.frontmostApp = cursor
+        var rule = AppStyleBinding.from(snapshot: cursor, style: appState.writingStyleDefault)
+        rule.intent = .professional
+        rule.cleanupPrompt = "Write like a lawyer."
+        appState.writingStyleBindings = [rule]
+
+        XCTAssertEqual(appState.unbindFrontmostApp(), "Cursor")
+        XCTAssertEqual(appState.writingStyleBindings.count, 1)
+        XCTAssertEqual(appState.writingStyleBindings.first?.style, appState.writingStyleDefault)
+        XCTAssertEqual(appState.writingStyleBindings.first?.intent, .preserve)
+        XCTAssertNil(appState.writingStyleBindings.first?.cleanupPrompt)
+    }
+
     func testUnbindWithNoRuleIsHarmless() {
         let (appState, mocks) = AppState.makeTestState()
         appState.automaticWritingStyles = false
