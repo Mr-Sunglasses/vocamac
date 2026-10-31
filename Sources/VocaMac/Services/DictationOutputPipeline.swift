@@ -7,6 +7,32 @@ struct DictationOutputResult: Equatable {
     let summary: String
 }
 
+/// How dictated number words are written.
+enum NumberWriting: Hashable, Sendable {
+    /// As spoken: "twenty three" stays words.
+    case words
+    /// Every number as digits: "two ideas" becomes "2 ideas".
+    case digits
+    /// Digits where the app expects them (Chat, Slack, Code, Terminal);
+    /// newspaper style in prose, where one to nine stay words unless a unit
+    /// or a numbering word makes them a figure ("two ideas", "5 pm", "23
+    /// chairs"). What a new install gets.
+    case automatic
+
+    /// The conversion for text in `format`.
+    func mode(for format: WritingStyle) -> (digits: Bool, smallNumbersAsWords: Bool) {
+        switch self {
+        case .words: return (false, false)
+        case .digits: return (true, false)
+        case .automatic:
+            switch format {
+            case .chat, .slack, .code, .terminal: return (true, false)
+            case .plain, .email, .notes: return (true, true)
+            }
+        }
+    }
+}
+
 /// Everything one pipeline run needs besides the text.
 struct DictationOutputOptions {
     var profile: WritingProfile
@@ -22,6 +48,8 @@ struct DictationOutputOptions {
     var preview: Bool = false
     var dictionary: DictionaryContext?
     var numbersAsDigits: Bool = false
+    /// Overrides `numbersAsDigits` when set.
+    var numbers: NumberWriting?
     var numberSymbols: Bool = false
     var spokenEmoji: Bool = false
     /// Leave the model out when the rule stages left it nothing to do
@@ -77,6 +105,7 @@ struct DictationOutputPipeline {
         preview: Bool = false,
         dictionary: DictionaryContext? = nil,
         numbersAsDigits: Bool = false,
+        numbers: NumberWriting? = nil,
         numberSymbols: Bool = false,
         spokenEmoji: Bool = false,
         skipWhenClean: Bool = false,
@@ -91,8 +120,8 @@ struct DictationOutputPipeline {
                 rewritingEnabled: rewritingEnabled, model: model, customPrompt: customPrompt,
                 cleanupLevel: cleanupLevel, language: language, autoCapitalize: autoCapitalize,
                 trailingSpace: trailingSpace, preview: preview, dictionary: dictionary,
-                numbersAsDigits: numbersAsDigits, numberSymbols: numberSymbols, spokenEmoji: spokenEmoji,
-                skipWhenClean: skipWhenClean, laysOutParagraphs: laysOutParagraphs
+                numbersAsDigits: numbersAsDigits, numbers: numbers, numberSymbols: numberSymbols,
+                spokenEmoji: spokenEmoji, skipWhenClean: skipWhenClean, laysOutParagraphs: laysOutParagraphs
             ),
             pieces: pieces, speculator: speculator
         )
@@ -238,13 +267,15 @@ struct DictationOutputPipeline {
         func format(_ text: String) -> String {
             masked.restore(in: Self.layingOut(WritingStyleEngine.format(
                 text, rules: finalRules, globalAutoCapitalize: options.autoCapitalize,
-                globalTrailingSpace: options.trailingSpace
+                globalTrailingSpace: options.trailingSpace,
+                startsInLowercase: options.profile.startsInLowercase, isKnownWord: Self.ordinaryWords(options)
             ), options: options, restore: masked.restore))
         }
         func finish(_ formatting: MaskedText) -> String {
             let formatted = WritingStyleEngine.format(
                 formatting.text, rules: finalRules, globalAutoCapitalize: options.autoCapitalize,
-                globalTrailingSpace: options.trailingSpace
+                globalTrailingSpace: options.trailingSpace,
+                startsInLowercase: options.profile.startsInLowercase, isKnownWord: Self.ordinaryWords(options)
             )
             return masked.restore(in: formatting.restore(in: Self.layingOut(
                 formatted, options: options, restore: { masked.restore(in: formatting.restore(in: $0)) }
@@ -423,6 +454,18 @@ struct DictationOutputPipeline {
                 )
             }
         }
+        // Words this user deletes from every dictation ("basically",
+        // "actually"), learned from their edits. Prose only: in Code and
+        // Terminal "right" or "so" may be part of a command.
+        if profile.cleanup == .inherit, effectiveLevel.removesHesitations, profile.format.supportsWording,
+           let fillers = options.dictionary?.removedWords, !fillers.isEmpty {
+            let removal = PersonalFillers.remove(fillers, from: input)
+            // Never the whole dictation: "Actually." on its own is an answer.
+            if removal.removed > 0, !removal.text.isEmpty {
+                input = removal.text
+                removedHesitations = true
+            }
+        }
         if removedHesitations, input.isEmpty {
             return .finished(text: "", summary: "Only “um” or “uh” was heard — nothing typed")
         }
@@ -501,7 +544,8 @@ struct DictationOutputPipeline {
         // neither drop nor re-spell what was converted.
         let converted = Self.convertSpokenForms(
             snippets.expandMasked(in: input, using: options.snippetList + protectedTerms),
-            emoji: options.spokenEmoji, digits: options.numbersAsDigits,
+            emoji: options.spokenEmoji,
+            numbers: (options.numbers ?? (options.numbersAsDigits ? .digits : .words)).mode(for: profile.format),
             symbols: options.numberSymbols, language: options.language
         )
         return .prepared(PreparedDictation(
@@ -539,7 +583,8 @@ struct DictationOutputPipeline {
         let noting = prepared.noting
         let fallback = masked.restore(in: Self.layingOut(WritingStyleEngine.format(
             masked.text, rules: profile.rules, globalAutoCapitalize: options.autoCapitalize,
-            globalTrailingSpace: options.trailingSpace
+            globalTrailingSpace: options.trailingSpace,
+            startsInLowercase: options.profile.startsInLowercase, isKnownWord: Self.ordinaryWords(options)
         ), options: options, restore: masked.restore))
         // Code and Terminal text may be a command. The model may only point
         // at filler there; see `CleanupSalvage`.
@@ -607,7 +652,7 @@ struct DictationOutputPipeline {
         // and so may a prompt the user wrote: only they know what it asks
         // for, so it is always given the text. (Code and Terminal use their
         // own fixed prompt whatever the user's says.)
-        let glossary = technical || !cleaner.isOnDevice ? [] : Self.cleanupGlossary(options.dictionary)
+        let glossary = technical ? [] : Self.cleanupGlossary(options.dictionary, onDevice: cleaner.isOnDevice)
         if options.skipWhenClean, intent == .preserve,
            technical || Self.usesBuiltInCleanupPrompt(options),
            CleanupNeed.reason(
@@ -667,9 +712,12 @@ struct DictationOutputPipeline {
     /// misheard word to one of them, and `EditMerge` keeps only such a
     /// respelling when it is spelled close to what was heard.
     ///
-    /// Only on this Mac: screen text never goes to a remote endpoint.
-    static func cleanupGlossary(_ dictionary: DictionaryContext?) -> [String] {
-        guard let dictionary else { return [] }
+    /// A remote endpoint (`onDevice` false) gets the user's own Dictionary
+    /// only, as a custom speech endpoint does: screen text never leaves this
+    /// Mac.
+    static func cleanupGlossary(_ dictionary: DictionaryContext?, onDevice: Bool = true) -> [String] {
+        guard var dictionary else { return [] }
+        if !onDevice { dictionary.contextTerms = [] }
         let targets = dictionary.replacements.map(\.replacement).filter(RecognitionHints.isHintableReplacement)
         var seen = Set<String>()
         var terms: [String] = []
@@ -1049,16 +1097,22 @@ struct DictationOutputPipeline {
         return (collapsed, offsets)
     }
 
-    /// `formatted` with an email's greeting on a line of its own, when the
-    /// options lay out paragraphs. Takes text whose protected spans are still
-    /// placeholders, so a snippet or dictionary term stays exactly as saved.
-    /// `restore` puts the protected text back; it is only used to count words.
+    /// `formatted` laid out, when the options lay out paragraphs: a spoken
+    /// "first, … second, … third, …" as a numbered list, and an email's
+    /// greeting on a line of its own. Takes text whose protected spans are
+    /// still placeholders, so a snippet or dictionary term stays exactly as
+    /// saved. `restore` puts the protected text back; it is only used to
+    /// count words.
     static func layingOut(
         _ formatted: String, options: DictationOutputOptions, restore: (String) -> String
     ) -> String {
-        guard options.laysOutParagraphs, options.profile.format == .email,
+        guard options.laysOutParagraphs, options.profile.format.allowsParagraphs,
               options.profile.cleanup != .raw else { return formatted }
-        return PauseParagraphs.separatingGreeting(formatted, restore: restore)
+        var text = SpokenLists.numbered(formatted, restore: restore)
+        if options.profile.format == .email {
+            text = PauseParagraphs.separatingGreeting(text, restore: restore)
+        }
+        return text
     }
 
     private static let paragraphBreakExpression = try? NSRegularExpression(pattern: #"\s*\n[ \t]*\n\s*"#)
@@ -1145,7 +1199,8 @@ struct DictationOutputPipeline {
     ///
     /// - Returns: The converted mask, and the glyph when one ends the text.
     static func convertSpokenForms(
-        _ masked: MaskedText, emoji: Bool, digits: Bool, symbols: Bool = false, language: String?
+        _ masked: MaskedText, emoji: Bool, numbers: (digits: Bool, smallNumbersAsWords: Bool),
+        symbols: Bool = false, language: String?
     ) -> (masked: MaskedText, closingGlyph: String?) {
         var text = masked.text
         var replacements = masked.replacements
@@ -1158,8 +1213,8 @@ struct DictationOutputPipeline {
                 return String(placeholder)
             }
         }
-        if digits {
-            text = SpokenNumbers.digits(in: text, symbols: symbols)
+        if numbers.digits {
+            text = SpokenNumbers.digits(in: text, symbols: symbols, smallNumbersAsWords: numbers.smallNumbersAsWords)
         }
         var closingGlyph: String?
         if let last = text.last(where: { !$0.isWhitespace }),
@@ -1188,6 +1243,14 @@ struct DictationOutputPipeline {
 
     nonisolated static func isEnglish(_ language: String?) -> Bool {
         language?.lowercased().split(separator: "-").first == "en"
+    }
+
+    /// Whether a lowercase word is ordinary vocabulary in this dictation's
+    /// language, for a learned lowercase start: names keep their capital.
+    static func ordinaryWords(_ options: DictationOutputOptions) -> (String) -> Bool {
+        if let isKnownWord = options.dictionary?.isKnownWord { return isKnownWord }
+        let language = knownLanguage(options.language)
+        return { SpellingOracle.shared.isKnownWord($0, language: language) }
     }
 
     /// A language code that actually names a language; nil for the "auto",

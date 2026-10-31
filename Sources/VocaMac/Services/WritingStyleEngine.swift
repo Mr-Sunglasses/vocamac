@@ -26,11 +26,17 @@ enum WritingStyleEngine {
     ///   - rules: The resolved rules for the target app.
     ///   - globalAutoCapitalize: The Dictation preference, used by `.inherit`.
     ///   - globalTrailingSpace: The Dictation preference, used by `.inherit`.
+    ///   - startsInLowercase: A lowercase start learned for the app, applied
+    ///     after the rules' own capitalization, whatever it is.
+    ///   - isKnownWord: Whether a lowercase word is ordinary vocabulary, for
+    ///     a lowercase start. Without it the first word keeps its capital.
     static func format(
         _ text: String,
         rules: WritingStyleRules,
         globalAutoCapitalize: Bool,
-        globalTrailingSpace: Bool
+        globalTrailingSpace: Bool,
+        startsInLowercase: Bool = false,
+        isKnownWord: ((String) -> Bool)? = nil
     ) -> String {
         guard !text.isEmpty else { return text }
 
@@ -68,20 +74,26 @@ enum WritingStyleEngine {
         // 5. Capitalization.
         let shouldCapitalize: Bool
         switch rules.capitalization {
-        case .inherit:   shouldCapitalize = globalAutoCapitalize
-        case .off:       shouldCapitalize = false
-        case .sentences: shouldCapitalize = true
+        case .inherit, .lowercaseStart: shouldCapitalize = globalAutoCapitalize
+        case .off:                      shouldCapitalize = false
+        case .sentences:                shouldCapitalize = true
         }
         if shouldCapitalize {
             // Passthrough rules promise the pre-writing-styles pipeline byte
             // for byte — that is both what the master toggle reverts to and
             // what the Plain style is. The style-aware capitalization is an
             // improvement, but it is still a change, so it belongs only to
-            // styles that shape their output.
+            // styles that shape their output. "Start in lowercase" changes
+            // only the first letter, so it keeps the legacy pass.
+            var shaping = rules
+            if shaping.capitalization == .lowercaseStart { shaping.capitalization = .inherit }
             result = DictationOutputFormatter.capitalizeSentences(
                 result,
-                scope: rules == .passthrough ? .legacy : .styleAware
+                scope: shaping == .passthrough ? .legacy : .styleAware
             )
+        }
+        if rules.capitalization == .lowercaseStart || startsInLowercase, let isKnownWord {
+            result = LearnedCasing.lowercasingStart(result, isKnownWord: isKnownWord)
         }
 
         // 6. Terminal punctuation.

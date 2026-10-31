@@ -18,7 +18,7 @@ NVIDIA Parakeet TDT models running as CoreML on the Apple Neural Engine (via [Fl
 
 ## Whisper — widest language coverage
 
-OpenAI Whisper models via WhisperKit's CoreML format. The only engine that supports **translation to English**. Dictionary vocabulary is a recognition hint for Whisper, Apple Speech, and (with the optional vocabulary boost download) Parakeet; every engine gets the spelling fixes after transcription. The app auto-detects your hardware and recommends a variant.
+OpenAI Whisper models via WhisperKit's CoreML format. The only engine that supports **translation to English**. Dictionary vocabulary is a recognition hint for Whisper, Apple Speech, Qwen3 ASR, and Parakeet (through a ~98 MB vocabulary boost model, fetched on its own once the Dictionary has words); every engine gets the spelling fixes after transcription. The app auto-detects your hardware and recommends a variant.
 
 | Model | Parameters | Size | Speed | Quality | Best For |
 |-------|-----------|------|-------|---------|----------|
@@ -51,6 +51,8 @@ Community models via [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx). These
 Recordings longer than a model's single-pass limit are split at natural pauses and decoded segment by segment, since these models — unlike Whisper and Parakeet — do not chunk internally.
 
 > **Note:** SenseVoice and Canary fix their language when the model loads, so changing the transcription language reloads the active model. Whisper and Parakeet take the language per transcription.
+
+> **Note:** Of these, only Qwen3 ASR takes Dictionary words as a recognition hint. Moonshine, SenseVoice, GigaAM, and Canary have no way to listen for a word, so for them the Dictionary only fixes spellings after transcription: a near-miss of a listed term, or a run of words that sounds exactly like one.
 
 ## Custom Endpoint (optional, remote)
 
