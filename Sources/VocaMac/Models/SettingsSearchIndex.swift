@@ -398,7 +398,7 @@ enum SettingsSearchIndex {
             id: "learn-corrections",
             page: .dictionary,
             title: "Learn from my corrections",
-            subtitle: "Suggest words you fixed after dictating",
+            subtitle: "Add or suggest words you fixed after dictating",
             keywords: ["learn", "auto", "suggest", "correction", "edit", "learn from my corrections"]
         ),
         SettingsSearchEntry(

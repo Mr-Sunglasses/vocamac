@@ -890,6 +890,14 @@ final class AppState: ObservableObject {
     /// Corrections noticed in dictated text, waiting for the user to accept.
     @Published private(set) var dictionarySuggestions: [CorrectionSuggestion] = []
 
+    /// Fillers the user always deletes ("basically"), removed from their
+    /// dictations like "um". Learned from their edits; listed in Formatting.
+    @Published var personalFillers: [String] = []
+
+    /// Apps where the user starts in lowercase, learned from their edits;
+    /// listed on Styles.
+    @Published var learnedLowercaseApps: [LearnedLowercaseApp] = []
+
     /// Parakeet's optional vocabulary boost model.
     @Published private(set) var vocabularyBoostStatus: VocabularyBoostStatus =
         TranscriptionRouter.isVocabularyBoostDownloaded ? .ready : .notDownloaded
@@ -1215,6 +1223,7 @@ final class AppState: ObservableObject {
         }
         loadSnippets()
         loadDictionary()
+        settleLearnModeDefault()
         if !skipSystemIntegration {
             syncLaunchAtLogin()
         }
@@ -1513,6 +1522,9 @@ final class AppState: ObservableObject {
 
         correctionObserver?.onCorrections = { [weak self] corrections in
             self?.receiveCorrections(corrections)
+        }
+        correctionObserver?.onEdit = { [weak self] observation in
+            self?.receiveEdit(observation)
         }
 
         // Start the hotkey listener when permissions are granted, and rebuild
@@ -1939,6 +1951,17 @@ final class AppState: ObservableObject {
     ///   `WritingStyleResolver.applyingCodingAgent`).
     func resolveWritingStyle(
         for target: RunningAppSnapshot?, documentURL: URL? = nil, codingAgentTerminal: RunningAppSnapshot? = nil
+    ) -> ResolvedWritingStyle {
+        applyingLearnedCasing(
+            resolveConfiguredWritingStyle(for: target, documentURL: documentURL, codingAgentTerminal: codingAgentTerminal),
+            for: target
+        )
+    }
+
+    /// The style the user's rules and the presets give, before anything
+    /// learned from their edits.
+    private func resolveConfiguredWritingStyle(
+        for target: RunningAppSnapshot?, documentURL: URL?, codingAgentTerminal: RunningAppSnapshot?
     ) -> ResolvedWritingStyle {
         let appRule = WritingStyleResolver.resolve(
             target: target,
@@ -3146,7 +3169,9 @@ final class AppState: ObservableObject {
                         processedWhileSpeaking: processedWhileSpeaking
                     ))
                     let dictationLanguage = DictationOutputPipeline.knownLanguage(result.detectedLanguage) ?? spellingLanguage
-                    observeCorrections(to: output.text, language: dictationLanguage)
+                    observeCorrections(
+                        to: output.text, language: dictationLanguage, historyID: completedHistoryID, app: target
+                    )
                     noteScreenRespellings(raw: result.text, final: output.text, screenTerms: contextTerms,
                                           language: dictationLanguage)
                     suggestFrequentNamesIfDue()
@@ -6125,7 +6150,8 @@ extension AppState {
             vocabulary: vocabularyTerms,
             replacements: wordReplacements,
             contextTerms: contextTerms,
-            isKnownWord: { isKnownWord($0, language) }
+            isKnownWord: { isKnownWord($0, language) },
+            removedWords: personalFillers
         )
     }
 
@@ -6178,11 +6204,17 @@ extension AppState {
         let mode = learnCorrectionsMode
         guard mode != .off else { return }
         let known = Set(vocabularyTerms)
+        var learned: [LearnedCorrection] = []
         for correction in corrections where !known.contains(correction.corrected) {
             let key = CorrectionSuggestion.key(heard: correction.heard, corrected: correction.corrected)
             guard !dismissedSuggestionKeys.contains(key) else { continue }
-            if mode == .automatic {
-                learn(heard: correction.heard, corrected: correction.corrected, language: correction.language)
+            // Only the user's own fix of a name or term is added unasked;
+            // screen and History finds, and anything else, are suggested.
+            if mode == .automatic, correction.source == nil,
+               Self.learnsWithoutAsking(correction.corrected, isKnownWord: {
+                   self.isKnownWord($0, correction.language ?? self.spellingLanguage)
+               }) {
+                learned.append(learnUndoably(correction))
                 continue
             }
             if let index = dictionarySuggestions.firstIndex(where: { $0.id == key }) {
@@ -6200,6 +6232,55 @@ extension AppState {
         }
         dictionarySuggestions = Array(dictionarySuggestions.prefix(50))
         saveSuggestions()
+        offerUndo(for: learned)
+    }
+
+    /// What one automatic learn added, so Undo takes back exactly that.
+    struct LearnedCorrection {
+        let heard: String
+        let corrected: String
+        let addedTerm: Bool
+        let addedReplacement: Bool
+    }
+
+    private func learnUndoably(_ correction: CorrectionLearner.Correction) -> LearnedCorrection {
+        let hadTerm = vocabularyTerms.contains(correction.corrected)
+        let replacementsBefore = wordReplacements
+        learn(heard: correction.heard, corrected: correction.corrected, language: correction.language)
+        return LearnedCorrection(
+            heard: correction.heard, corrected: correction.corrected,
+            addedTerm: !hadTerm && vocabularyTerms.contains(correction.corrected),
+            addedReplacement: wordReplacements != replacementsBefore
+        )
+    }
+
+    /// "Learned “Priya”" on the overlay, with Undo.
+    private func offerUndo(for learned: [LearnedCorrection]) {
+        guard !learned.isEmpty else { return }
+        let names = learned.map { "“\(Self.shortened($0.corrected))”" }
+        let message = "Learned " + (names.count == 1 ? names[0] : names.dropLast().joined(separator: ", ") + " and " + (names.last ?? ""))
+        cursorOverlay.showLearned(message: message) { [weak self] in
+            self?.unlearn(learned)
+        }
+    }
+
+    /// Take back automatic learns, and don't learn the same fixes again.
+    func unlearn(_ learned: [LearnedCorrection]) {
+        for item in learned {
+            if item.addedTerm { removeVocabularyTerm(item.corrected) }
+            if item.addedReplacement,
+               let index = wordReplacements.firstIndex(where: { $0.replacement == item.corrected }) {
+                let forms = wordReplacements[index].heardForms.filter { $0.lowercased() != item.heard.lowercased() }
+                if forms.isEmpty {
+                    wordReplacements.remove(at: index)
+                } else {
+                    wordReplacements[index].heard = forms.joined(separator: ", ")
+                }
+            }
+            dismissedSuggestionKeys.insert(CorrectionSuggestion.key(heard: item.heard, corrected: item.corrected))
+        }
+        saveSuggestions()
+        VocaLogger.info(.dictionary, "Took back \(learned.count) learned spelling(s)")
     }
 
     // MARK: - Suggested terms
@@ -6273,11 +6354,15 @@ extension AppState {
         receiveCorrections(corrections)
     }
 
-    fileprivate func observeCorrections(to text: String, language: String) {
+    fileprivate func observeCorrections(
+        to text: String, language: String, historyID: UUID?, app: RunningAppSnapshot?
+    ) {
         guard learnCorrectionsMode != .off, let correctionObserver,
               let processID = NSWorkspace.shared.frontmostApplication?.processIdentifier else { return }
         let isKnownWord = self.isKnownWord
-        correctionObserver.observe(insertedText: text, processID: processID, language: language) {
+        correctionObserver.observe(
+            insertedText: text, processID: processID, language: language, historyID: historyID, app: app
+        ) {
             isKnownWord($0, language)
         }
     }
@@ -6435,6 +6520,8 @@ extension AppState {
 
     fileprivate func loadDictionary() {
         wordReplacements = Self.loadJSON([WordReplacement].self, forKey: PreferenceKey.wordReplacements) ?? []
+        personalFillers = Self.loadJSON([String].self, forKey: PreferenceKey.personalFillers) ?? []
+        learnedLowercaseApps = Self.loadJSON([LearnedLowercaseApp].self, forKey: PreferenceKey.learnedLowercaseApps) ?? []
         dictionarySuggestions = Self.loadJSON([CorrectionSuggestion].self, forKey: PreferenceKey.dictionarySuggestions) ?? []
         dismissedSuggestionKeys = Set(
             UserDefaults.standard.stringArray(forKey: PreferenceKey.dismissedDictionarySuggestions) ?? []
@@ -6454,6 +6541,14 @@ extension AppState {
             VocaLogger.error(.dictionary, "Could not read \(key): \(error)")
             return nil
         }
+    }
+
+    func savePersonalFillers() {
+        Self.saveJSON(personalFillers, forKey: PreferenceKey.personalFillers)
+    }
+
+    func saveLearnedLowercaseApps() {
+        Self.saveJSON(learnedLowercaseApps, forKey: PreferenceKey.learnedLowercaseApps)
     }
 
     fileprivate static func saveJSON<T: Encodable>(_ value: T, forKey key: String) {

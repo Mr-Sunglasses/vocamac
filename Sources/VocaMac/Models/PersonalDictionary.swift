@@ -72,7 +72,10 @@ enum LearnCorrectionsMode: String, CaseIterable, Identifiable, Codable {
 
     var id: String { rawValue }
 
-    static let defaultMode: LearnCorrectionsMode = .suggest
+    /// New installs learn on their own: a fixed spelling is right from the
+    /// next dictation, with Undo on screen. Installs that already use the
+    /// Dictionary keep Suggest (`AppState.settleLearnModeDefault`).
+    static let defaultMode: LearnCorrectionsMode = .automatic
 
     var displayName: String {
         switch self {
@@ -89,7 +92,7 @@ enum LearnCorrectionsMode: String, CaseIterable, Identifiable, Codable {
         case .suggest:
             return "When you fix a word VocaMac typed, it suggests adding your spelling to the dictionary."
         case .automatic:
-            return "When you fix a word VocaMac typed, your spelling is added to the dictionary right away."
+            return "When you fix a name or term VocaMac typed, your spelling is added to the dictionary right away, with Undo on screen. Other fixes are suggested."
         }
     }
 }
@@ -103,6 +106,9 @@ struct DictionaryContext {
     var contextTerms: [String]
     /// Whether a word is ordinary vocabulary in the dictation's language.
     var isKnownWord: (String) -> Bool
+    /// Fillers the user always deletes, learned from their edits and
+    /// removed like "um" (`PersonalFillers`).
+    var removedWords: [String] = []
 
     var isEmpty: Bool {
         vocabulary.isEmpty && replacements.isEmpty && contextTerms.isEmpty

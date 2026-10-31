@@ -129,7 +129,7 @@ enum CorrectionLearner {
 
     /// Where `needle` sits in `haystack`, preferring the copy ending nearest
     /// the caret (the one just typed).
-    private static func locate(_ needle: [Character], in haystack: [Character], caretLocation: Int?) -> Range<Int>? {
+    static func locate(_ needle: [Character], in haystack: [Character], caretLocation: Int?) -> Range<Int>? {
         guard needle.count <= haystack.count else { return nil }
         var ranges: [Range<Int>] = []
         var start = 0
