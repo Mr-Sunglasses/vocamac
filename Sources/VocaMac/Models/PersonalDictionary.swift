@@ -109,6 +109,11 @@ struct DictionaryContext {
     /// Fillers the user always deletes, learned from their edits and
     /// removed like "um" (`PersonalFillers`).
     var removedWords: [String] = []
+    /// Words (normalized, see `DictionaryCorrector.normalized`) the engine
+    /// decoded with low confidence, or nil when it reports no confidence.
+    /// Only real words that may have been misheard need it; see
+    /// `RecognitionConfidence`.
+    var lowConfidenceWords: Set<String>?
 
     var isEmpty: Bool {
         vocabulary.isEmpty && replacements.isEmpty && contextTerms.isEmpty

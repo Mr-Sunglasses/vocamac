@@ -60,7 +60,7 @@ final class DictationOutputPipelineTests: XCTestCase {
         XCTAssertEqual(cleaner.lastGlossary, ["useEffect"])
         XCTAssertEqual(result.text, "Then update the useEffect hook.", "Bold the speaker never dictated is dropped")
 
-        // Screen text never goes to an endpoint, and Terminal answers only lose filler.
+        // An endpoint gets the speaker's own Dictionary, never screen text.
         let remote = MockTranscriptCleanup()
         remote.isOnDevice = false
         _ = await DictationOutputPipeline(cleaner: remote, snippets: SnippetExpander()).process(
@@ -71,7 +71,7 @@ final class DictationOutputPipelineTests: XCTestCase {
                 customPrompt: "", language: "en", autoCapitalize: true, trailingSpace: false, dictionary: dictionary
             )
         )
-        XCTAssertEqual(remote.lastGlossary, [])
+        XCTAssertEqual(remote.lastGlossary, ["Claude", "GitHub"])
     }
 
     func testACleanSentenceStillGoesToTheModelForADictionaryTerm() async {

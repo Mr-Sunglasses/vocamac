@@ -448,6 +448,9 @@ final class AppState: ObservableObject {
     @UserDefault("vocamac.showCursorIndicator") var showCursorIndicator: Bool = true
     @UserDefault("vocamac.translationEnabled") var translationEnabled: Bool = false
     @UserDefault("vocamac.customVocabulary") var customVocabulary: String = ""
+    /// Set when the user removes Parakeet's vocabulary boost model, so it
+    /// isn't fetched again behind their back; cleared when they download it.
+    @UserDefault("vocamac.vocabularyBoostRemovedByUser") var vocabularyBoostRemovedByUser: Bool = false
     @UserDefault("vocamac.logLevel") var logLevel: String = "info"
     @UserDefault(PreferenceKey.appendTrailingSpace) var appendTrailingSpace: Bool = true
     @UserDefault(PreferenceKey.autoCapitalize) var autoCapitalize: Bool = true
@@ -3119,7 +3122,9 @@ final class AppState: ObservableObject {
                     cleanupLevel: transcriptCleanupLevel,
                     language: result.detectedLanguage, autoCapitalize: autoCapitalize,
                     trailingSpace: appendTrailingSpace, preview: !injectResult,
-                    dictionary: dictionaryContext(contextTerms: contextTerms, language: result.detectedLanguage),
+                    dictionary: dictionaryContext(
+                        contextTerms: contextTerms, language: result.detectedLanguage, segments: result.segments
+                    ),
                     numbers: numberWriting, numberSymbols: numberSymbols, spokenEmoji: spokenEmoji,
                     skipWhenClean: skipCleanDictations, laysOutParagraphs: laysOutParagraphs,
                     // Cleaning piece by piece only pays off with answers from
@@ -3735,6 +3740,7 @@ final class AppState: ObservableObject {
             processMemoryBeforeUnloadMB = nil
             processMemoryAfterUnloadMB = nil
             VocaLogger.info(.appState, "Model ready: \(targetSize.displayName)")
+            downloadVocabularyBoostIfUseful()
         } catch {
             // A newer load superseded this one; do not restore over it.
             guard generation == loadGeneration else {
@@ -5021,7 +5027,9 @@ extension AppState {
                     cleanupLevel: transcriptCleanupLevel,
                     language: result.detectedLanguage, autoCapitalize: autoCapitalize,
                     trailingSpace: appendTrailingSpace,
-                    dictionary: dictionaryContext(contextTerms: [], language: result.detectedLanguage),
+                    dictionary: dictionaryContext(
+                        contextTerms: [], language: result.detectedLanguage, segments: result.segments
+                    ),
                     numbers: numberWriting, numberSymbols: numberSymbols, spokenEmoji: spokenEmoji,
                     skipWhenClean: skipCleanDictations, laysOutParagraphs: laysOutParagraphs
                 )
@@ -6114,9 +6122,25 @@ extension AppState {
 
     // MARK: - Vocabulary Boost
 
+    /// Fetch Parakeet's vocabulary boost model once it would help: Parakeet
+    /// is selected and the Dictionary has a word to listen for. It is about
+    /// 98 MB and loads in the background, so nothing waits on it. Never in a
+    /// test run, which must not touch the network.
+    func downloadVocabularyBoostIfUseful() {
+        guard NSClassFromString("XCTestCase") == nil,
+              VocabularyBoostStatus.downloadsAutomatically(
+                  engine: ModelSize(rawValue: selectedModelSize)?.engine,
+                  vocabulary: recognitionHintVocabulary, status: vocabularyBoostStatus,
+                  removedByUser: vocabularyBoostRemovedByUser
+              ) else { return }
+        VocaLogger.info(.appState, "Fetching Parakeet's vocabulary boost: the Dictionary has words to listen for")
+        downloadVocabularyBoost()
+    }
+
     /// Download Parakeet's vocabulary boost model.
     func downloadVocabularyBoost() {
         guard vocabularyBoostStatus != .downloading else { return }
+        vocabularyBoostRemovedByUser = false
         vocabularyBoostStatus = .downloading
         Task { @MainActor [weak self] in
             do {
@@ -6135,6 +6159,7 @@ extension AppState {
         do {
             try TranscriptionRouter.removeVocabularyBoost()
             vocabularyBoostStatus = .notDownloaded
+            vocabularyBoostRemovedByUser = true
         } catch {
             VocaLogger.error(.appState, "Could not remove vocabulary boost: \(error.localizedDescription)")
             vocabularyBoostStatus = .failed(error.localizedDescription)
@@ -6156,6 +6181,7 @@ extension AppState {
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty && seen.insert($0.lowercased()).inserted }
         customVocabulary = cleaned.joined(separator: "\n")
+        downloadVocabularyBoostIfUseful()
     }
 
     /// Add a term, replacing a differently-cased copy of it.
@@ -6197,7 +6223,12 @@ extension AppState {
         }
     }
 
-    func dictionaryContext(contextTerms: [String], language: String?) -> DictionaryContext {
+    /// - Parameter segments: The decode's timings; the words the engine was
+    ///   unsure of let the Dictionary respell real words that sound like a
+    ///   term (`RecognitionConfidence`).
+    func dictionaryContext(
+        contextTerms: [String], language: String?, segments: [TimedSegment] = []
+    ) -> DictionaryContext {
         let isKnownWord = self.isKnownWord
         // "auto" from Parakeet or Apple Speech isn't a language; passed on, it
         // made every word count as known and switched off name fixes.
@@ -6207,7 +6238,8 @@ extension AppState {
             replacements: wordReplacements,
             contextTerms: contextTerms,
             isKnownWord: { isKnownWord($0, language) },
-            removedWords: personalFillers
+            removedWords: personalFillers,
+            lowConfidenceWords: RecognitionConfidence.lowConfidenceWords(in: segments)
         )
     }
 

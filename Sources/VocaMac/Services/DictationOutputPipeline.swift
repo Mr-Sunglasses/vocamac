@@ -639,7 +639,7 @@ struct DictationOutputPipeline {
         // and so may a prompt the user wrote: only they know what it asks
         // for, so it is always given the text. (Code and Terminal use their
         // own fixed prompt whatever the user's says.)
-        let glossary = technical || !cleaner.isOnDevice ? [] : Self.cleanupGlossary(options.dictionary)
+        let glossary = technical ? [] : Self.cleanupGlossary(options.dictionary, onDevice: cleaner.isOnDevice)
         if options.skipWhenClean, intent == .preserve,
            technical || Self.usesBuiltInCleanupPrompt(options),
            CleanupNeed.reason(
@@ -699,9 +699,12 @@ struct DictationOutputPipeline {
     /// misheard word to one of them, and `EditMerge` keeps only such a
     /// respelling when it is spelled close to what was heard.
     ///
-    /// Only on this Mac: screen text never goes to a remote endpoint.
-    static func cleanupGlossary(_ dictionary: DictionaryContext?) -> [String] {
-        guard let dictionary else { return [] }
+    /// A remote endpoint (`onDevice` false) gets the user's own Dictionary
+    /// only, as a custom speech endpoint does: screen text never leaves this
+    /// Mac.
+    static func cleanupGlossary(_ dictionary: DictionaryContext?, onDevice: Bool = true) -> [String] {
+        guard var dictionary else { return [] }
+        if !onDevice { dictionary.contextTerms = [] }
         let targets = dictionary.replacements.map(\.replacement).filter(RecognitionHints.isHintableReplacement)
         var seen = Set<String>()
         var terms: [String] = []
