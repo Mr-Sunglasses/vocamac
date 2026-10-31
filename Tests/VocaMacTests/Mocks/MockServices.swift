@@ -1017,6 +1017,7 @@ extension AppState {
         UserDefaults.standard.removeObject(forKey: PreferenceKey.writingStyleDefault)
         UserDefaults.standard.removeObject(forKey: PreferenceKey.writingStyleBindings)
         UserDefaults.standard.removeObject(forKey: PreferenceKey.automaticWritingStyles)
+        UserDefaults.standard.removeObject(forKey: PreferenceKey.numbersAsDigits)
         UserDefaults.standard.removeObject(forKey: PreferenceKey.writingIntent)
         UserDefaults.standard.removeObject(forKey: PreferenceKey.writingRewriteEnabled)
         UserDefaults.standard.removeObject(forKey: PreferenceKey.duckOtherAudioEnabled)

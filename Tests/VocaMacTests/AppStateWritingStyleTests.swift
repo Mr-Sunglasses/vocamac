@@ -122,21 +122,27 @@ final class AppStateWritingStyleTests: XCTestCase {
         XCTAssertEqual(mocks.textInjector.lastInjectedText, "Readme.md was updated")
     }
 
-    /// Spoken emoji and digits are opt-in, and once on they reach what a real
-    /// dictation types.
+    /// Numbers are written by style unless the user chose; spoken emoji is
+    /// opt-in. Both reach what a real dictation types.
     func testSpokenEmojiAndDigitsAreOptInAndReachTheInjectedText() async {
         let (appState, mocks) = AppState.makeTestState()
         appState.appendTrailingSpace = false
         appState.automaticWritingStyles = false
         mocks.frontmostAppResolver.frontmostApp = cursor
-        XCTAssertFalse(appState.numbersAsDigits)
+        XCTAssertEqual(appState.numberWriting, .automatic)
         XCTAssertFalse(appState.spokenEmoji)
 
         let transcript = "we need twenty three chairs, party emoji"
         await dictate(transcript, on: appState, mocks: mocks)
+        // Automatic numbers write 23 as digits in prose; emoji stays opt-in.
+        XCTAssertEqual(mocks.textInjector.lastInjectedText, "We need 23 chairs, party emoji")
+
+        appState.numberWriting = .words
+        XCTAssertEqual(appState.numbersAsDigitsChoice, false)
+        await dictate(transcript, on: appState, mocks: mocks)
         XCTAssertEqual(mocks.textInjector.lastInjectedText, "We need twenty three chairs, party emoji")
 
-        appState.numbersAsDigits = true
+        appState.numberWriting = .digits
         appState.spokenEmoji = true
         await dictate(transcript, on: appState, mocks: mocks)
         XCTAssertEqual(mocks.textInjector.lastInjectedText, "We need 23 chairs, 🎉")

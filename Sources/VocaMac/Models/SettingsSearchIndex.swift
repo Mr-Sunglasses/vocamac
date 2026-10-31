@@ -107,8 +107,8 @@ enum SettingsSearchIndex {
         SettingsSearchEntry(
             id: "numbers-as-digits",
             page: .formatting,
-            title: "Write numbers as digits",
-            subtitle: "“twenty three” becomes “23”",
+            title: "Numbers",
+            subtitle: "Write “twenty three” as “23”, by app or always",
             keywords: ["numbers", "digits", "numerals", "output", "write numbers as digits"]
         ),
         SettingsSearchEntry(

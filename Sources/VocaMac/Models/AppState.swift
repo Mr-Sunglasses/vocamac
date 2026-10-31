@@ -451,12 +451,24 @@ final class AppState: ObservableObject {
     @UserDefault("vocamac.logLevel") var logLevel: String = "info"
     @UserDefault(PreferenceKey.appendTrailingSpace) var appendTrailingSpace: Bool = true
     @UserDefault(PreferenceKey.autoCapitalize) var autoCapitalize: Bool = true
-    /// "twenty three" → "23". Off by default: talking about numbers in prose
-    /// often wants the words.
-    @UserDefault(PreferenceKey.numbersAsDigits) var numbersAsDigits: Bool = false
-    /// "fifty percent" → "50%", "June twenty second" → "June 22". Only applies
-    /// with `numbersAsDigits`; off by default, because "$5" and "21st" are a
-    /// house style, not a transcription.
+    /// "twenty three" → "23" (true) or kept as words (false). Nil, what a
+    /// new install has, writes numbers by style (`NumberWriting.automatic`).
+    /// A stored value is a choice the user made, and stays.
+    @UserDefault(PreferenceKey.numbersAsDigits) var numbersAsDigitsChoice: Bool?
+    /// How dictated numbers are written; see `numbersAsDigitsChoice`.
+    var numberWriting: NumberWriting {
+        get { numbersAsDigitsChoice.map { $0 ? .digits : .words } ?? .automatic }
+        set {
+            switch newValue {
+            case .automatic: numbersAsDigitsChoice = nil
+            case .digits: numbersAsDigitsChoice = true
+            case .words: numbersAsDigitsChoice = false
+            }
+        }
+    }
+    /// "fifty percent" → "50%", "June twenty second" → "June 22". Applies
+    /// whenever numbers are written as digits; off by default, because "$5"
+    /// and "21st" are a house style, not a transcription.
     @UserDefault(PreferenceKey.numberSymbols) var numberSymbols: Bool = false
     /// "crying emoji" → 😭. Off by default, so talking *about* an emoji never
     /// rewrites the sentence until the user opts in.
@@ -808,7 +820,7 @@ final class AppState: ObservableObject {
             cleanupLevel: transcriptCleanupLevel,
             language: RewriteValidation.detectedLanguage(text), autoCapitalize: autoCapitalize,
             trailingSpace: appendTrailingSpace, preview: true,
-            numbersAsDigits: numbersAsDigits, numberSymbols: numberSymbols, spokenEmoji: spokenEmoji,
+            numbers: numberWriting, numberSymbols: numberSymbols, spokenEmoji: spokenEmoji,
             laysOutParagraphs: pauseParagraphs
         )
     }
@@ -3075,7 +3087,7 @@ final class AppState: ObservableObject {
                     language: result.detectedLanguage, autoCapitalize: autoCapitalize,
                     trailingSpace: appendTrailingSpace, preview: !injectResult,
                     dictionary: dictionaryContext(contextTerms: contextTerms, language: result.detectedLanguage),
-                    numbersAsDigits: numbersAsDigits, numberSymbols: numberSymbols, spokenEmoji: spokenEmoji,
+                    numbers: numberWriting, numberSymbols: numberSymbols, spokenEmoji: spokenEmoji,
                     skipWhenClean: skipCleanDictations, laysOutParagraphs: laysOutParagraphs,
                     // Cleaning piece by piece only pays off with answers from
                     // while recording; an endpoint would get one call per piece.
@@ -4501,7 +4513,7 @@ final class AppState: ObservableObject {
             // Like an engine that reports no language: the pipeline judges it.
             language: selectedLanguage == "auto" ? nil : selectedLanguage, autoCapitalize: autoCapitalize,
             trailingSpace: false, preview: true,
-            numbersAsDigits: numbersAsDigits, numberSymbols: numberSymbols, spokenEmoji: spokenEmoji,
+            numbers: numberWriting, numberSymbols: numberSymbols, spokenEmoji: spokenEmoji,
             skipWhenClean: skipCleanDictations, laysOutParagraphs: pauseParagraphs
         )
         return CleanupTryResult(
@@ -4957,7 +4969,7 @@ extension AppState {
                     language: result.detectedLanguage, autoCapitalize: autoCapitalize,
                     trailingSpace: appendTrailingSpace,
                     dictionary: dictionaryContext(contextTerms: [], language: result.detectedLanguage),
-                    numbersAsDigits: numbersAsDigits, numberSymbols: numberSymbols, spokenEmoji: spokenEmoji,
+                    numbers: numberWriting, numberSymbols: numberSymbols, spokenEmoji: spokenEmoji,
                     skipWhenClean: skipCleanDictations, laysOutParagraphs: laysOutParagraphs
                 )
             }
@@ -5966,7 +5978,7 @@ extension AppState {
             autoCapitalize: autoCapitalize, trailingSpace: appendTrailingSpace,
             preview: preview,
             dictionary: dictionaryContext(contextTerms: contextTerms, language: language),
-            numbersAsDigits: numbersAsDigits, numberSymbols: numberSymbols,
+            numbers: numberWriting, numberSymbols: numberSymbols,
             spokenEmoji: spokenEmoji, skipWhenClean: skipCleanDictations
         )
     }

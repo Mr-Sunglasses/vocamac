@@ -7,6 +7,32 @@ struct DictationOutputResult: Equatable {
     let summary: String
 }
 
+/// How dictated number words are written.
+enum NumberWriting: Hashable, Sendable {
+    /// As spoken: "twenty three" stays words.
+    case words
+    /// Every number as digits: "two ideas" becomes "2 ideas".
+    case digits
+    /// Digits where the app expects them (Chat, Slack, Code, Terminal);
+    /// newspaper style in prose, where one to nine stay words unless a unit
+    /// or a numbering word makes them a figure ("two ideas", "5 pm", "23
+    /// chairs"). What a new install gets.
+    case automatic
+
+    /// The conversion for text in `format`.
+    func mode(for format: WritingStyle) -> (digits: Bool, smallNumbersAsWords: Bool) {
+        switch self {
+        case .words: return (false, false)
+        case .digits: return (true, false)
+        case .automatic:
+            switch format {
+            case .chat, .slack, .code, .terminal: return (true, false)
+            case .plain, .email, .notes: return (true, true)
+            }
+        }
+    }
+}
+
 /// Everything one pipeline run needs besides the text.
 struct DictationOutputOptions {
     var profile: WritingProfile
@@ -22,6 +48,8 @@ struct DictationOutputOptions {
     var preview: Bool = false
     var dictionary: DictionaryContext?
     var numbersAsDigits: Bool = false
+    /// Overrides `numbersAsDigits` when set.
+    var numbers: NumberWriting?
     var numberSymbols: Bool = false
     var spokenEmoji: Bool = false
     /// Leave the model out when the rule stages left it nothing to do
@@ -77,6 +105,7 @@ struct DictationOutputPipeline {
         preview: Bool = false,
         dictionary: DictionaryContext? = nil,
         numbersAsDigits: Bool = false,
+        numbers: NumberWriting? = nil,
         numberSymbols: Bool = false,
         spokenEmoji: Bool = false,
         skipWhenClean: Bool = false,
@@ -91,8 +120,8 @@ struct DictationOutputPipeline {
                 rewritingEnabled: rewritingEnabled, model: model, customPrompt: customPrompt,
                 cleanupLevel: cleanupLevel, language: language, autoCapitalize: autoCapitalize,
                 trailingSpace: trailingSpace, preview: preview, dictionary: dictionary,
-                numbersAsDigits: numbersAsDigits, numberSymbols: numberSymbols, spokenEmoji: spokenEmoji,
-                skipWhenClean: skipWhenClean, laysOutParagraphs: laysOutParagraphs
+                numbersAsDigits: numbersAsDigits, numbers: numbers, numberSymbols: numberSymbols,
+                spokenEmoji: spokenEmoji, skipWhenClean: skipWhenClean, laysOutParagraphs: laysOutParagraphs
             ),
             pieces: pieces, speculator: speculator
         )
@@ -491,7 +520,8 @@ struct DictationOutputPipeline {
         // neither drop nor re-spell what was converted.
         let converted = Self.convertSpokenForms(
             snippets.expandMasked(in: input, using: options.snippetList + protectedTerms),
-            emoji: options.spokenEmoji, digits: options.numbersAsDigits,
+            emoji: options.spokenEmoji,
+            numbers: (options.numbers ?? (options.numbersAsDigits ? .digits : .words)).mode(for: profile.format),
             symbols: options.numberSymbols, language: options.language
         )
         return .prepared(PreparedDictation(
@@ -1135,7 +1165,8 @@ struct DictationOutputPipeline {
     ///
     /// - Returns: The converted mask, and the glyph when one ends the text.
     static func convertSpokenForms(
-        _ masked: MaskedText, emoji: Bool, digits: Bool, symbols: Bool = false, language: String?
+        _ masked: MaskedText, emoji: Bool, numbers: (digits: Bool, smallNumbersAsWords: Bool),
+        symbols: Bool = false, language: String?
     ) -> (masked: MaskedText, closingGlyph: String?) {
         var text = masked.text
         var replacements = masked.replacements
@@ -1148,8 +1179,8 @@ struct DictationOutputPipeline {
                 return String(placeholder)
             }
         }
-        if digits {
-            text = SpokenNumbers.digits(in: text, symbols: symbols)
+        if numbers.digits {
+            text = SpokenNumbers.digits(in: text, symbols: symbols, smallNumbersAsWords: numbers.smallNumbersAsWords)
         }
         var closingGlyph: String?
         if let last = text.last(where: { !$0.isWhitespace }),
