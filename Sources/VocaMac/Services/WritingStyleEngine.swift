@@ -317,7 +317,12 @@ enum WritingStyleEngine {
                 }
                 let removedWords = Array(keys[index..<last])
                 let kept = last..<(last + length)
-                let phraseLength = CleanupSalvage.repeatedPhraseLength(removedWords, following: unit, preceding: [])
+                // English knows which repeats are meant; elsewhere only number
+                // words are ("uno dos uno dos" is counting), and a unit that is
+                // a shorter phrase said twice is matched at that length.
+                let phraseLength = minimumLength > 1
+                    ? otherLanguagePhraseLength(unit)
+                    : CleanupSalvage.repeatedPhraseLength(removedWords, following: unit, preceding: [])
                 let isMeant = phraseLength == nil
                     || !kept.allSatisfy({ !tokens[$0].word.contains(where: \.isUppercase) || keys[$0] == "i" || keys[$0].hasPrefix("i'") })
                 if isMeant {
@@ -341,6 +346,31 @@ enum WritingStyleEngine {
         guard !removals.isEmpty else { return (text, 0) }
         return (removeWordRuns(removals, from: text), removals.count)
     }
+
+    /// For a phrase said twice outside English: its length, or nil when it is
+    /// counting or a shorter phrase said twice.
+    private static func otherLanguagePhraseLength(_ unit: [String]) -> Int? {
+        guard !unit.contains(where: otherLanguageNumberWords.contains) else { return nil }
+        for period in 1..<unit.count where unit.count % period == 0 {
+            let piece = Array(unit.prefix(period))
+            if stride(from: period, to: unit.count, by: period).allSatisfy({ Array(unit[$0..<($0 + period)]) == piece }) {
+                return period
+            }
+        }
+        return unit.count
+    }
+
+    /// Number words in the languages VocaMac's rules know, so counting
+    /// ("probando uno dos uno dos") keeps every copy.
+    private static let otherLanguageNumberWords: Set<String> = [
+        "cero", "uno", "una", "dos", "tres", "cuatro", "cinco", "seis", "siete", "ocho", "nueve", "diez",
+        "zéro", "zero", "un", "une", "deux", "trois", "quatre", "cinq", "six", "sept", "huit", "neuf", "dix",
+        "null", "eins", "ein", "eine", "zwei", "drei", "vier", "fünf", "sechs", "sieben", "acht", "neun", "zehn",
+        "um", "uma", "dois", "duas", "três", "quatro", "sete", "oito", "nove", "dez",
+        "due", "tre", "quattro", "sei", "sette", "otto", "dieci",
+        "ek", "do", "teen", "char", "paanch", "chhe", "saat", "aath", "nau", "das",
+        "ноль", "один", "одна", "два", "две", "три", "четыре", "пять", "шесть", "семь", "восемь", "девять", "десять",
+    ]
 
     /// Small words a sentence never says twice in a row.
     private static let neverDoubled: Set<String> = [
@@ -456,7 +486,7 @@ enum WritingStyleEngine {
                 continue
             }
             guard fragment.count >= (fragmentsOnly ? 3 : 2), token.word == fragment, fragment.allSatisfy(\.isLetter),
-                  fragment.contains(where: { "aeiouyàáâãäåèéêëìíîïòóôõöùúûü".contains($0) }),
+                  fragmentsOnly || fragment.contains(where: { "aeiouy".contains($0) }),
                   !standalone.contains(fragment),
                   !".!?…".contains(where: token.trailing.contains), !isKnownWord(fragment) else { continue }
             for distance in 1...2 where index + distance < tokens.count {

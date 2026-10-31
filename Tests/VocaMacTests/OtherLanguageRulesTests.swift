@@ -36,8 +36,18 @@ final class OtherLanguageRulesTests: XCTestCase {
     }
 
     func testCountingAndNumbersStay() {
-        let text = "probando 1 2 1 2"
-        XCTAssertEqual(WritingStyleEngine.removeRepeatedPhrases(text, minimumLength: 2).text, text)
+        for text in ["probando 1 2 1 2", "probando uno dos uno dos", "un deux un deux", "eins zwei eins zwei"] {
+            XCTAssertEqual(WritingStyleEngine.removeRepeatedPhrases(text, minimumLength: 2).text, text, text)
+        }
+    }
+
+    /// English's list of meant repeats ("no no") isn't consulted: Portuguese
+    /// "no" means "in the".
+    func testEnglishMeantRepeatsDontApplyElsewhere() {
+        XCTAssertEqual(
+            WritingStyleEngine.removeRepeatedPhrases("fica no meio no meio de tudo", minimumLength: 2).text,
+            "fica no meio de tudo"
+        )
     }
 
     // MARK: - Cut-off words
@@ -59,6 +69,14 @@ final class OtherLanguageRulesTests: XCTestCase {
             )
             XCTAssertEqual(result.text, text, text)
         }
+    }
+
+    func testAFragmentInAnotherScriptGoes() {
+        let russian: Set<String> = ["пожалуйста", "отправь", "отчёт"]
+        let result = WritingStyleEngine.removeCutOffWords(
+            "пож пожалуйста отправь отчёт", fragmentsOnly: true, isKnownWord: { russian.contains($0) }
+        )
+        XCTAssertEqual(result.text, "пожалуйста отправь отчёт")
     }
 
     func testOnlyTheFragmentRuleRunsOutsideEnglish() {
