@@ -62,6 +62,8 @@ struct LipFrame: Equatable, Sendable {
     var shape: LipShape?
     /// The camera image size in pixels.
     var imageSize: CGSize = CGSize(width: 640, height: 480)
+    /// The mouth patch for lip reading, while the tracker is asked for it.
+    var mouth: MouthPatch?
 
     /// The lips, when they can be read.
     var usableShape: LipShape? {

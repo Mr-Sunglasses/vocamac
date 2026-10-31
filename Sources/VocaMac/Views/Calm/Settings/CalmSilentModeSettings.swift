@@ -14,6 +14,7 @@ struct CalmSilentModeSettings: View {
     @State private var showsRecorder = false
     @State private var teaching: CalmSilentTeachDraft?
     @State private var confirmsDeleteAll = false
+    @State private var importProblem: String?
 
     var body: some View {
         let isOn = appState.isSilentModeOn
@@ -23,6 +24,13 @@ struct CalmSilentModeSettings: View {
 
             CalmSilentPreviewPanel()
                 .settingsTarget("silent-mode-preview")
+
+            CalmPanel {
+                speakingRow
+                    .settingsTarget("silent-mode-reading")
+                lipModelRow
+                    .settingsTarget("silent-mode-lip-model")
+            }
 
             CalmPanel {
                 cameraAccessRow
@@ -95,7 +103,8 @@ struct CalmSilentModeSettings: View {
             )
             HStack(spacing: 8) {
                 CalmTag("Alpha", tone: .label)
-                Text("Whisper or mouth your words while the camera reads your lips. Only what your lips say is typed.")
+                CalmTag("English only", tone: .neutral)
+                Text("Mouth or whisper your words while the camera reads your lips. Only what your lips say is typed.")
                     .calmType(.description)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -103,6 +112,67 @@ struct CalmSilentModeSettings: View {
     }
 
     // MARK: Rows
+
+    private var speakingRow: some View {
+        CalmRow(
+            "How you’ll speak",
+            description: appState.silentModeReadsLips
+                ? "Mouth the words with no sound. The lip-reading model reads them."
+                : "Whisper. The speech model decodes it, and the camera keeps out other voices."
+        ) {
+            CalmSegmentedControl(
+                selection: $appState.silentModeReadsLips,
+                options: [CalmOption(true, "Mouth"), CalmOption(false, "Whisper")],
+                accessibilityLabel: "How you’ll speak"
+            )
+        }
+    }
+
+    @ViewBuilder
+    private var lipModelRow: some View {
+        if appState.isLipReadingModelInstalled {
+            CalmStatusRow(
+                "Lip-reading model",
+                description: "Auto-AVSR, English. Its weights are for research and non-commercial use only.",
+                tone: .success
+            ) {
+                Button("Remove") { try? appState.removeLipReadingModel() }.calmButton(.quietDestructive)
+            }
+        } else {
+            VStack(alignment: .leading, spacing: 0) {
+                CalmStatusRow(
+                    "Lip-reading model",
+                    description: appState.silentModeReadsLips
+                        ? "Not installed, so mouthed words can’t be read yet; Silent Mode decodes a whisper instead. Build it with “make lip-reading-model” in VocaMac’s source folder; it installs itself."
+                        : "Not installed. Needed only for mouthing without sound.",
+                    tone: appState.silentModeReadsLips ? .warning : .neutral
+                ) {
+                    Button("Import…", action: importModel).calmButton(.primary)
+                }
+                if let importProblem {
+                    CalmInlineNotice(importProblem, tone: .warning)
+                        .padding(.horizontal, CalmMetrics.rowInset)
+                        .padding(.bottom, 12)
+                }
+            }
+        }
+    }
+
+    private func importModel() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Import"
+        panel.message = "Choose the folder with LipReader.mlpackage and tokens.json"
+        guard panel.runModal() == .OK, let folder = panel.url else { return }
+        do {
+            try appState.installLipReadingModel(from: folder)
+            importProblem = nil
+        } catch {
+            importProblem = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+    }
 
     @ViewBuilder
     private var cameraAccessRow: some View {
@@ -158,7 +228,7 @@ struct CalmSilentModeSettings: View {
         CalmPanel {
             CalmRow(
                 "What the camera keeps",
-                description: "Nothing. Each frame is reduced to the outline of your lips on this Mac and dropped. No picture is saved, logged or sent anywhere, and the camera is off unless Silent Mode is recording, this page’s preview is on, or you are teaching a command."
+                description: "Nothing. Each frame is reduced to your lips’ outline and, for lip reading, a small grayscale picture of your mouth, held in memory until it is read and then dropped. No picture is saved, logged or sent anywhere, and the camera is off unless Silent Mode is recording, this page’s preview is on, or you are teaching a command."
             )
             CalmRow(
                 "Taught commands",
@@ -203,11 +273,16 @@ struct CalmSilentPreviewPanel: View {
     @EnvironmentObject private var appState: AppState
     @State private var isPreviewing = false
 
+    private var showsCrop: Bool { appState.silentModeReadsLips && appState.isLipReadingModelInstalled }
+
     var body: some View {
         HStack(alignment: .center, spacing: 20) {
             SilentFaceTile(live: appState.silentMode.live, cornerRadius: 12)
                 .frame(width: 240, height: 180)
                 .environment(\.colorScheme, .dark)
+            if showsCrop {
+                CalmSilentCropPreview(live: appState.silentMode.live)
+            }
             CalmSilentPreviewStatus(live: appState.silentMode.live, isPreviewing: isPreviewing) {
                 toggle()
             }
@@ -224,6 +299,7 @@ struct CalmSilentPreviewPanel: View {
         } else {
             isPreviewing = true
             appState.syncSilentModeSettings()
+            appState.silentMode.setPreviewShowsCrops(showsCrop)
             Task { await appState.silentMode.begin(.preview) }
         }
     }
@@ -232,6 +308,32 @@ struct CalmSilentPreviewPanel: View {
         guard isPreviewing else { return }
         isPreviewing = false
         appState.silentMode.end(.preview)
+    }
+}
+
+/// What the lip reader is given: the 88×88 mouth crop, enlarged. A mouth
+/// centred and level here reads best.
+private struct CalmSilentCropPreview: View {
+    @ObservedObject var live: SilentLiveState
+
+    var body: some View {
+        VStack(spacing: 6) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 10, style: .continuous).fill(SilentPalette.tile)
+                if let crop = live.mouthCrop {
+                    Image(decorative: crop, scale: 1)
+                        .resizable()
+                        .interpolation(.medium)
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                }
+            }
+            .frame(width: 120, height: 120)
+            Text("What the lip reader sees")
+                .font(CalmFont.note)
+                .foregroundStyle(CalmColor.muted)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("The mouth picture the lip reader reads")
     }
 }
 

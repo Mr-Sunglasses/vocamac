@@ -41,6 +41,9 @@ enum CameraLipTrackerError: LocalizedError, Equatable {
 protocol CameraLipTracking: AnyObject, Sendable {
     /// Called on the tracker's own queue for every processed frame.
     func setFrameHandler(_ handler: (@Sendable (LipFrame) -> Void)?)
+    /// Also cut the mouth patch lip reading needs (`LipFrame.mouth`). Off,
+    /// frames carry only the lip outline.
+    func setCapturesMouth(_ captures: Bool)
     /// Start the camera (the chosen one, else the built-in one). Returns once
     /// frames are on their way.
     func start(cameraID: String?) async throws
@@ -61,6 +64,7 @@ protocol CameraLipTracking: AnyObject, Sendable {
 /// Stands in where there is no camera to use: tests and headless runs.
 final class UnavailableLipTracker: CameraLipTracking {
     func setFrameHandler(_ handler: (@Sendable (LipFrame) -> Void)?) {}
+    func setCapturesMouth(_ captures: Bool) {}
     func start(cameraID: String?) async throws { throw CameraLipTrackerError.noCamera }
     func stop() {}
     @MainActor func makePreviewLayer() -> CALayer? { nil }
@@ -88,6 +92,7 @@ final class VisionLipTracker: NSObject, CameraLipTracking, AVCaptureVideoDataOut
     // Guarded by `lock`.
     private var handler: (@Sendable (LipFrame) -> Void)?
     private var runningSession: AVCaptureSession?
+    private var capturesMouth = false
 
     // `sessionQueue` only.
     private var session: AVCaptureSession?
@@ -108,6 +113,10 @@ final class VisionLipTracker: NSObject, CameraLipTracking, AVCaptureVideoDataOut
 
     func setFrameHandler(_ handler: (@Sendable (LipFrame) -> Void)?) {
         lock.withLock { self.handler = handler }
+    }
+
+    func setCapturesMouth(_ captures: Bool) {
+        lock.withLock { capturesMouth = captures }
     }
 
     func authorizationStatus() -> PermissionStatus {
@@ -198,6 +207,8 @@ final class VisionLipTracker: NSObject, CameraLipTracking, AVCaptureVideoDataOut
         session.addInput(input)
         let output = AVCaptureVideoDataOutput()
         output.alwaysDiscardsLateVideoFrames = true
+        // Full-range luma is the grayscale picture lip reading trained on.
+        output.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarFullRange]
         output.setSampleBufferDelegate(self, queue: videoQueue)
         guard session.canAddOutput(output) else {
             session.commitConfiguration()
@@ -257,8 +268,53 @@ final class VisionLipTracker: NSObject, CameraLipTracking, AVCaptureVideoDataOut
         }
         let face = (request.results ?? []).max { $0.boundingBox.width < $1.boundingBox.width }
         let shape = face.flatMap(Self.lipShape)
-        let frame = LipFrame(time: now, shape: shape, imageSize: size)
+        var frame = LipFrame(time: now, shape: shape, imageSize: size)
+        if lock.withLock({ capturesMouth }), shape?.isUsable == true, let face,
+           let keypoints = Self.keypoints(face, imageSize: size) {
+            frame.mouth = Self.mouthPatch(pixelBuffer, keypoints: keypoints)
+        }
         lock.withLock { handler }?(frame)
+    }
+
+    // MARK: Lip-reading patch
+
+    /// Eyes, nose base and mouth centre in image pixels (top-left origin).
+    private static func keypoints(_ face: VNFaceObservation, imageSize: CGSize) -> MouthKeypoints? {
+        guard let landmarks = face.landmarks,
+              let leftEye = landmarks.leftEye?.normalizedPoints, !leftEye.isEmpty,
+              let rightEye = landmarks.rightEye?.normalizedPoints, !rightEye.isEmpty,
+              let nose = landmarks.nose?.normalizedPoints, nose.count >= 3,
+              let outer = landmarks.outerLips?.normalizedPoints, let inner = landmarks.innerLips?.normalizedPoints else { return nil }
+        let box = face.boundingBox
+        func image(_ point: CGPoint) -> CGPoint {
+            CGPoint(
+                x: (box.minX + point.x * box.width) * imageSize.width,
+                y: (1 - (box.minY + point.y * box.height)) * imageSize.height
+            )
+        }
+        let eyes = [LipGeometry.centroid(leftEye.map(image)), LipGeometry.centroid(rightEye.map(image))]
+            .sorted { $0.x < $1.x }
+        // The nose base: the three lowest nose points (dlib's 31–35 are the nostrils).
+        let noseBase = LipGeometry.centroid(Array(nose.map(image).sorted { $0.y > $1.y }.prefix(3)))
+        let mouth = LipGeometry.centroid((outer + inner).map(image))
+        return MouthKeypoints(rightEye: eyes[0], leftEye: eyes[1], nose: noseBase, mouth: mouth)
+    }
+
+    /// The mean-face patch around the mouth, cut from the frame's luma.
+    private static func mouthPatch(_ pixelBuffer: CVPixelBuffer, keypoints: MouthKeypoints) -> MouthPatch? {
+        guard let transform = SimilarityTransform.estimate(from: keypoints.points, to: MouthCropGeometry.reference),
+              CVPixelBufferGetPlaneCount(pixelBuffer) >= 1 else { return nil }
+        CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
+        guard let base = CVPixelBufferGetBaseAddressOfPlane(pixelBuffer, 0) else { return nil }
+        let width = CVPixelBufferGetWidthOfPlane(pixelBuffer, 0)
+        let height = CVPixelBufferGetHeightOfPlane(pixelBuffer, 0)
+        let rowBytes = CVPixelBufferGetBytesPerRowOfPlane(pixelBuffer, 0)
+        let luma = UnsafeBufferPointer(start: base.assumingMemoryBound(to: UInt8.self), count: rowBytes * height)
+        guard let pixels = MouthCropGeometry.patch(
+            from: luma, width: width, height: height, rowBytes: rowBytes, toReference: transform
+        ) else { return nil }
+        return MouthPatch(keypoints: keypoints, transform: transform, pixels: pixels)
     }
 
     private static func lipShape(_ face: VNFaceObservation) -> LipShape? {

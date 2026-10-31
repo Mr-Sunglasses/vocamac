@@ -381,6 +381,20 @@ enum SettingsSearchIndex {
             keywords: ["silent", "dictation key", "always", "default", "hotkey"]
         ),
         SettingsSearchEntry(
+            id: "silent-mode-reading",
+            page: .silentMode,
+            title: "How you'll speak in Silent Mode",
+            subtitle: "Mouth the words, or whisper them",
+            keywords: ["silent", "mouth", "whisper", "lip reading", "english"]
+        ),
+        SettingsSearchEntry(
+            id: "silent-mode-lip-model",
+            page: .silentMode,
+            title: "Lip-reading model",
+            subtitle: "Reads mouthed English words",
+            keywords: ["silent", "lip reading", "model", "import", "auto-avsr", "english", "mouth"]
+        ),
+        SettingsSearchEntry(
             id: "silent-mode-commands",
             page: .silentMode,
             title: "Silent commands",

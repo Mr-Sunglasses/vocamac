@@ -73,6 +73,7 @@ enum SettingsArchiveService {
         PreferenceKey.writingRewriteEnabled: .bool, PreferenceKey.writingStyleEnabled: .bool,
         PreferenceKey.automaticWritingStyles: .bool,
         PreferenceKey.silentModeUsesDictationKey: .bool, PreferenceKey.silentModeShowsVideo: .bool,
+        PreferenceKey.silentModeReadsLips: .bool,
         // Whole numbers
         "vocamac.hotKeyCode": .integer, "vocamac.hotKeyModifiers": .integer,
         "vocamac.maxRecordingDuration": .integer, "vocamac.selectedAudioChannel": .integer,

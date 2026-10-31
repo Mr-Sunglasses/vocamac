@@ -7,6 +7,7 @@
 // `live` (what the overlay and Settings draw) up to date.
 
 import Combine
+import CoreGraphics
 import Foundation
 import QuartzCore
 
@@ -25,6 +26,8 @@ final class SilentLiveState: ObservableObject {
     @Published var showsVideo = false
     /// A recognised command's chip, shown for a moment before it runs.
     @Published var recognizedCommand: String?
+    /// The latest crop the lip reader would read, for the Settings preview.
+    @Published var mouthCrop: CGImage?
 
     /// A layer with the camera picture, while the camera runs.
     var makePreviewLayer: (@MainActor () -> CALayer?)?
@@ -73,6 +76,12 @@ final class SilentModeController: ObservableObject {
     private var meter = ArticulationMeter()
     private var dictationFrames: [LipFrame]?
     private var takeFrames: [LipFrame]?
+    /// Lip-reading crops for the recording, when it reads lips.
+    private var dictationCrops: [MouthCrop]?
+    private var cropBuilder = MouthCropBuilder()
+    /// The Settings preview shows what the lip reader sees.
+    private var previewShowsCrops = false
+    private var cropsSinceShown = 0
     /// Bumped on every start and stop, so a start that finishes after a
     /// stop doesn't mark the camera as running.
     private var cameraGeneration = 0
@@ -151,20 +160,38 @@ final class SilentModeController: ObservableObject {
 
     /// `client` is done with the camera; the last one turns it off.
     func end(_ client: Client) {
+        if client == .preview { previewShowsCrops = false }
+        syncMouthCapture()
         guard clients.remove(client) != nil, clients.isEmpty else { return }
         cameraGeneration += 1
         camera.stop()
         live.phase = .off
         live.level = 0
         live.outline = nil
+        live.mouthCrop = nil
+    }
+
+    /// Show the lip reader's crop in the Settings preview.
+    func setPreviewShowsCrops(_ shows: Bool) {
+        previewShowsCrops = shows
+        if !shows { live.mouthCrop = nil }
+        syncMouthCapture()
+    }
+
+    /// The tracker cuts mouth patches only while someone wants crops.
+    private func syncMouthCapture() {
+        camera.setCapturesMouth(dictationCrops != nil || previewShowsCrops)
     }
 
     // MARK: Dictation
 
-    /// Start keeping frames for a recording. The camera starts alongside;
-    /// the recording doesn't wait for it.
-    func beginDictation() {
+    /// Start keeping frames for a recording, and lip-reading crops when
+    /// `readsLips`. The camera starts alongside; the recording doesn't wait.
+    func beginDictation(readsLips: Bool = false) {
         dictationFrames = []
+        dictationCrops = readsLips ? [] : nil
+        cropBuilder = MouthCropBuilder()
+        syncMouthCapture()
         lastSpeaking = nil
         stillNotified = false
         live.recognizedCommand = nil
@@ -178,10 +205,20 @@ final class SilentModeController: ObservableObject {
 
     /// The frames kept since `beginDictation`, with the camera off for the recording.
     func finishDictation() -> [LipFrame] {
+        finishDictationCapture().frames
+    }
+
+    /// The frames and lip-reading crops kept since `beginDictation`, with
+    /// the camera off for the recording.
+    func finishDictationCapture() -> (frames: [LipFrame], crops: [MouthCrop]) {
         let frames = dictationFrames ?? []
+        var crops = dictationCrops ?? []
+        if dictationCrops != nil { crops += cropBuilder.finish() }
         dictationFrames = nil
+        dictationCrops = nil
+        cropBuilder = MouthCropBuilder()
         end(.dictation)
-        return frames
+        return (frames, crops)
     }
 
     var isDictating: Bool { dictationFrames != nil }
@@ -205,8 +242,23 @@ final class SilentModeController: ObservableObject {
     /// One frame from the camera. Internal so tests can feed frames.
     func ingest(_ frame: LipFrame) {
         guard !clients.isEmpty else { return }
-        dictationFrames?.append(frame)
-        takeFrames?.append(frame)
+        // Frames are kept without their patch: only the crops need it.
+        var outline = frame
+        outline.mouth = nil
+        dictationFrames?.append(outline)
+        takeFrames?.append(outline)
+        if let patch = frame.mouth, dictationCrops != nil || previewShowsCrops {
+            let crops = cropBuilder.ingest(time: frame.time, patch: patch)
+            if dictationCrops != nil { dictationCrops?.append(contentsOf: crops) }
+            if previewShowsCrops, let latest = crops.last {
+                cropsSinceShown += 1
+                // A few times a second is enough to check framing.
+                if cropsSinceShown >= 3 {
+                    cropsSinceShown = 0
+                    live.mouthCrop = Self.image(latest)
+                }
+            }
+        }
         meter.ingest(frame)
 
         let phase: SilentTrackingPhase
@@ -241,5 +293,17 @@ final class SilentModeController: ObservableObject {
         guard let lastSpeaking, !stillNotified, time - lastSpeaking >= stillTimeout else { return }
         stillNotified = true
         onLipsStill?()
+    }
+
+    /// A crop as a grayscale image.
+    static func image(_ crop: MouthCrop) -> CGImage? {
+        let size = MouthCropGeometry.cropSize
+        guard crop.pixels.count == size * size,
+              let provider = CGDataProvider(data: Data(crop.pixels) as CFData) else { return nil }
+        return CGImage(
+            width: size, height: size, bitsPerComponent: 8, bitsPerPixel: 8, bytesPerRow: size,
+            space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.none.rawValue),
+            provider: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent
+        )
     }
 }

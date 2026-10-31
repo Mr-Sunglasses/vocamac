@@ -41,6 +41,18 @@ This is **not a bug in VocaMac** and there is nothing wrong with your install. T
 After one successful check, VocaMac caches the response's `ETag` and sends it as `If-None-Match` on every subsequent request. GitHub then replies with `304 Not Modified`, which **does not count against the rate limit**, so future checks succeed even from a rate-limited IP — until a new release ships and the ETag changes (at which point one fresh `200` response per machine is needed before `304`s resume).
 
 
+## Silent Mode doesn't understand mouthed words
+
+Mouthing with no sound needs the lip-reading model, which isn't bundled (its weights are for research and non-commercial use). Build it once on your Mac:
+
+```bash
+make lip-reading-model   # needs uv; about 10 minutes and 3 GB of downloads
+```
+
+It installs itself into `~/Library/Application Support/VocaMac/models/lip-reading/`. **Settings › Silent Mode** then shows the model as installed and "How you'll speak" set to **Mouth**. The first silent dictation after that loads the model for a few seconds.
+
+Lip reading is English only and works best with your face square to the camera, lit from the front, at 25–30 frames a second. Turn on **Start preview**: "What the lip reader sees" should show your mouth centred and level. Expect about one word in three to be wrong (greedy decoding on English TED talks gives 33.5% WER); Smart Cleanup tidies many of these.
+
 ## Silent Mode doesn't type anything
 
 Silent Mode decodes only the stretches where the camera saw your lips move. If it says it "didn't see your lips move":

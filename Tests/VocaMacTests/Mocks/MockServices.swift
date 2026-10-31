@@ -462,6 +462,8 @@ final class MockLipTracker: CameraLipTracking, @unchecked Sendable {
     private(set) var handler: (@Sendable (LipFrame) -> Void)?
 
     func setFrameHandler(_ handler: (@Sendable (LipFrame) -> Void)?) { self.handler = handler }
+    private(set) var capturesMouth = false
+    func setCapturesMouth(_ captures: Bool) { capturesMouth = captures }
 
     func start(cameraID: String?) async throws {
         startCount += 1
@@ -474,6 +476,27 @@ final class MockLipTracker: CameraLipTracking, @unchecked Sendable {
     func authorizationStatus() -> PermissionStatus { status }
     func requestAccess() async -> Bool { status == .granted }
     func availableCameras() -> [CameraDevice] { [CameraDevice(id: "built-in", name: "FaceTime HD Camera")] }
+}
+
+/// A lip reader that answers with fixed text. `@unchecked Sendable`:
+/// tests use it from the main actor only.
+final class MockLipReader: LipReading, @unchecked Sendable {
+    var isInstalled = false
+    var text = "hello how are you"
+    var error: Error?
+    private(set) var readLengths: [Int] = []
+    private(set) var prepareCount = 0
+    private(set) var unloadCount = 0
+
+    func prepare() async { prepareCount += 1 }
+
+    func read(_ crops: [MouthCrop]) async throws -> String {
+        readLengths.append(crops.count)
+        if let error { throw error }
+        return text
+    }
+
+    func unload() { unloadCount += 1 }
 }
 
 final class MockKeyPresser: KeyPressPosting {
@@ -1098,7 +1121,7 @@ extension AppState {
             PreferenceKey.externalMicWhenLidClosed, "vocamac.scratchpad.text",
             PreferenceKey.silentModeShortcut, PreferenceKey.silentModeSensitivity,
             PreferenceKey.silentModeUsesDictationKey, PreferenceKey.silentModeShowsVideo,
-            PreferenceKey.silentModeCameraID,
+            PreferenceKey.silentModeCameraID, PreferenceKey.silentModeReadsLips,
         ] {
             UserDefaults.standard.removeObject(forKey: key)
         }
@@ -1116,6 +1139,7 @@ extension AppState {
         let cleanup = transcriptCleanup ?? MockTranscriptCleanup()
         let lipTracker = MockLipTracker()
         let keyPresser = MockKeyPresser()
+        let lipReader = MockLipReader()
 
         let mocks = TestMocks(
             audioEngine: audioEngine,
@@ -1132,7 +1156,8 @@ extension AppState {
             frontmostAppResolver: frontmostAppResolver,
             transcriptCleanup: cleanup,
             lipTracker: lipTracker,
-            keyPresser: keyPresser
+            keyPresser: keyPresser,
+            lipReader: lipReader
         )
         let appState = AppState(
             audioEngine: audioEngine,
@@ -1159,6 +1184,7 @@ extension AppState {
             crashReportFinder: crashReportFinder,
             silentCamera: lipTracker,
             keyPresser: keyPresser,
+            lipReader: lipReader,
             skipSystemIntegration: true
         )
         // Spell checking depends on the machine's dictionaries; tests use a
@@ -1192,6 +1218,7 @@ struct TestMocks {
     let transcriptCleanup: MockTranscriptCleanup
     let lipTracker: MockLipTracker
     let keyPresser: MockKeyPresser
+    let lipReader: MockLipReader
 }
 
 // MARK: - Test Words

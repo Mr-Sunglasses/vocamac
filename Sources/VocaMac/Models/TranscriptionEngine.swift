@@ -65,6 +65,9 @@ enum PreferenceKey {
     static let silentModeShowsVideo = "vocamac.silentMode.showsVideo"
     /// `AVCaptureDevice.uniqueID` of the chosen camera, or empty for the built-in one.
     static let silentModeCameraID = "vocamac.silentMode.cameraID"
+    /// Bool: Silent Mode reads mouthed words with the lip-reading model
+    /// (true) or decodes a whisper with the speech model (false).
+    static let silentModeReadsLips = "vocamac.silentMode.readsLips"
     static let commandModeEngine = "vocamac.commandMode.engine"
     static let commandModeClipboardFallback = "vocamac.commandMode.clipboardFallback"
     static let aiModelsKeptSeparate = "vocamac.aiModels.keepSeparate"

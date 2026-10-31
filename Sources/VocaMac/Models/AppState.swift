@@ -527,6 +527,9 @@ final class AppState: ObservableObject {
     @UserDefault(PreferenceKey.silentModeShowsVideo) var silentModeShowsVideo: Bool = false
     /// The camera Silent Mode uses; empty for the built-in one.
     @UserDefault(PreferenceKey.silentModeCameraID) var silentModeCameraID: String = ""
+    /// Mouthed words are read by the lip-reading model; off, a whisper is
+    /// decoded by the speech model with the camera choosing what to decode.
+    @UserDefault(PreferenceKey.silentModeReadsLips) var silentModeReadsLips: Bool = true
     /// `CommandModeEngine.storageValue`, or empty to pick automatically.
     @UserDefault(PreferenceKey.commandModeEngine) var commandModeEngineStorage: String = ""
     /// Set when the user chose separate models for Smart Cleanup and Command
@@ -974,6 +977,12 @@ final class AppState: ObservableObject {
     let silentMode: SilentModeController
     /// Presses keys for mouthed commands.
     let keyPresser: KeyPressPosting
+    /// Reads mouthed English from the camera (Silent Mode).
+    let lipReader: any LipReading
+    /// The silent recording under way keeps crops for the lip reader.
+    var silentSessionReadsLips = false
+    /// Frees the lip-reading model after a while unused.
+    var lipReaderIdleUnload: Task<Void, Never>?
     let silentCommandStore: SilentCommandStore
     /// Commands taught on the Silent Mode page.
     @Published var silentCommands: [SilentCommand] = [] {
@@ -1245,6 +1254,7 @@ final class AppState: ObservableObject {
         crashReportFinder: CrashReportFinder? = nil,
         silentCamera: (any CameraLipTracking)? = nil,
         keyPresser: (any KeyPressPosting)? = nil,
+        lipReader: (any LipReading)? = nil,
         silentCommandStore: SilentCommandStore? = nil,
         skipSystemIntegration: Bool = false
     ) {
@@ -1286,6 +1296,7 @@ final class AppState: ObservableObject {
             camera: silentCamera ?? (skipSystemIntegration ? UnavailableLipTracker() : VisionLipTracker())
         )
         self.keyPresser = keyPresser ?? SystemKeyPresser()
+        self.lipReader = lipReader ?? (skipSystemIntegration ? UnavailableLipReader() : CoreMLLipReader())
         self.silentCommandStore = silentCommandStore
             ?? SilentCommandStore(fileURL: skipSystemIntegration ? nil : SilentCommandStore.defaultFileURL)
         self.isKnownWord = { word, language in
@@ -2973,7 +2984,9 @@ final class AppState: ObservableObject {
         isStoppingAudio = false
         guard generation == recordingGeneration else { return }
         // Taken now: the camera turns off with the microphone, before the decode.
-        let silentFrames: [LipFrame]? = isSilentSession ? silentMode.finishDictation() : nil
+        let silentCapture = isSilentSession ? silentMode.finishDictationCapture() : nil
+        let silentFrames = silentCapture?.frames
+        let readsLips = silentSessionReadsLips
         let session = recordingTranscription
         recordingTranscription = nil
         finishingTranscription = session
@@ -3030,8 +3043,10 @@ final class AppState: ObservableObject {
         // Silent Mode: decode only where the lips moved, run a mouthed
         // command, or, if the lips never moved, type nothing.
         var speechRanges: [Range<Int>]?
+        var lipReading: (crops: [MouthCrop], speaking: [ClosedRange<TimeInterval>])?
         if let silentFrames {
-            switch silentOutcome(frames: silentFrames, audioEnd: stopRequested, sampleCount: audioData.count) {
+            let decision = silentDecision(frames: silentFrames, audioEnd: stopRequested, sampleCount: audioData.count)
+            switch decision.outcome {
             case .command(let command):
                 resetCommandModeState()
                 liveTranscript = ""
@@ -3040,6 +3055,9 @@ final class AppState: ObservableObject {
                 return
             case .decode(let ranges):
                 speechRanges = ranges
+                if readsLips, let crops = silentCapture?.crops, !crops.isEmpty {
+                    lipReading = (crops, decision.speaking)
+                }
             case .nothingSaid:
                 resetCommandModeState()
                 liveTranscript = ""
@@ -3085,14 +3103,16 @@ final class AppState: ObservableObject {
             let captured = await documentURLRead.value
             return await self?.revalidatedDocumentURL(captured)
         }
-        let language = selectedLanguage == "auto" ? nil : selectedLanguage
+        // Silent Mode is English only for now: the lip reader knows no other
+        // language, and a whisper is decoded as English too.
+        let language = silentFrames != nil ? "en" : (selectedLanguage == "auto" ? nil : selectedLanguage)
         let selectedEngine = ModelSize(rawValue: selectedModelSize)?.engine
         // sherpa-onnx models take no screen terms (only Qwen3-ASR reads the
         // user's own words), so its batch decode starts now instead of after
         // the History write and the screen read.
         let earlyDecode: Task<VocaTranscription, Error>?
         let decodesWholeRecording = session == nil || session?.language != language || speechRanges != nil
-        if selectedEngine == .sherpaOnnx, decodesWholeRecording {
+        if selectedEngine == .sherpaOnnx, decodesWholeRecording, lipReading == nil {
             let vocabulary = Self.recognitionVocabulary(
                 customVocabulary, replacementTargets: replacementTargets, contextTerms: []
             )
@@ -3139,7 +3159,20 @@ final class AppState: ObservableObject {
             let pieceVocabularyMatches = liveVocabulary?.servedOnly(recognitionVocabulary) ?? false
             let contextNeedsWhisperBatch = selectedEngine == .whisperKit
                 && ((!contextTerms.isEmpty && !pieceVocabularyMatches) || translatesSpeech)
-            if let session, session.language == language, !contextNeedsWhisperBatch, speechRanges == nil {
+            let lipText: String?
+            if let lipReading {
+                lipText = await readLips(lipReading.crops, speaking: lipReading.speaking)
+            } else {
+                lipText = nil
+            }
+            if let lipText, !lipText.isEmpty {
+                session?.cancel()
+                result = VocaTranscription(
+                    text: lipText, duration: 0, detectedLanguage: "en",
+                    audioLengthSeconds: Double(audioData.count) / 16_000,
+                    modelUsed: ModelSize(rawValue: selectedModelSize) ?? .tiny
+                )
+            } else if let session, session.language == language, !contextNeedsWhisperBatch, speechRanges == nil {
                 do {
                     result = try await session.finish(expectedSampleCount: audioData.count)
                 } catch RecordingTranscription.StreamError.timedOut {

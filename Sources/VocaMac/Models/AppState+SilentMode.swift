@@ -20,6 +20,12 @@ enum SilentOutcome: Equatable {
     case asUsual
 }
 
+/// A silent recording's outcome, and where the lips moved (for lip reading).
+struct SilentDecision: Equatable {
+    var outcome: SilentOutcome
+    var speaking: [ClosedRange<TimeInterval>]
+}
+
 extension AppState {
 
     static let silentNothingSaidMessage = "Silent Mode didn't see your lips move, so nothing was typed. Face the camera, or raise Sensitivity in Settings › Silent Mode."
@@ -134,17 +140,25 @@ extension AppState {
         guard requested || viaDictationKey, commandModeSession == nil else { return }
         syncSilentModeSettings()
         silentSessionStartedByShortcut = requested
+        silentSessionReadsLips = silentModeReadsLips && lipReader.isInstalled
         isSilentSession = true
-        silentMode.beginDictation()
-        VocaLogger.info(.silentMode, "Silent Mode recording started (\(requested ? "shortcut" : "dictation key"))")
+        silentMode.beginDictation(readsLips: silentSessionReadsLips)
+        if silentSessionReadsLips {
+            // Load while the user speaks; the first load takes seconds.
+            lipReaderIdleUnload?.cancel()
+            let reader = lipReader
+            Task.detached(priority: .userInitiated) { await reader.prepare() }
+        }
+        VocaLogger.info(.silentMode, "Silent Mode recording started (\(requested ? "shortcut" : "dictation key"), \(silentSessionReadsLips ? "reading lips" : "decoding a whisper"))")
     }
 
     /// Every way a recording ends comes through here (from `isRecording`):
     /// the camera goes off with the microphone.
     func endSilentSession() {
         guard isSilentSession else { return }
-        if silentMode.isDictating { _ = silentMode.finishDictation() }
+        if silentMode.isDictating { _ = silentMode.finishDictationCapture() }
         isSilentSession = false
+        silentSessionReadsLips = false
         silentSessionStartedByShortcut = false
         cursorOverlay.setSilentSession(nil)
     }
@@ -164,7 +178,7 @@ extension AppState {
     // MARK: Outcome
 
     /// Decide what a silent recording becomes, from its lip frames.
-    func silentOutcome(frames: [LipFrame], audioEnd: TimeInterval, sampleCount: Int) -> SilentOutcome {
+    func silentDecision(frames: [LipFrame], audioEnd: TimeInterval, sampleCount: Int) -> SilentDecision {
         let sensitivity = ArticulationSensitivity.clamped(silentModeSensitivity)
         let timeline = ArticulationDetector.timeline(for: frames, sensitivity: sensitivity)
         VocaLogger.info(.silentMode, String(
@@ -172,22 +186,87 @@ extension AppState {
             frames.count, timeline.coveredSeconds, timeline.active.count, timeline.floor, timeline.threshold, timeline.peak
         ))
 
+        func decision(_ outcome: SilentOutcome) -> SilentDecision {
+            SilentDecision(outcome: outcome, speaking: timeline.speaking)
+        }
         if let burst = SilentSpeechGate.commandFrames(frames, timeline: timeline),
            let command = matchSilentCommand(LipSequence.features(burst)) {
-            return .command(command)
+            return decision(.command(command))
         }
 
         switch SilentSpeechGate.decide(timeline: timeline, audioEnd: audioEnd, sampleCount: sampleCount) {
         case .speech(let ranges):
             let kept = ranges.reduce(0) { $0 + $1.count }
             VocaLogger.info(.silentMode, "Decoding \(kept) of \(sampleCount) samples, where the lips moved or the camera couldn't see")
-            return .decode(ranges)
+            return decision(.decode(ranges))
         case .noArticulation:
             VocaLogger.info(.silentMode, "No lip movement in a recording the camera watched; nothing decoded")
-            return .nothingSaid
+            return decision(.nothingSaid)
         case .notJudged(let reason):
             VocaLogger.info(.silentMode, "Decoding as usual: \(reason)")
-            return .asUsual
+            return decision(.asUsual)
+        }
+    }
+
+    // MARK: Lip reading
+
+    var isLipReadingModelInstalled: Bool { lipReader.isInstalled }
+
+    /// Copy a converted model folder into place.
+    func installLipReadingModel(from folder: URL) throws {
+        guard let reader = lipReader as? CoreMLLipReader else { throw LipReadingError.notInstalled }
+        try reader.install(from: folder)
+        objectWillChange.send()
+        VocaLogger.info(.silentMode, "Lip-reading model installed from \(folder.lastPathComponent)")
+    }
+
+    func removeLipReadingModel() throws {
+        try (lipReader as? CoreMLLipReader)?.remove()
+        objectWillChange.send()
+    }
+
+    /// How long the lip-reading model stays loaded after its last read.
+    static let lipReaderIdleSeconds: UInt64 = 600
+
+    /// The words the lips said in `crops`, read stretch by stretch; nil when
+    /// the model couldn't run, empty when it read nothing.
+    func readLips(_ crops: [MouthCrop], speaking: [ClosedRange<TimeInterval>]) async -> String? {
+        guard let first = crops.first?.time, let last = crops.last?.time, first < last else { return nil }
+        let available = first...last
+        let started = ProcessInfo.processInfo.systemUptime
+        var texts: [String] = []
+        var frames = 0
+        for chunk in LipReadingWindow.chunks(speaking) {
+            let lower = max(chunk.lowerBound, available.lowerBound), upper = min(chunk.upperBound, available.upperBound)
+            guard lower < upper else { continue }
+            let window = LipReadingWindow.crops(
+                at: LipReadingWindow.frameTimes(for: lower...upper, available: available), from: crops
+            )
+            frames += window.count
+            do {
+                let text = try await lipReader.read(window)
+                if !text.isEmpty { texts.append(text) }
+            } catch {
+                VocaLogger.error(.silentMode, "Lip reading failed: \(error.localizedDescription)")
+                return nil
+            }
+        }
+        VocaLogger.info(.silentMode, String(
+            format: "Read %d frames of lips in %.2fs: %d words",
+            frames, ProcessInfo.processInfo.systemUptime - started, texts.joined(separator: " ").split(separator: " ").count
+        ))
+        scheduleLipReaderUnload()
+        return texts.joined(separator: " ")
+    }
+
+    /// Free the lip-reading model once Silent Mode has been idle a while.
+    func scheduleLipReaderUnload() {
+        lipReaderIdleUnload?.cancel()
+        let reader = lipReader
+        lipReaderIdleUnload = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: Self.lipReaderIdleSeconds * 1_000_000_000)
+            guard !Task.isCancelled, self?.isSilentSession == false else { return }
+            reader.unload()
         }
     }
 
