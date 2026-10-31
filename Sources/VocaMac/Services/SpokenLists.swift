@@ -85,16 +85,24 @@ enum SpokenLists {
         guard number >= 1, number <= ordinals.count else { return nil }
         let lowered = sentence.lowercased()
         if family != .cardinal {
-            for word in [ordinals[number - 1], adverbs[number - 1]] where opens(lowered, with: word, needsMark: false) {
-                // "First of all," is one marker.
-                if number == 1, opens(lowered, with: word + " of all", needsMark: false) {
-                    return (.ordinal, word.count + 7)
-                }
-                return (.ordinal, word.count)
+            // "Firstly" is only ever a marker. "First" and "second" also
+            // start ordinary sentences ("First impressions matter. Second
+            // chances are rare."), so they need a comma or colon, as does
+            // "first of all".
+            let ordinal = ordinals[number - 1]
+            if number == 1, opens(lowered, with: ordinal + " of all", needsMark: true) {
+                return (.ordinal, ordinal.count + 7)
+            }
+            if opens(lowered, with: ordinal, needsMark: true)
+                || opens(lowered, with: adverbs[number - 1], needsMark: false) {
+                return (.ordinal, ordinal.count)
             }
         }
-        // "One, …": a bare number word only counts with a comma or colon.
-        if family != .ordinal, opens(lowered, with: cardinals[number - 1], needsMark: true) {
+        // "One, …" or, with numbers written as digits, "1, …": a bare
+        // number only counts with a comma or colon.
+        if family != .ordinal,
+           opens(lowered, with: cardinals[number - 1], needsMark: true)
+            || opens(lowered, with: String(number), needsMark: true) {
             return (.cardinal, cardinals[number - 1].count)
         }
         return nil
@@ -119,7 +127,9 @@ enum SpokenLists {
     /// letter capitalized when the marker was.
     private static func strippingMarker(_ item: String) -> String? {
         let lowered = item.lowercased()
-        let candidates = (["and finally", "and lastly", "finally", "lastly", "first of all"] + ordinals + adverbs + cardinals)
+        let digits = (1...cardinals.count).map(String.init)
+        let candidates = (["and finally", "and lastly", "finally", "lastly", "first of all"] + ordinals + adverbs
+            + cardinals + digits)
             .sorted { $0.count > $1.count }
         guard let word = candidates.first(where: { lowered.hasPrefix($0) && opens(lowered, with: $0, needsMark: false) }) else {
             return nil

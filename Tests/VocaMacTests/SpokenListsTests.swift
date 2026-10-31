@@ -49,6 +49,23 @@ final class SpokenListsTests: XCTestCase {
 
     // MARK: - Look-alikes stay as spoken
 
+    /// "First impressions" is a noun phrase, not a marker: a bare ordinal
+    /// needs a comma or colon after it.
+    func testSentencesThatOpenWithOrdinalsAsWordsStay() {
+        let text = "First impressions matter. Second chances are rare. Third place is fine."
+        XCTAssertEqual(SpokenLists.numbered(text), text)
+    }
+
+    /// With numbers written as digits, "One," "Two," "Three," arrive as
+    /// "1," "2," "3,".
+    func testDigitMarkersCount() {
+        let text = "1, pick a venue. 2, send the invites. 3, order the food."
+        XCTAssertEqual(SpokenLists.numbered(text), "1. pick a venue.\n2. send the invites.\n3. order the food.")
+        // "10," doesn't read as "1,".
+        XCTAssertEqual(SpokenLists.numbered("10, pick a venue. 2, send the invites. 3, order the food."),
+                       "10, pick a venue. 2, send the invites. 3, order the food.")
+    }
+
     func testASentenceThatMerelyContainsFirstStays() {
         let text = "First impressions matter. The second meeting went well. A third person joined."
         XCTAssertEqual(SpokenLists.numbered(text), text)
@@ -98,6 +115,17 @@ final class SpokenListsTests: XCTestCase {
             ).text
         }
         let notes = await run(.notes)
+        let digits = await DictationOutputPipeline(cleaner: MockTranscriptCleanup(), snippets: SnippetExpander()).process(
+            "One, pick a venue. Two, send the invites. Three, order the food.",
+            options: DictationOutputOptions(
+                profile: WritingProfile(format: .notes, rules: WritingStyle.notes.defaultRules), snippetList: [],
+                cleanupEnabled: false, rewritingEnabled: false, model: .defaultKind, customPrompt: "",
+                language: "en", autoCapitalize: true, trailingSpace: false, numbers: .digits,
+                laysOutParagraphs: true
+            )
+        ).text
+        XCTAssertTrue(digits.hasPrefix("1. "), digits)
+        XCTAssertEqual(digits.components(separatedBy: "\n").count, 3, digits)
         XCTAssertEqual(notes, "1. Buy the milk.\n2. Call the bank.\n3. Book the flights.")
         let chat = await run(.chat)
         XCTAssertFalse(chat.contains("\n"))
