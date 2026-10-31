@@ -262,7 +262,7 @@ final class SherpaServiceTests: XCTestCase {
     }
 
     func testShortWordsWithInstalledEnglishModels() async throws {
-        let models: [ModelSize] = [.moonshineTiny, .moonshineBase, .senseVoiceSmall, .canary180mFlash]
+        let models: [ModelSize] = [.moonshineTiny, .moonshineBase, .senseVoiceSmall, .canary180mFlash, .cohereTranscribe]
         let installed = models.filter { size in
             SherpaModelCatalog.spec(for: size).map(SherpaService.modelFilesExist) ?? false
         }
