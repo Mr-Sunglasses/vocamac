@@ -496,7 +496,7 @@ struct CalmVocabularyBoostRow: View {
     private var detail: some View {
         switch appState.vocabularyBoostStatus {
         case .notDownloaded:
-            CalmRowDescription(text: "Helps Parakeet hear your words, not just spell them.")
+            CalmRowDescription(text: "Helps Parakeet hear your words, not just spell them. Downloads on its own once your Dictionary has words, unless you removed it.")
         case .downloading:
             CalmRowDescription(text: "Downloading 98 MB…")
         case .ready:
