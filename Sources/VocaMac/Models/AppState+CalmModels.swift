@@ -39,6 +39,7 @@ enum CalmModelText {
         case .gigaamV3: return "GigaAM v3"
         case .canary180mFlash: return "Canary 180M"
         case .qwen3Asr06B: return "Qwen3 ASR 0.6B"
+        case .cohereTranscribe: return "Cohere Transcribe"
         case .customEndpoint: return "Custom endpoint"
         }
     }

@@ -71,6 +71,11 @@ extension ModelSize {
             return .only(["en", "es", "de", "fr"])
         case .qwen3Asr06B:
             return .only(Self.qwen3AsrLanguages)
+        case .cohereTranscribe:
+            if case .cohereTranscribe(_, _, let languages)? = SherpaModelCatalog.spec(for: self)?.kind {
+                return .only(languages)
+            }
+            return .only([])
         // Whatever the server runs — most Whisper deployments are multilingual.
         case .customEndpoint:
             return .broad
@@ -155,6 +160,7 @@ extension ModelSize {
         case .gigaamV3:                  return "A Russian specialist that adds punctuation."
         case .canary180mFlash:           return "English, Spanish, German, and French in a compact model."
         case .qwen3Asr06B:               return "30 languages, including Hindi, Arabic, and Thai."
+        case .cohereTranscribe:          return "14 languages, and the most accurate model in VocaMac's tests. Large, and runs on the CPU."
         case .customEndpoint:            return "Your Whisper-compatible server — dictation goes to it over the network."
         }
     }
