@@ -20,7 +20,7 @@ struct CalmLearnedFillersGroup: View {
                         CalmRow(
                             "“\(word)”",
                             description: PersonalFillers.commaBound.contains(word)
-                                ? "Left out where a comma sets it off, as you did" : "Left out of your dictations, as you did"
+                                ? "Left out where it opens a sentence before a comma, as you did" : "Left out of your dictations, as you did"
                         ) {
                             Button("Keep it") { appState.removePersonalFillerWithUndo(word) }
                                 .calmButton()

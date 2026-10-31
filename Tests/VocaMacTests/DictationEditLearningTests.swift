@@ -47,6 +47,29 @@ final class DictationEditLearningTests: XCTestCase {
         XCTAssertNil(reading.editedText)
     }
 
+    func testAClearedFieldIsSentNotEdited() throws {
+        // A chat message sent with Return: the field is empty when read back.
+        let sent = try XCTUnwrap(DictationEditReader.read(inserted: "See you at five", before: "See you at five", after: ""))
+        XCTAssertNil(sent.editedText)
+        let blank = try XCTUnwrap(DictationEditReader.read(inserted: "See you at five", before: "See you at five", after: " \n"))
+        XCTAssertNil(blank.editedText)
+    }
+
+    func testAFieldThatMovedOnIsNotAnEdit() throws {
+        // Sent, then the next message started in the same field.
+        let reading = try XCTUnwrap(DictationEditReader.read(
+            inserted: "Sounds good, see you at five", before: "Sounds good, see you at five", after: "ok"
+        ))
+        XCTAssertNil(reading.editedText)
+        let short = try XCTUnwrap(DictationEditReader.read(inserted: "hello there", before: "hello there", after: "ok"))
+        XCTAssertNil(short.editedText)
+    }
+
+    func testAShortFixIsStillAnEdit() throws {
+        let reading = try XCTUnwrap(DictationEditReader.read(inserted: "Pria", before: "Pria", after: "Priya"))
+        XCTAssertEqual(reading.editedText, "Priya")
+    }
+
     func testADictationNotInTheFieldReadsNothing() {
         XCTAssertNil(DictationEditReader.read(inserted: "hello", before: "goodbye", after: "goodbye!"))
     }
@@ -89,12 +112,25 @@ final class DictationEditLearningTests: XCTestCase {
         XCTAssertEqual(PersonalFillers.remove(["actually"], from: "It works, actually.").text, "It works.")
     }
 
-    func testCommaBoundFillersStayWhenTheyAreWords() {
-        XCTAssertEqual(PersonalFillers.remove(["like"], from: "I like it.").text, "I like it.")
-        XCTAssertEqual(PersonalFillers.remove(["like"], from: "It was, like, huge.").text, "It was, huge.")
-        XCTAssertEqual(PersonalFillers.remove(["right"], from: "Turn right at the light.").text, "Turn right at the light.")
+    func testCommaBoundFillersGoOnlyWhereTheyOpenASentence() {
         XCTAssertEqual(PersonalFillers.remove(["so"], from: "So, we ship Friday.").text, "We ship Friday.")
         XCTAssertEqual(PersonalFillers.remove(["you know"], from: "You know, it works.").text, "It works.")
+        XCTAssertEqual(PersonalFillers.remove(["okay"], from: "Done. Okay, next one.").text, "Done. Next one.")
+    }
+
+    func testCommaBoundFillersStayWhenTheyAreWords() {
+        let lookAlikes: [(String, String)] = [
+            ("well", "It works well, thanks."),
+            ("right", "Turn right, then left."),
+            ("so", "I think so, too."),
+            ("really", "Not really, no."),
+            ("like", "I like it."),
+            ("like", "It was, like, huge."),
+            ("right", "Turn right at the light."),
+        ]
+        for (filler, text) in lookAlikes {
+            XCTAssertEqual(PersonalFillers.remove([filler], from: text).text, text, "“\(filler)” in “\(text)”")
+        }
     }
 
     func testUnlistedWordsAreNeverRemoved() {
@@ -126,7 +162,7 @@ final class DictationEditLearningTests: XCTestCase {
         XCTAssertEqual(LearnedCasing.lowercasingStart("NASA called.", isKnownWord: known), "NASA called.")
     }
 
-    func testTheStyleEngineStartsInLowercaseAndCapitalizesLaterSentences() {
+    func testStartInLowercaseCapitalizesLaterSentencesLikeTheGlobalSetting() {
         var rules = WritingStyle.plain.defaultRules
         rules.capitalization = .lowercaseStart
         let text = WritingStyleEngine.format(
@@ -137,6 +173,26 @@ final class DictationEditLearningTests: XCTestCase {
         XCTAssertEqual(
             WritingStyleEngine.format("Sounds good", rules: rules, globalAutoCapitalize: true, globalTrailingSpace: false),
             "Sounds good", "Without a word check the capital stays"
+        )
+    }
+
+    func testALearnedLowercaseStartKeepsTheStylesOwnCapitalization() {
+        let known: (String) -> Bool = { _ in true }
+        // Leave case alone (Code, Terminal): later sentences stay as they were.
+        var off = WritingStyle.plain.defaultRules
+        off.capitalization = .off
+        XCTAssertEqual(
+            WritingStyleEngine.format("Sounds good. see you then", rules: off, globalAutoCapitalize: true,
+                                      globalTrailingSpace: false, startsInLowercase: true, isKnownWord: known),
+            "sounds good. see you then"
+        )
+        // Capitalize sentences (Chat, Email): later sentences still get capitals with the global setting off.
+        var sentences = WritingStyle.plain.defaultRules
+        sentences.capitalization = .sentences
+        XCTAssertEqual(
+            WritingStyleEngine.format("Sounds good. see you then", rules: sentences, globalAutoCapitalize: false,
+                                      globalTrailingSpace: false, startsInLowercase: true, isKnownWord: known),
+            "sounds good. See you then"
         )
     }
 
@@ -314,23 +370,66 @@ final class AppStateEditLearningTests: XCTestCase {
 
     func testLowercasingTheStartThreeTimesLearnsIt() throws {
         let (appState, mocks) = AppState.makeTestState()
-        XCTAssertNotEqual(appState.resolveWritingStyle(for: messages).rules.capitalization, .lowercaseStart)
+        let before = appState.resolveWritingStyle(for: messages)
+        XCTAssertFalse(before.startsInLowercase)
         for _ in 0..<3 {
             appState.receiveEdit(DictationEditObservation(
                 inserted: "Sounds good", editedText: "sounds good", precedingCharacter: nil, app: messages
             ))
         }
         XCTAssertEqual(appState.learnedLowercaseApps.map(\.displayName), ["Messages"])
-        XCTAssertEqual(appState.resolveWritingStyle(for: messages).rules.capitalization, .lowercaseStart)
+        let learnedStyle = appState.resolveWritingStyle(for: messages)
+        XCTAssertTrue(learnedStyle.startsInLowercase)
+        XCTAssertTrue(learnedStyle.profile.startsInLowercase)
+        // Only the start is learned: the style, its rules, and how it was chosen stay.
+        XCTAssertEqual(learnedStyle.rules, before.rules)
+        XCTAssertEqual(learnedStyle.style, before.style)
+        XCTAssertEqual(learnedStyle.isAutomatic, before.isAutomatic)
         let notes = RunningAppSnapshot(displayName: "Notes", bundleIdentifier: "com.apple.Notes")
-        XCTAssertNotEqual(appState.resolveWritingStyle(for: notes).rules.capitalization, .lowercaseStart)
+        XCTAssertFalse(appState.resolveWritingStyle(for: notes).startsInLowercase)
         XCTAssertEqual(mocks.cursorOverlay.learnedMessages, ["Learned to start in lowercase in Messages"])
 
         let learned = try XCTUnwrap(appState.learnedLowercaseApps.first)
         appState.removeLearnedLowercaseAppWithUndo(learned)
-        XCTAssertNotEqual(appState.resolveWritingStyle(for: messages).rules.capitalization, .lowercaseStart)
+        XCTAssertFalse(appState.resolveWritingStyle(for: messages).startsInLowercase)
         appState.undoCenter.undo()
-        XCTAssertEqual(appState.resolveWritingStyle(for: messages).rules.capitalization, .lowercaseStart)
+        XCTAssertTrue(appState.resolveWritingStyle(for: messages).startsInLowercase)
+    }
+
+    func testOldLowercaseTalliesGoFirstAndTheNewestStays() {
+        let (appState, _) = AppState.makeTestState()
+        let old = Date(timeIntervalSince1970: 1_000)
+        var stored: [String: [Double]] = [:]
+        for index in 0..<AppState.maximumLowercaseStartTallies {
+            stored["app.\(index)"] = [2, old.timeIntervalSince1970 + Double(index)]
+        }
+        UserDefaults.standard.set(stored, forKey: PreferenceKey.lowercaseStartCounts)
+        appState.noteLowercaseStart(in: messages, now: Date(timeIntervalSince1970: 5_000))
+        let tallies = UserDefaults.standard.dictionary(forKey: PreferenceKey.lowercaseStartCounts) as? [String: [Double]] ?? [:]
+        XCTAssertEqual(tallies.count, AppState.maximumLowercaseStartTallies)
+        XCTAssertEqual(tallies["com.apple.MobileSMS"]?.first, 1, "The app just counted is kept")
+        XCTAssertNil(tallies["app.0"], "The app seen longest ago goes")
+        XCTAssertNotNil(tallies["app.1"])
+    }
+
+    func testASentMessageTeachesNothing() async {
+        let (appState, _) = AppState.makeTestState()
+        let id = await appState.historyStore.begin(
+            audio: nil, target: messages, modelID: "tiny", language: "en", audioSeconds: 1
+        )
+        appState.historyStore.complete(id, rawText: "basically we ship", finalText: "Basically we ship.", summary: nil,
+                                       language: "en", transcriptionSeconds: 0.1, keepAudio: false)
+        // The field was empty when read back: the message went.
+        let reading = DictationEditReader.read(inserted: "Basically we ship.", before: "Basically we ship.", after: "")
+        for _ in 0..<3 {
+            appState.receiveEdit(DictationEditObservation(
+                inserted: "Basically we ship.", editedText: reading?.editedText,
+                precedingCharacter: nil, historyID: id, app: messages
+            ))
+        }
+        XCTAssertNil(reading?.editedText)
+        XCTAssertNil(appState.historyStore.entry(id: id)?.editedText, "Not counted as edited in Sent without edits")
+        XCTAssertTrue(appState.personalFillers.isEmpty)
     }
 
     func testLowercasingMidSentenceTeachesNothing() {
@@ -341,5 +440,43 @@ final class AppStateEditLearningTests: XCTestCase {
             ))
         }
         XCTAssertTrue(appState.learnedLowercaseApps.isEmpty)
+    }
+}
+
+final class SentenceStartCorrectionTests: XCTestCase {
+
+    private let isKnown: (String) -> Bool = { ["whether", "weather", "is", "nice", "their", "there", "going", "home",
+                                               "ask", "about", "it"].contains($0.lowercased()) }
+
+    private func learn(_ text: String, edited: String, before prefix: String = "") -> [CorrectionLearner.Correction] {
+        CorrectionLearner.corrections(inserted: text, before: prefix + text, after: prefix + edited, isKnownWord: isKnown)
+    }
+
+    func testASentenceStartCapitalIsNotAName() {
+        XCTAssertTrue(learn("Whether is nice.", edited: "Weather is nice.").isEmpty)
+        XCTAssertTrue(learn("Their going home.", edited: "There going home.").isEmpty)
+        XCTAssertTrue(learn("Whether is nice.", edited: "Weather is nice.", before: "Hi. ").isEmpty)
+        XCTAssertTrue(learn("ok. Whether is nice.", edited: "ok. Weather is nice.").isEmpty)
+    }
+
+    func testANameAtASentenceStartIsStillLearned() {
+        XCTAssertEqual(learn("Pria is nice.", edited: "Priya is nice."), [.init(heard: "Pria", corrected: "Priya")])
+    }
+
+    func testACapitalMidSentenceCountsAsAName() {
+        XCTAssertEqual(learn("ask pria about it", edited: "ask Priya about it"), [.init(heard: "pria", corrected: "Priya")])
+    }
+}
+
+@MainActor
+final class LearnedNoticeTimingTests: XCTestCase {
+
+    func testALearnedNoticeWaitsForADictationWithTheOverlayOff() {
+        let manager = CursorOverlayManager()
+        // Overlay Off: `show` is never called, but the dictation is under way.
+        manager.transitionToRecording()
+        manager.showLearned(message: "Learned “Priya”") {}
+        XCTAssertFalse(manager.isShowingLearnedNotice)
+        XCTAssertTrue(manager.hasPendingLearnedNotice)
     }
 }

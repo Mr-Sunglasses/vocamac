@@ -267,13 +267,15 @@ struct DictationOutputPipeline {
         func format(_ text: String) -> String {
             masked.restore(in: Self.layingOut(WritingStyleEngine.format(
                 text, rules: finalRules, globalAutoCapitalize: options.autoCapitalize,
-                globalTrailingSpace: options.trailingSpace, isKnownWord: Self.ordinaryWords(options)
+                globalTrailingSpace: options.trailingSpace,
+                startsInLowercase: options.profile.startsInLowercase, isKnownWord: Self.ordinaryWords(options)
             ), options: options, restore: masked.restore))
         }
         func finish(_ formatting: MaskedText) -> String {
             let formatted = WritingStyleEngine.format(
                 formatting.text, rules: finalRules, globalAutoCapitalize: options.autoCapitalize,
-                globalTrailingSpace: options.trailingSpace, isKnownWord: Self.ordinaryWords(options)
+                globalTrailingSpace: options.trailingSpace,
+                startsInLowercase: options.profile.startsInLowercase, isKnownWord: Self.ordinaryWords(options)
             )
             return masked.restore(in: formatting.restore(in: Self.layingOut(
                 formatted, options: options, restore: { masked.restore(in: formatting.restore(in: $0)) }
@@ -571,7 +573,8 @@ struct DictationOutputPipeline {
         let noting = prepared.noting
         let fallback = masked.restore(in: Self.layingOut(WritingStyleEngine.format(
             masked.text, rules: profile.rules, globalAutoCapitalize: options.autoCapitalize,
-            globalTrailingSpace: options.trailingSpace, isKnownWord: Self.ordinaryWords(options)
+            globalTrailingSpace: options.trailingSpace,
+            startsInLowercase: options.profile.startsInLowercase, isKnownWord: Self.ordinaryWords(options)
         ), options: options, restore: masked.restore))
         // Code and Terminal text may be a command. The model may only point
         // at filler there; see `CleanupSalvage`.

@@ -34,7 +34,9 @@ extension AppState {
 
     /// Whether a fix is a name or term worth adding unasked: it has a
     /// capital ("Priya", "GitHub") or a word the spell checker doesn't know
-    /// ("kubectl"). A plain lowercase word is grammar, not spelling.
+    /// ("kubectl"). A plain lowercase word is grammar, not spelling. A
+    /// capital that only opens a sentence never gets here: the learner drops
+    /// "Whether" → "Weather" there (`CorrectionLearner.isLikelyCorrection`).
     static func learnsWithoutAsking(_ corrected: String, isKnownWord: (String) -> Bool) -> Bool {
         if corrected.contains(where: \.isUppercase) { return true }
         return corrected.split(whereSeparator: { !$0.isLetter }).contains { !isKnownWord(String($0).lowercased()) }
@@ -130,10 +132,22 @@ extension AppState {
 
     // MARK: - Lowercase starts
 
-    private var lowercaseStartCounts: [String: Int] {
-        get { UserDefaults.standard.dictionary(forKey: PreferenceKey.lowercaseStartCounts) as? [String: Int] ?? [:] }
-        set { UserDefaults.standard.set(newValue, forKey: PreferenceKey.lowercaseStartCounts) }
+    /// Per app ID: lowercased starts seen so far, and when the last one was.
+    private var lowercaseStartTallies: [String: (count: Int, lastSeen: TimeInterval)] {
+        get {
+            let stored = UserDefaults.standard.dictionary(forKey: PreferenceKey.lowercaseStartCounts) as? [String: [Double]] ?? [:]
+            return stored.compactMapValues { $0.count == 2 ? (Int($0[0]), $0[1]) : nil }
+        }
+        set {
+            UserDefaults.standard.set(
+                newValue.mapValues { [Double($0.count), $0.lastSeen] }, forKey: PreferenceKey.lowercaseStartCounts
+            )
+        }
     }
+
+    /// Apps whose lowercased starts are remembered until learned; past it,
+    /// those seen longest ago are forgotten.
+    static let maximumLowercaseStartTallies = 100
 
     private var rejectedLowercaseApps: Set<String> {
         get { Set(UserDefaults.standard.stringArray(forKey: PreferenceKey.rejectedLowercaseApps) ?? []) }
@@ -142,19 +156,21 @@ extension AppState {
 
     /// Count one lowercased start in `app`; after enough, dictation there
     /// starts in lowercase.
-    func noteLowercaseStart(in app: RunningAppSnapshot) {
+    func noteLowercaseStart(in app: RunningAppSnapshot, now: Date = Date()) {
         let entry = LearnedLowercaseApp(snapshot: app)
         guard !learnedLowercaseApps.contains(where: { $0.matches(app) }),
               !rejectedLowercaseApps.contains(entry.id) else { return }
-        var counts = lowercaseStartCounts
-        counts[entry.id, default: 0] += 1
-        let learned = counts[entry.id, default: 0] >= Self.editsBeforeLearning
-        if learned { counts[entry.id] = nil }
-        // Bounded: the apps seen least go first.
-        if counts.count > 100 {
-            counts = Dictionary(uniqueKeysWithValues: counts.sorted { $0.value > $1.value }.prefix(60).map { ($0.key, $0.value) })
+        var tallies = lowercaseStartTallies
+        let count = (tallies[entry.id]?.count ?? 0) + 1
+        let learned = count >= Self.editsBeforeLearning
+        tallies[entry.id] = learned ? nil : (count, now.timeIntervalSince1970)
+        // Bounded by recency: the apps whose last lowercased start is oldest
+        // go first. The one just counted is the newest, so it stays.
+        if tallies.count > Self.maximumLowercaseStartTallies {
+            let kept = tallies.sorted { $0.value.lastSeen > $1.value.lastSeen }.prefix(Self.maximumLowercaseStartTallies)
+            tallies = Dictionary(uniqueKeysWithValues: kept.map { ($0.key, $0.value) })
         }
-        lowercaseStartCounts = counts
+        lowercaseStartTallies = tallies
         guard learned else { return }
         learnedLowercaseApps.append(entry)
         saveLearnedLowercaseApps()

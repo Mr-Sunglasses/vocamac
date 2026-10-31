@@ -24,12 +24,15 @@ struct ResolvedWritingStyle: Equatable {
     /// No rule of the user's matched: the app is one VocaMac knows, and it
     /// gets its kind's style (`WritingStyleResolver.automaticStyle`).
     var isAutomatic = false
+    /// Learned from the user's edits: the first word starts in lowercase,
+    /// whatever the style's capitalization (`AppState.applyingLearnedCasing`).
+    var startsInLowercase = false
 
     var profile: WritingProfile {
         guard codingAgent else {
             return WritingProfile(
                 format: style, rules: rules, intent: intent, cleanup: cleanup,
-                cleanupLevel: cleanupLevel, cleanupPrompt: cleanupPrompt
+                cleanupLevel: cleanupLevel, cleanupPrompt: cleanupPrompt, startsInLowercase: startsInLowercase
             )
         }
         // Prose for the agent, in the speaker's own words: no Formal or

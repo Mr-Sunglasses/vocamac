@@ -40,7 +40,9 @@ enum DictationEditReader {
     /// Typing before or after the dictation (the user carrying on writing)
     /// leaves it as dictated. An edit that starts inside it and spills more
     /// than a character past either end can't be pinned to the dictation, so
-    /// its edited text is unknown (nil).
+    /// its edited text is unknown (nil). So is a dictation that is gone: the
+    /// field was cleared (a chat message sent with Return) or what is left
+    /// shares too little with it to be an edit of it (`isStillDictation`).
     ///
     /// - Returns: Nil when the dictation isn't in `before` at all.
     static func read(
@@ -55,6 +57,7 @@ enum DictationEditReader {
         }
         let preceding = old[..<range.lowerBound].last { $0 != " " && $0 != "\t" }
         guard before != after else { return (dictated, preceding) }
+        guard !after.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return (nil, preceding) }
 
         var prefix = 0
         while prefix < old.count, prefix < new.count, old[prefix] == new[prefix] { prefix += 1 }
@@ -76,7 +79,34 @@ enum DictationEditReader {
         let start = min(range.lowerBound, changed.lowerBound)
         let end = max(range.upperBound, changed.upperBound) + (new.count - old.count)
         guard start <= end, end <= new.count else { return (nil, preceding) }
-        return (String(new[start..<end]).trimmingCharacters(in: .whitespacesAndNewlines), preceding)
+        let edited = String(new[start..<end]).trimmingCharacters(in: .whitespacesAndNewlines)
+        return (isStillDictation(edited, of: dictated) ? edited : nil, preceding)
+    }
+
+    /// Whether `edited` is still the dictation, edited, rather than what
+    /// replaced it after it was sent or deleted: half of a longer
+    /// dictation's words are still there, or a short one is still spelled
+    /// mostly the same ("Pria" → "Priya", not "hello there" → "ok").
+    static func isStillDictation(_ edited: String, of dictated: String) -> Bool {
+        let words = { (text: String) in
+            text.lowercased().split { !($0.isLetter || $0.isNumber || $0 == "'" || $0 == "’") }.map(String.init)
+        }
+        let dictatedWords = words(dictated)
+        let editedWords = words(edited)
+        guard !editedWords.isEmpty else { return false }
+        if dictatedWords.count >= 4 {
+            var remaining = Dictionary(editedWords.map { ($0, 1) }, uniquingKeysWith: +)
+            var kept = 0
+            for word in dictatedWords where remaining[word, default: 0] > 0 {
+                remaining[word, default: 0] -= 1
+                kept += 1
+            }
+            return kept * 2 >= dictatedWords.count
+        }
+        let a = dictatedWords.joined(separator: " ")
+        let b = editedWords.joined(separator: " ")
+        let distance = DictionaryCorrector.levenshtein(a, b)
+        return Double(distance) <= Double(max(a.count, b.count)) * 0.5
     }
 }
 
@@ -97,8 +127,9 @@ enum PersonalFillers {
         "obviously", "seriously", "definitely", "anyway", "anyways", "apparently",
     ]
 
-    /// Real words as often as fillers ("I like it", "turn right", "so much"),
-    /// so only removed where commas set them off: "it was, like, huge".
+    /// Real words as often as fillers ("I like it", "it works well, thanks",
+    /// "turn right, then left"), so only removed where they open a sentence
+    /// and a comma follows: "So, we ship Friday", "Like, it was huge".
     static let commaBound: Set<String> = [
         "like", "right", "well", "so", "okay", "ok", "yeah", "just", "really", "alright",
         "you know", "i mean", "kind of", "sort of",
@@ -158,8 +189,15 @@ enum PersonalFillers {
             let word = ns.substring(with: match.range(at: 1)).lowercased()
                 .split(whereSeparator: { $0 == " " || $0 == "\t" }).joined(separator: " ")
             if anywhere.contains(word) { return match.range }
-            // Set off by a comma right after it: "like, huge", "So, we".
-            return ns.substring(with: match.range(at: 2)).hasPrefix(",") ? match.range : nil
+            // Opening a sentence, a comma right after it: "So, we".
+            guard ns.substring(with: match.range(at: 2)).hasPrefix(",") else { return nil }
+            var before = match.range.location - 1
+            while before >= 0, let scalar = UnicodeScalar(ns.character(at: before)),
+                  scalar == " " || scalar == "\t" || scalar == "\"" || scalar == "“" {
+                before -= 1
+            }
+            guard before >= 0, let scalar = UnicodeScalar(ns.character(at: before)) else { return match.range }
+            return ".!?…\n\r".unicodeScalars.contains(scalar) ? match.range : nil
         }
         guard !ranges.isEmpty else { return (text, 0) }
         let result = WritingStyleEngine.removeWordRuns(ranges, from: text)
@@ -240,16 +278,10 @@ struct LearnedLowercaseApp: Codable, Identifiable, Hashable {
 }
 
 extension ResolvedWritingStyle {
-    /// The same style, starting in lowercase.
+    /// The same style, its rules untouched, starting in lowercase.
     func startingInLowercase() -> ResolvedWritingStyle {
-        var rules = rules
-        rules.capitalization = .lowercaseStart
-        var copy = ResolvedWritingStyle(style: style, rules: rules, matchedAppName: matchedAppName)
-        copy.intent = intent
-        copy.cleanup = cleanup
-        copy.cleanupLevel = cleanupLevel
-        copy.cleanupPrompt = cleanupPrompt
-        copy.codingAgent = codingAgent
+        var copy = self
+        copy.startsInLowercase = true
         return copy
     }
 }

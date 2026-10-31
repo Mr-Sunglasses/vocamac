@@ -452,6 +452,10 @@ final class CursorOverlayManager {
     /// A "Learned" notice that arrived while a dictation was under way,
     /// shown once the overlay is free.
     private var pendingLearned: (message: String, undo: @MainActor () -> Void)?
+    /// From the start of a dictation (or Command Mode session) to its
+    /// `hide()` or failure, whatever the overlay style: with the overlay Off
+    /// nothing is on screen, but a "Learned" notice must still wait.
+    private var isDictationUnderway = false
 
     /// Pointer-move monitors, installed while the overlay takes clicks, so
     /// the panel only stops ignoring the mouse while the pointer is over
@@ -477,6 +481,8 @@ final class CursorOverlayManager {
             return
         }
 
+        isDictationUnderway = true
+        parkLearnedNotice()
         cancelFailureDismissal()
         positionGeneration = UUID()
         viewModel.style = style
@@ -508,6 +514,13 @@ final class CursorOverlayManager {
 
     /// The input route is live and the microphone is actually capturing.
     func transitionToRecording() {
+        isDictationUnderway = true
+        // With the overlay Off, `show` isn't called: a "Learned" notice still
+        // up waits for this dictation to finish.
+        if viewModel.phase == .failure, viewModel.learnedUndo != nil {
+            parkLearnedNotice()
+            hideNow()
+        }
         guard viewModel.isActive, viewModel.phase == .connecting else { return }
         viewModel.phase = .recording
         viewModel.audioLevel = 0
@@ -520,6 +533,7 @@ final class CursorOverlayManager {
 
     /// Transitions the overlay from recording to batch transcription.
     func transitionToProcessing() {
+        isDictationUnderway = true
         guard isShowingRecordingSession, let overlayPanel else { return }
         viewModel.phase = .processing
         updateMouseHandling(overlayPanel)
@@ -554,6 +568,10 @@ final class CursorOverlayManager {
     func showFailure(message: String) {
         let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        // A failure ends the dictation. A "Learned" notice it covers comes
+        // back after it, with its Undo.
+        isDictationUnderway = false
+        parkLearnedNotice()
         viewModel.learnedUndo = nil
         presentNotice(trimmed, duration: OverlayInteraction.failureDisplayDuration(for: trimmed))
         VocaLogger.debug(.cursorOverlay, "Overlay showing failure")
@@ -565,10 +583,8 @@ final class CursorOverlayManager {
     func showLearned(message: String, undo: @escaping @MainActor () -> Void) {
         let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        let isBusy = viewModel.isActive
-            && (OverlayInteraction.acceptsClicks(in: viewModel.phase)
-                || (viewModel.phase == .failure && viewModel.learnedUndo == nil))
-        guard !isBusy else {
+        let isShowingFailure = viewModel.isActive && viewModel.phase == .failure && viewModel.learnedUndo == nil
+        guard !isDictationUnderway, !isShowingFailure else {
             pendingLearned = (trimmed, undo)
             return
         }
@@ -628,10 +644,24 @@ final class CursorOverlayManager {
     /// message stays up until its own dismissal, so an error path that hides
     /// the recording overlay after reporting the failure doesn't erase it.
     func hide() {
+        isDictationUnderway = false
         if viewModel.phase == .failure, failureDismissal != nil {
             return
         }
         hideNow()
+    }
+
+    /// A "Learned" notice is on screen with its Undo.
+    var isShowingLearnedNotice: Bool { viewModel.phase == .failure && viewModel.learnedUndo != nil }
+
+    /// A "Learned" notice is waiting for the overlay to be free.
+    var hasPendingLearnedNotice: Bool { pendingLearned != nil }
+
+    /// Keep a "Learned" notice that is on screen for later, when something
+    /// else is about to take the overlay.
+    private func parkLearnedNotice() {
+        guard viewModel.phase == .failure, let undo = viewModel.learnedUndo else { return }
+        pendingLearned = (viewModel.failureMessage, undo)
     }
 
     private func hideNow() {

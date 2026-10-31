@@ -372,7 +372,7 @@ vocamac.dictionary.personalFillers = <JSON [String]>
 vocamac.dictionary.personalFillerCounts = {"basically": 2}   // deletions until learned at 3
 vocamac.dictionary.rejectedPersonalFillers = ["actually"]    // taken back; never learned again
 vocamac.writingStyle.learnedLowercaseApps = <JSON [LearnedLowercaseApp]>
-vocamac.writingStyle.lowercaseStartCounts = {"com.apple.MobileSMS": 1}
+vocamac.writingStyle.lowercaseStartCounts = {"com.apple.MobileSMS": [1, 1793430000]}  // [count, last seen]; newest 100 apps kept
 vocamac.writingStyle.rejectedLowercaseApps = ["com.tinyspeck.slackmacgap"]
 vocamac.dictionary.screenContext = true
 vocamac.transcriptCleanup.skipCleanText = true
@@ -588,7 +588,7 @@ three separate dictations:
   ("basically", "actually", "like", "you know", …) that the user deleted and
   nothing else. It is then removed like "um", at Medium and above, in prose
   styles only; words that are also real words ("like", "right", "so") only
-  where a comma follows them. Listed in Settings › General with "Keep it".
+  where they open a sentence and a comma follows them ("So, we…"). Listed in Settings › General with "Keep it".
 - **Lowercase starts** (`LearnedCasing`): the user lowercased only the first
   letter of a dictation that started a message (not one following a word or
   comma). That app's resolved style then uses `CapitalizationPolicy.lowercaseStart`:

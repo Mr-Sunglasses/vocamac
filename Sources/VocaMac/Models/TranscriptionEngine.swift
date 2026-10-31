@@ -83,7 +83,8 @@ enum PreferenceKey {
     static let rejectedPersonalFillers = "vocamac.dictionary.rejectedPersonalFillers"
     /// JSON `[LearnedLowercaseApp]`: apps where dictation starts in lowercase.
     static let learnedLowercaseApps = "vocamac.writingStyle.learnedLowercaseApps"
-    /// [String: Int]: dictations whose capital the user lowercased, by app.
+    /// [String: [Double]]: per app ID, [lowercased starts, last seen as
+    /// seconds since 1970], until learned.
     static let lowercaseStartCounts = "vocamac.writingStyle.lowercaseStartCounts"
     /// [String]: app IDs the user took a learned lowercase start back for.
     static let rejectedLowercaseApps = "vocamac.writingStyle.rejectedLowercaseApps"
