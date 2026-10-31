@@ -945,6 +945,9 @@ final class AppState: ObservableObject {
     /// Names and identifiers read from the screen when recording started.
     private var screenContextTask: Task<[String], Never>?
     private var screenDocumentURLTask: Task<URL?, Never>?
+    /// The focused field and the text around its caret when recording
+    /// started, to fit the dictation to it (`InsertionFit`).
+    private var insertionContextTask: Task<InsertionContext?, Never>?
     /// The terminal found running a coding agent when recording started, or
     /// nil (see `startCodingAgentDetection`).
     private var codingAgentTask: Task<RunningAppSnapshot?, Never>?
@@ -2234,6 +2237,8 @@ final class AppState: ObservableObject {
         screenContextTask = nil
         screenDocumentURLTask?.cancel()
         screenDocumentURLTask = nil
+        insertionContextTask?.cancel()
+        insertionContextTask = nil
         if let id = activeHistoryEntryID {
             historyStore.markCancelled(id)
             activeHistoryEntryID = nil
@@ -2929,6 +2934,11 @@ final class AppState: ObservableObject {
         screenContextTask = nil
         let documentURLTask = screenDocumentURLTask
         screenDocumentURLTask = nil
+        let insertionTask = insertionContextTask
+        insertionContextTask = nil
+        let insertionContextRead = Task {
+            await Self.value(of: insertionTask, within: Self.screenContextTimeout, otherwise: nil)
+        }
         let agentTask = codingAgentTask
         codingAgentTask = nil
         let codingAgentRead = Task { await Self.value(of: agentTask, within: Self.screenContextTimeout, otherwise: nil) }
@@ -3099,6 +3109,22 @@ final class AppState: ObservableObject {
                         summary: "\(Self.codingAgentSummary) · \(output.summary)"
                     )
                 }
+                // Fit the text to the field: one line, the sentence already
+                // there, the draft's register. Prose only; a terminal's
+                // buffer or an editor's code is not a sentence to join.
+                var leadingSpace = false
+                if injectResult, writingStyleEnabled, profile.cleanup != .raw, profile.format.supportsWording,
+                   !resolved.codingAgent, let context = await insertionContextRead.value {
+                    let fit = InsertionFit.fit(
+                        output.text, into: context,
+                        capitalizes: Self.capitalizes(profile.rules, autoCapitalize: autoCapitalize),
+                        mirrorsRegister: profile.format == .chat || profile.format == .slack
+                    )
+                    if fit.text != output.text {
+                        output = DictationOutputResult(original: output.original, text: fit.text, summary: output.summary)
+                    }
+                    leadingSpace = fit.leadingSpace
+                }
                 if !result.pieces.isEmpty {
                     Self.logPieceSummary(
                         result: result, speculator: speculator,
@@ -3162,7 +3188,7 @@ final class AppState: ObservableObject {
                         showTemporaryError("The destination app changed. Your dictation is saved in the menu bar; copy it to paste where you want.")
                         return
                     }
-                    textInjector.inject(text: output.text, preserveClipboard: preserveClipboard)
+                    textInjector.inject(text: (leadingSpace ? " " : "") + output.text, preserveClipboard: preserveClipboard)
                     saveResult()
                     if onboardingVerification.mode == .insertion,
                        !output.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -3337,6 +3363,8 @@ final class AppState: ObservableObject {
         screenContextTask = nil
         screenDocumentURLTask?.cancel()
         screenDocumentURLTask = nil
+        insertionContextTask?.cancel()
+        insertionContextTask = nil
         codingAgentTask?.cancel()
         codingAgentTask = nil
         resetCommandModeState()
@@ -6310,6 +6338,15 @@ extension AppState {
         }
     }
 
+    /// Whether `rules` start sentences with a capital.
+    static func capitalizes(_ rules: WritingStyleRules, autoCapitalize: Bool) -> Bool {
+        switch rules.capitalization {
+        case .inherit: return autoCapitalize
+        case .sentences: return true
+        case .off: return false
+        }
+    }
+
     /// What History and the menu say for a dictation to a coding agent.
     static let codingAgentSummary = "Coding agent in Terminal — prose cleanup"
 
@@ -6340,6 +6377,8 @@ extension AppState {
         screenContextTask = nil
         screenDocumentURLTask?.cancel()
         screenDocumentURLTask = nil
+        insertionContextTask?.cancel()
+        insertionContextTask = nil
         guard injectResult, let reader = screenContextReader else { return }
         if useScreenContext {
             let isKnownWord = self.isKnownWord
@@ -6352,6 +6391,11 @@ extension AppState {
         if !websiteStyleBindings.isEmpty {
             screenDocumentURLTask = Task { @MainActor in
                 await reader.captureFrontmostDocumentURL()
+            }
+        }
+        if writingStyleEnabled {
+            insertionContextTask = Task { @MainActor in
+                await reader.captureInsertionContext()
             }
         }
     }

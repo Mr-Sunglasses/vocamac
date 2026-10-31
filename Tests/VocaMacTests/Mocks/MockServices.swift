@@ -1168,6 +1168,13 @@ final class MockScreenContextReader: ScreenContextReading {
     func captureDocumentURL(of app: RunningAppSnapshot) async -> URL? {
         targetAppDocumentURL
     }
+
+    /// The focused field when recording starts; nil reads as unreadable.
+    var insertionContext: InsertionContext?
+
+    func captureInsertionContext() async -> InsertionContext? {
+        insertionContext
+    }
 }
 
 @MainActor

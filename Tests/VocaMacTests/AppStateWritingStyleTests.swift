@@ -180,6 +180,45 @@ final class AppStateWritingStyleTests: XCTestCase {
         XCTAssertEqual(appState.activeWritingStyle.displayName, "Code · automatic")
     }
 
+    // MARK: - Fitting the field
+
+    func testADictationJoinsTheSentenceAtTheCaret() async {
+        let reader = MockScreenContextReader()
+        reader.insertionContext = InsertionContext(field: .multiLine, before: "I think", after: "")
+        let (appState, mocks) = AppState.makeTestState(screenContextReader: reader)
+        appState.automaticWritingStyles = false
+        appState.appendTrailingSpace = false
+        mocks.frontmostAppResolver.frontmostApp = RunningAppSnapshot(displayName: "Pages", bundleIdentifier: "com.apple.iWork.Pages")
+
+        await dictateFromStart("that we should ship", on: appState, mocks: mocks)
+
+        XCTAssertEqual(mocks.textInjector.lastInjectedText, " that we should ship")
+        XCTAssertEqual(appState.lastOutput?.text, "that we should ship", "History and Paste Last never get the space")
+    }
+
+    func testCodeIsNeverJoinedLikeProse() async {
+        let reader = MockScreenContextReader()
+        reader.insertionContext = InsertionContext(field: .multiLine, before: "let value", after: "")
+        let (appState, mocks) = AppState.makeTestState(screenContextReader: reader)
+        appState.appendTrailingSpace = false
+        mocks.frontmostAppResolver.frontmostApp = cursor
+
+        await dictateFromStart("open config dot json", on: appState, mocks: mocks)
+
+        XCTAssertEqual(mocks.textInjector.lastInjectedText, "open config.json")
+    }
+
+    /// A dictation started the way the hotkey starts one, so the field is
+    /// read when recording begins.
+    private func dictateFromStart(_ transcript: String, on appState: AppState, mocks: TestMocks) async {
+        mocks.audioEngine.stopRecordingResult = Array(repeating: Float(0.1), count: 16_000)
+        mocks.whisperService.mockTranscriptionResult = VocaTranscription(
+            text: transcript, duration: 1.0, detectedLanguage: "en", audioLengthSeconds: 1.0, modelUsed: .tiny
+        )
+        await appState.startRecording()
+        await appState.stopRecordingAndTranscribe()
+    }
+
     func testUseMyDefaultStyleOnAnAutomaticAppSavesTheDefaultForIt() {
         let (appState, mocks) = AppState.makeTestState()
         mocks.frontmostAppResolver.frontmostApp = cursor
