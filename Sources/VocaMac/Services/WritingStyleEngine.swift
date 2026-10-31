@@ -276,7 +276,12 @@ enum WritingStyleEngine {
     /// - Prose only. In Code and Terminal a repeated word may be a command
     ///   argument ("cat the the and other files"), and losing one breaks the
     ///   command, so only a deletion the model points at goes there.
-    static func removeRepeatedPhrases(_ text: String) -> (text: String, removed: Int) {
+    /// - Parameter minimumLength: The shortest phrase that counts. One word
+    ///   said twice is often meant ("muy muy", "sehr sehr"), and only the
+    ///   English lists know which, so other languages pass 2: a phrase of two
+    ///   or more words said twice in a row ("vamos a vamos a comer") is a slip
+    ///   in any language.
+    static func removeRepeatedPhrases(_ text: String, minimumLength: Int = 1) -> (text: String, removed: Int) {
         guard let expression = cutOffTokenExpression else { return (text, 0) }
         let ns = text as NSString
         let tokens = expression.matches(in: text, range: NSRange(location: 0, length: ns.length)).map {
@@ -299,7 +304,7 @@ enum WritingStyleEngine {
             var matched = false
             let refusedBefore = refusedUntil
             let longest = min(CleanupSalvage.longestRepeatedPhrase, (tokens.count - index) / 2)
-            for length in stride(from: longest, through: 1, by: -1) {
+            for length in stride(from: longest, through: max(1, minimumLength), by: -1) {
                 let unit = Array(keys[index..<(index + length)])
                 guard (index..<(index + length)).allSatisfy(isPlain),
                       Array(keys[(index + length)..<(index + 2 * length)]) == unit else { continue }
@@ -312,7 +317,12 @@ enum WritingStyleEngine {
                 }
                 let removedWords = Array(keys[index..<last])
                 let kept = last..<(last + length)
-                let phraseLength = CleanupSalvage.repeatedPhraseLength(removedWords, following: unit, preceding: [])
+                // English knows which repeats are meant; elsewhere only number
+                // words are ("uno dos uno dos" is counting), and a unit that is
+                // a shorter phrase said twice is matched at that length.
+                let phraseLength = minimumLength > 1
+                    ? otherLanguagePhraseLength(unit)
+                    : CleanupSalvage.repeatedPhraseLength(removedWords, following: unit, preceding: [])
                 let isMeant = phraseLength == nil
                     || !kept.allSatisfy({ !tokens[$0].word.contains(where: \.isUppercase) || keys[$0] == "i" || keys[$0].hasPrefix("i'") })
                 if isMeant {
@@ -336,6 +346,31 @@ enum WritingStyleEngine {
         guard !removals.isEmpty else { return (text, 0) }
         return (removeWordRuns(removals, from: text), removals.count)
     }
+
+    /// For a phrase said twice outside English: its length, or nil when it is
+    /// counting or a shorter phrase said twice.
+    private static func otherLanguagePhraseLength(_ unit: [String]) -> Int? {
+        guard !unit.contains(where: otherLanguageNumberWords.contains) else { return nil }
+        for period in 1..<unit.count where unit.count % period == 0 {
+            let piece = Array(unit.prefix(period))
+            if stride(from: period, to: unit.count, by: period).allSatisfy({ Array(unit[$0..<($0 + period)]) == piece }) {
+                return period
+            }
+        }
+        return unit.count
+    }
+
+    /// Number words in the languages VocaMac's rules know, so counting
+    /// ("probando uno dos uno dos") keeps every copy.
+    private static let otherLanguageNumberWords: Set<String> = [
+        "cero", "uno", "una", "dos", "tres", "cuatro", "cinco", "seis", "siete", "ocho", "nueve", "diez",
+        "zéro", "zero", "un", "une", "deux", "trois", "quatre", "cinq", "six", "sept", "huit", "neuf", "dix",
+        "null", "eins", "ein", "eine", "zwei", "drei", "vier", "fünf", "sechs", "sieben", "acht", "neun", "zehn",
+        "um", "uma", "dois", "duas", "três", "quatro", "sete", "oito", "nove", "dez",
+        "due", "tre", "quattro", "sei", "sette", "otto", "dieci",
+        "ek", "do", "teen", "char", "paanch", "chhe", "saat", "aath", "nau", "das",
+        "ноль", "один", "одна", "два", "две", "три", "четыре", "пять", "шесть", "семь", "восемь", "девять", "десять",
+    ]
 
     /// Small words a sentence never says twice in a row.
     private static let neverDoubled: Set<String> = [
@@ -377,8 +412,12 @@ enum WritingStyleEngine {
     /// In Code and Terminal text these only go when the text reads as
     /// sentences (`readsAsProse`). A missed slip costs a word of polish; a
     /// removed command argument breaks the command, so any doubt keeps it.
+    /// - Parameter fragmentsOnly: Only the rule that needs nothing but the
+    ///   spell checker: a piece that is no word, followed by a word it starts
+    ///   ("por fav favor"). The other rules lean on English word lists, so
+    ///   other languages pass true.
     static func removeCutOffWords(
-        _ text: String, prose: Bool = true, isKnownWord: (String) -> Bool
+        _ text: String, prose: Bool = true, fragmentsOnly: Bool = false, isKnownWord: (String) -> Bool
     ) -> (text: String, removed: Int) {
         guard let wordExpression = cutOffTokenExpression else { return (text, 0) }
         let ns = text as NSString
@@ -411,7 +450,7 @@ enum WritingStyleEngine {
             // "ex extract extracted": each word a longer start of the next.
             // Never from a one-letter word ("cp a an animal" names two
             // files), and in Code and Terminal only in sentences.
-            if sentenceLike, fragment.count >= 2, ahead.count >= 2, isPlainWord(index), isPlainWord(ahead[0]),
+            if !fragmentsOnly, sentenceLike, fragment.count >= 2, ahead.count >= 2, isPlainWord(index), isPlainWord(ahead[0]),
                keys[ahead[1]].allSatisfy(\.isLetter), isKnownWord(keys[ahead[1]]),
                fragment.count < keys[ahead[0]].count, keys[ahead[0]].count < keys[ahead[1]].count,
                keys[ahead[0]].hasPrefix(fragment), keys[ahead[1]].hasPrefix(keys[ahead[0]]) {
@@ -425,7 +464,7 @@ enum WritingStyleEngine {
             // instead after a repeated article, preposition, or pronoun ("the
             // work the workers finished") or when the second is the plural
             // ("big change big changes").
-            if sentenceLike, ahead.count == 3, isPlainWord(index), isPlainWord(ahead[0]),
+            if !fragmentsOnly, sentenceLike, ahead.count == 3, isPlainWord(index), isPlainWord(ahead[0]),
                keys[ahead[1]] == fragment, tokens[ahead[1]].trailing.isEmpty,
                !CleanupSalvage.intentionalRepeats.contains(fragment), !restartFunctionWords.contains(fragment),
                keys[ahead[0]].count >= 3,
@@ -436,7 +475,7 @@ enum WritingStyleEngine {
                 continue
             }
             // "please s see": a letter between two words, starting the second.
-            if sentenceLike, fragment.count == 1, fragment != "x", isPlainWord(index), index > 0,
+            if !fragmentsOnly, sentenceLike, fragment.count == 1, fragment != "x", isPlainWord(index), index > 0,
                let next = ahead.first, tokens[next].word == keys[next], keys[next].count >= 3,
                keys[next].allSatisfy(\.isLetter), !standalone.contains(fragment),
                tokens[index - 1].trailing.isEmpty, !removed.contains(index - 1),
@@ -446,8 +485,9 @@ enum WritingStyleEngine {
                 removed.insert(index)
                 continue
             }
-            guard fragment.count >= 2, token.word == fragment, fragment.allSatisfy(\.isLetter),
-                  fragment.contains(where: { "aeiouy".contains($0) }), !standalone.contains(fragment),
+            guard fragment.count >= (fragmentsOnly ? 3 : 2), token.word == fragment, fragment.allSatisfy(\.isLetter),
+                  fragmentsOnly || fragment.contains(where: { "aeiouy".contains($0) }),
+                  !standalone.contains(fragment),
                   !".!?…".contains(where: token.trailing.contains), !isKnownWord(fragment) else { continue }
             for distance in 1...2 where index + distance < tokens.count {
                 let candidate = tokens[index + distance]
