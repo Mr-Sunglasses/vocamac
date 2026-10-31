@@ -6458,7 +6458,7 @@ extension AppState {
     /// Whether `rules` start sentences with a capital.
     static func capitalizes(_ rules: WritingStyleRules, autoCapitalize: Bool) -> Bool {
         switch rules.capitalization {
-        case .inherit: return autoCapitalize
+        case .inherit, .lowercaseStart: return autoCapitalize
         case .sentences: return true
         case .off: return false
         }
