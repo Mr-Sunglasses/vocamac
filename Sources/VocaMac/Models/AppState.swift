@@ -304,6 +304,7 @@ final class AppState: ObservableObject {
                 recordingVocabulary = nil
                 recordingProcessesWhileSpeaking = false
                 isHandsFreeSession = false
+                endSilentSession()
             }
             if oldValue && !isRecording {
                 audioDucker.restore()
@@ -515,6 +516,17 @@ final class AppState: ObservableObject {
     /// `HotKeyCombo.storageString`, or empty for no shortcut.
     @UserDefault(PreferenceKey.handsFreeShortcut) var handsFreeShortcut: String = ""
     @UserDefault(PreferenceKey.commandModeShortcut) var commandModeShortcut: String = ""
+    /// `HotKeyCombo.storageString`, or empty while Silent Mode is off.
+    @UserDefault(PreferenceKey.silentModeShortcut) var silentModeShortcut: String = ""
+    /// How readily lip movement counts as speech (`ArticulationSensitivity`).
+    @UserDefault(PreferenceKey.silentModeSensitivity) var silentModeSensitivity: Double = ArticulationSensitivity.standard
+    /// While Silent Mode is on, the dictation key records silently too.
+    @UserDefault(PreferenceKey.silentModeUsesDictationKey) var silentModeUsesDictationKey: Bool = false
+    /// The overlay shows the camera picture behind the lip outline. Off by
+    /// default, so a shared screen never shows the user's face.
+    @UserDefault(PreferenceKey.silentModeShowsVideo) var silentModeShowsVideo: Bool = false
+    /// The camera Silent Mode uses; empty for the built-in one.
+    @UserDefault(PreferenceKey.silentModeCameraID) var silentModeCameraID: String = ""
     /// `CommandModeEngine.storageValue`, or empty to pick automatically.
     @UserDefault(PreferenceKey.commandModeEngine) var commandModeEngineStorage: String = ""
     /// Set when the user chose separate models for Smart Cleanup and Command
@@ -695,6 +707,7 @@ final class AppState: ObservableObject {
         let isHandsFree: Bool
         let verifiesShortcut: Bool
         let trigger: DictationTrigger
+        var isSilent = false
     }
     private var queuedRecordingStart: QueuedRecordingStart?
 
@@ -941,6 +954,36 @@ final class AppState: ObservableObject {
     /// Whether the current recording was started with the hands-free
     /// shortcut, so silence ends it the way it ends a double-tap recording.
     private(set) var isHandsFreeSession = false
+
+    /// Set by the Silent Mode shortcut just before it starts a recording;
+    /// the recording that starts next reads the lips (`isSilentSession`).
+    var isSilentSessionRequested = false
+    /// The recording under way is a Silent Mode one: the camera is on and
+    /// what is decoded follows the lips. Set only by
+    /// `beginSilentSessionIfWanted` and `endSilentSession`.
+    @Published var isSilentSession = false
+    /// The silent recording under way was started by the Silent Mode
+    /// shortcut, not the dictation key, so the overlay names that shortcut.
+    var silentSessionStartedByShortcut = false
+    /// When the Silent Mode shortcut went down, while it is held.
+    var silentModePressStartedAt: Date?
+    /// Hold the Silent Mode shortcut at least this long and letting go types;
+    /// a quicker press waits for a second press.
+    var silentModeHoldThreshold: TimeInterval = 0.35
+    /// The camera, the lip frames, and what the overlay draws.
+    let silentMode: SilentModeController
+    /// Presses keys for mouthed commands.
+    let keyPresser: KeyPressPosting
+    let silentCommandStore: SilentCommandStore
+    /// Commands taught on the Silent Mode page.
+    @Published var silentCommands: [SilentCommand] = [] {
+        didSet {
+            guard hasLoadedSilentCommands, silentCommands != oldValue else { return }
+            silentCommandStore.save(silentCommands)
+        }
+    }
+    /// Reading the saved commands at launch isn't a change to write back.
+    var hasLoadedSilentCommands = false
 
     /// True from the end of a recording until its text is delivered. Escape
     /// cancels during this window as well as while recording.
@@ -1200,6 +1243,9 @@ final class AppState: ObservableObject {
         voiceActionPerformer: (any VoiceActionPerforming)? = nil,
         commandReviewPresenter: (any CommandReviewPresenting)? = nil,
         crashReportFinder: CrashReportFinder? = nil,
+        silentCamera: (any CameraLipTracking)? = nil,
+        keyPresser: (any KeyPressPosting)? = nil,
+        silentCommandStore: SilentCommandStore? = nil,
         skipSystemIntegration: Bool = false
     ) {
         self.audioEngine = audioEngine
@@ -1236,6 +1282,12 @@ final class AppState: ObservableObject {
         self.voiceActionPerformer = voiceActionPerformer ?? (skipSystemIntegration ? nil : SystemVoiceActionPerformer())
         self.commandReviewPresenter = commandReviewPresenter
             ?? (skipSystemIntegration ? nil : CommandReviewPanelController())
+        self.silentMode = SilentModeController(
+            camera: silentCamera ?? (skipSystemIntegration ? UnavailableLipTracker() : VisionLipTracker())
+        )
+        self.keyPresser = keyPresser ?? SystemKeyPresser()
+        self.silentCommandStore = silentCommandStore
+            ?? SilentCommandStore(fileURL: skipSystemIntegration ? nil : SilentCommandStore.defaultFileURL)
         self.isKnownWord = { word, language in
             MainActor.assumeIsolated { SpellingOracle.shared.isKnownWord(word, language: language) }
         }
@@ -1246,6 +1298,7 @@ final class AppState: ObservableObject {
         }
         loadSnippets()
         loadDictionary()
+        loadSilentCommands()
         settleLearnModeDefault()
         if !skipSystemIntegration {
             syncLaunchAtLogin()
@@ -1291,6 +1344,12 @@ final class AppState: ObservableObject {
             .store(in: &cancellables)
 
         self.historyStore.objectWillChange
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &cancellables)
+        // Camera permission and the camera list; the live lip state is its
+        // own object and redraws only the views that draw it.
+        silentMode.objectWillChange
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &cancellables)
@@ -1434,7 +1493,9 @@ final class AppState: ObservableObject {
         audioEngine.onSilenceDetected = { [weak self] in
             Task { @MainActor in
                 guard let self = self else { return }
-                if (self.activationMode == .doubleTapToggle || self.isHandsFreeSession) && self.isRecording {
+                // Silent Mode is quiet on purpose; the lips say when it ends.
+                if (self.activationMode == .doubleTapToggle || self.isHandsFreeSession) && self.isRecording
+                    && !self.isSilentSession {
                     VocaLogger.info(.appState, "Silence detected — auto-stopping recording (toggle session)")
                     await self.stopRecordingAndTranscribe()
                 }
@@ -2351,7 +2412,8 @@ final class AppState: ObservableObject {
                     outputDestination: outputDestination,
                     isHandsFree: isHandsFreeSession,
                     verifiesShortcut: verifiesShortcut,
-                    trigger: dictationTrigger
+                    trigger: dictationTrigger,
+                    isSilent: isSilentSessionRequested
                 )
                 VocaLogger.info(.appState, "Dictation requested while the previous one is still finishing — starting when it's delivered")
                 // Push to talk speaks while the key is down; toggle-style
@@ -2497,6 +2559,9 @@ final class AppState: ObservableObject {
                 await self?.warmCleanupModel(for: target, codingAgentTerminal: agentTerminal)
             }
         }
+        // Before the status changes, so the menu bar shows the Silent icon
+        // from the first frame of the recording.
+        beginSilentSessionIfWanted(injectResult: injectResult)
         appStatus = .recording
         liveTranscript = ""
         isRecording = true
@@ -2512,6 +2577,7 @@ final class AppState: ObservableObject {
             cursorOverlay.show(style: overlayStyle, position: overlayPosition)
             cursorOverlay.setStopHint(overlayStopHint)
             cursorOverlay.setCommandSession(commandModeSession)
+            cursorOverlay.setSilentSession(isSilentSession ? silentMode.live : nil)
         }
 
         // Start recording immediately for instant responsiveness.
@@ -2520,7 +2586,9 @@ final class AppState: ObservableObject {
         isStartingAudio = true
         pendingStopDuringStart = nil
         let partialHandler: (@Sendable (String) -> Void)?
-        if overlayStyle == .live {
+        // Silent Mode shows the lips, not live words: partial words would
+        // come from all the audio, including voices the lips didn't speak.
+        if overlayStyle == .live, !isSilentSession {
             partialHandler = { [weak self] text in
                 _ = Task<Void, Never> { @MainActor [weak self] in
                     guard let self, self.isRecording else { return }
@@ -2535,7 +2603,8 @@ final class AppState: ObservableObject {
         // start. A live session would miss that audio, so it is decoded whole.
         let adoptedCapture = earlyCapture
         earlyCapture = nil
-        let commit = adoptedCapture == nil
+        // Silent Mode decodes once, at the stop, only what the lips said.
+        let commit = adoptedCapture == nil && !isSilentSession
             ? commitOptionsForRecording(injectResult: injectResult, generation: generation) : nil
         let session = adoptedCapture == nil ? whisperService.startStreaming(
             language: selectedLanguage == "auto" ? nil : selectedLanguage,
@@ -2903,6 +2972,8 @@ final class AppState: ObservableObject {
         }
         isStoppingAudio = false
         guard generation == recordingGeneration else { return }
+        // Taken now: the camera turns off with the microphone, before the decode.
+        let silentFrames: [LipFrame]? = isSilentSession ? silentMode.finishDictation() : nil
         let session = recordingTranscription
         recordingTranscription = nil
         finishingTranscription = session
@@ -2956,6 +3027,35 @@ final class AppState: ObservableObject {
             return
         }
 
+        // Silent Mode: decode only where the lips moved, run a mouthed
+        // command, or, if the lips never moved, type nothing.
+        var speechRanges: [Range<Int>]?
+        if let silentFrames {
+            switch silentOutcome(frames: silentFrames, audioEnd: stopRequested, sampleCount: audioData.count) {
+            case .command(let command):
+                resetCommandModeState()
+                liveTranscript = ""
+                appStatus = .idle
+                await runSilentCommand(command)
+                return
+            case .decode(let ranges):
+                speechRanges = ranges
+            case .nothingSaid:
+                resetCommandModeState()
+                liveTranscript = ""
+                if injectResult, let id = await beginHistoryEntry(audio: audioData) {
+                    historyStore.markFailed(id, message: Self.silentNothingSaidMessage)
+                }
+                showOverlayFailure("Silent Mode didn't see your lips move.")
+                cursorOverlay.hide()
+                appStatus = .idle
+                showTemporaryError(Self.silentNothingSaidMessage + " The recording is in History if you want to retry it.")
+                return
+            case .asUsual:
+                break
+            }
+        }
+
         appStatus = .processing
         isTranscribing = true
         defer {
@@ -2991,15 +3091,22 @@ final class AppState: ObservableObject {
         // user's own words), so its batch decode starts now instead of after
         // the History write and the screen read.
         let earlyDecode: Task<VocaTranscription, Error>?
-        let decodesWholeRecording = session == nil || session?.language != language
+        let decodesWholeRecording = session == nil || session?.language != language || speechRanges != nil
         if selectedEngine == .sherpaOnnx, decodesWholeRecording {
             let vocabulary = Self.recognitionVocabulary(
                 customVocabulary, replacementTargets: replacementTargets, contextTerms: []
             )
             let transcriber = whisperService
             let translate = translatesSpeech
+            let ranges = speechRanges
             earlyDecode = Task {
-                try await transcriber.transcribe(
+                if let ranges {
+                    return try await transcriber.transcribe(
+                        audioData: audioData, language: language, translate: translate, vocabulary: vocabulary,
+                        keeping: ranges
+                    )
+                }
+                return try await transcriber.transcribe(
                     audioData: audioData, language: language, translate: translate, vocabulary: vocabulary
                 )
             }
@@ -3032,7 +3139,7 @@ final class AppState: ObservableObject {
             let pieceVocabularyMatches = liveVocabulary?.servedOnly(recognitionVocabulary) ?? false
             let contextNeedsWhisperBatch = selectedEngine == .whisperKit
                 && ((!contextTerms.isEmpty && !pieceVocabularyMatches) || translatesSpeech)
-            if let session, session.language == language, !contextNeedsWhisperBatch {
+            if let session, session.language == language, !contextNeedsWhisperBatch, speechRanges == nil {
                 do {
                     result = try await session.finish(expectedSampleCount: audioData.count)
                 } catch RecordingTranscription.StreamError.timedOut {
@@ -3056,6 +3163,12 @@ final class AppState: ObservableObject {
                 } onCancel: {
                     earlyDecode.cancel()
                 }
+            } else if let speechRanges {
+                session?.cancel()
+                result = try await whisperService.transcribe(
+                    audioData: audioData, language: language,
+                    translate: translatesSpeech, vocabulary: recognitionVocabulary, keeping: speechRanges
+                )
             } else {
                 session?.cancel()
                 result = try await whisperService.transcribe(
@@ -3966,7 +4079,7 @@ final class AppState: ObservableObject {
     /// unseen. Shown with the overlay style Off too: a failure nobody sees
     /// looks like the hotkey did nothing. Always returns true.
     @discardableResult
-    private func showOverlayFailure(_ message: String) -> Bool {
+    func showOverlayFailure(_ message: String) -> Bool {
         cursorOverlay.showFailure(message: message)
         DictationAnnouncement.post(message)
         return true
@@ -4032,6 +4145,7 @@ final class AppState: ObservableObject {
         let releasedAt = earlyCapture?.releasedAtSampleCount
         VocaLogger.info(.appState, "Previous dictation delivered — starting the queued one")
         if queued.isHandsFree { isHandsFreeSession = true }
+        if queued.isSilent { isSilentSessionRequested = true }
         dictationTrigger = queued.trigger
         defer { dictationTrigger = .other }
         await startRecording(
@@ -4039,6 +4153,7 @@ final class AppState: ObservableObject {
             verifiesShortcut: queued.verifiesShortcut
         )
         if queued.isHandsFree && !isRecording { isHandsFreeSession = false }
+        if !isRecording { isSilentSessionRequested = false }
         // Its key already came up: finish it now, with only the audio from
         // while the key was down.
         if let releasedAt, isCapturingAudio {
@@ -4066,7 +4181,7 @@ final class AppState: ObservableObject {
         showTemporaryError(message)
     }
 
-    private func showTemporaryError(_ message: String, duration: TimeInterval = 5.0) {
+    func showTemporaryError(_ message: String, duration: TimeInterval = 5.0) {
         errorMessage = message
         // Set here as well as on the status change, for an error that
         // follows another before the first one cleared.
@@ -5149,6 +5264,9 @@ extension AppState {
         if let commandMode {
             shortcuts[.commandMode] = commandMode
         }
+        if let combo = HotKeyCombo(storageString: silentModeShortcut) {
+            shortcuts[.silentMode] = combo
+        }
         // Saved commands are part of Command Mode: while it is off (no
         // shortcut), their shortcuts are off too. Turning it on restores them.
         for command in savedCommands where command.isUsable && commandMode != nil {
@@ -5179,6 +5297,7 @@ extension AppState {
         case .pasteLastDictation: return HotKeyCombo(storageString: pasteLastShortcut)
         case .handsFreeToggle: return HotKeyCombo(storageString: handsFreeShortcut)
         case .commandMode: return HotKeyCombo(storageString: commandModeShortcut)
+        case .silentMode: return HotKeyCombo(storageString: silentModeShortcut)
         case .savedCommand(let id):
             return savedCommands.first { $0.id == id }.flatMap { HotKeyCombo(storageString: $0.shortcut) }
         }
@@ -5190,6 +5309,7 @@ extension AppState {
         case .pasteLastDictation: pasteLastShortcut = stored
         case .handsFreeToggle: handsFreeShortcut = stored
         case .commandMode: commandModeShortcut = stored
+        case .silentMode: silentModeShortcut = stored
         case .savedCommand(let id):
             var commands = savedCommands
             guard let index = commands.firstIndex(where: { $0.id == id }) else { return }
@@ -5226,12 +5346,18 @@ extension AppState {
                     commandModePressStartedAt = nil
                 }
             }
+        case .silentMode:
+            await handleSilentModePress()
         case .savedCommand(let id):
             await runSavedCommand(id)
         }
     }
 
     func handleShortcutReleased(_ action: HotKeyShortcutAction) async {
+        if action == .silentMode {
+            await handleSilentModeRelease()
+            return
+        }
         guard action == .commandMode,
               let startedAt = commandModePressStartedAt else { return }
         commandModePressStartedAt = nil

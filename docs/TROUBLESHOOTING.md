@@ -41,6 +41,16 @@ This is **not a bug in VocaMac** and there is nothing wrong with your install. T
 After one successful check, VocaMac caches the response's `ETag` and sends it as `If-None-Match` on every subsequent request. GitHub then replies with `304 Not Modified`, which **does not count against the rate limit**, so future checks succeed even from a rate-limited IP — until a new release ships and the ETag changes (at which point one fresh `200` response per machine is needed before `304`s resume).
 
 
+## Silent Mode doesn't type anything
+
+Silent Mode decodes only the stretches where the camera saw your lips move. If it says it "didn't see your lips move":
+
+1. Open **Settings › Silent Mode** and press **Start preview**. Your lips' outline should appear and the bar should fill as you mouth words.
+2. Face the camera with your mouth in view. A face turned more than about 35° away, a backlit window, or a very small face in the picture is not read.
+3. Raise **Sensitivity** if you mouth words subtly.
+
+With History on, the recording is kept there, so you can retry it from the menu bar. If the camera is unavailable, Silent Mode says so in the overlay and the recording is transcribed as an ordinary dictation. Camera access is under **System Settings › Privacy & Security › Camera**.
+
 ## Permissions keep resetting on source builds
 
 Release builds of VocaMac are **Developer ID signed and notarized** by Apple. Accessibility and Input Monitoring permissions persist across updates — no manual re-granting required.

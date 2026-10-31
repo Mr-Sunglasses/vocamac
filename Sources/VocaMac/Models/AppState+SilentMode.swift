@@ -1,0 +1,290 @@
+// AppState+SilentMode.swift
+// VocaMac
+//
+// Silent Mode: dictate in a whisper, or mouth a short command, with the
+// camera reading the lips. Its own shortcut (hold it, or press it and press
+// again), so the dictation key keeps working as before. The camera is on
+// only while a Silent Mode recording runs.
+
+import Foundation
+
+/// What a Silent Mode recording turns into, decided at the stop.
+enum SilentOutcome: Equatable {
+    /// One short mouthed word that matched a taught command.
+    case command(SilentCommand)
+    /// Decode these sample ranges: where the lips moved, and anything the camera missed.
+    case decode([Range<Int>])
+    /// The camera watched still lips throughout; type nothing.
+    case nothingSaid
+    /// The camera couldn't judge; decode as an ordinary dictation.
+    case asUsual
+}
+
+extension AppState {
+
+    static let silentNothingSaidMessage = "Silent Mode didn't see your lips move, so nothing was typed. Face the camera, or raise Sensitivity in Settings › Silent Mode."
+
+    // MARK: On and off
+
+    /// Silent Mode is on while it has a shortcut, like Command Mode.
+    var isSilentModeOn: Bool { shortcut(for: .silentMode) != nil }
+
+    /// Where the switch remembers the keys it turned off.
+    static let silentModeLastShortcutKey = "calm.silentMode.lastShortcut"
+
+    /// Turn Silent Mode off (clearing and remembering its shortcut) or on
+    /// (restoring the remembered keys, else the suggested ones), asking for
+    /// camera access the first time.
+    ///
+    /// - Returns: False when it couldn't turn on because no keys are free;
+    ///   the page then opens the recorder.
+    @discardableResult
+    func setSilentModeOn(_ isOn: Bool, defaults: UserDefaults = .standard) -> Bool {
+        if !isOn {
+            if let current = shortcut(for: .silentMode) {
+                defaults.set(current.storageString, forKey: Self.silentModeLastShortcutKey)
+            }
+            setShortcut(nil, for: .silentMode)
+            return true
+        }
+        guard !isSilentModeOn else { return true }
+        guard let candidate = silentModeOnCandidate(defaults: defaults) else { return false }
+        setShortcut(candidate, for: .silentMode)
+        Task { await silentMode.requestPermission() }
+        return true
+    }
+
+    /// The keys turning Silent Mode on would use: the ones the switch turned
+    /// off, while still free, else the suggested ones.
+    func silentModeOnCandidate(defaults: UserDefaults = .standard) -> HotKeyCombo? {
+        let remembered = defaults.string(forKey: Self.silentModeLastShortcutKey).flatMap(HotKeyCombo.init(storageString:))
+        return remembered.flatMap { combo in
+            ShortcutValidation.problem(with: combo, action: .silentMode, appState: self) == nil ? combo : nil
+        } ?? ShortcutValidation.suggestion(for: .silentMode, appState: self)
+    }
+
+    /// The shortcut as menus write it ("⌃⌥⌘S"), or nil while off.
+    var silentModeShortcutText: String? {
+        shortcut(for: .silentMode).map { CalmKeyCaps.compactText(for: $0) }
+    }
+
+    /// Push the Silent Mode settings to the camera side.
+    func syncSilentModeSettings() {
+        silentMode.sensitivity = ArticulationSensitivity.clamped(silentModeSensitivity)
+        silentMode.cameraID = silentModeCameraID.isEmpty ? nil : silentModeCameraID
+        silentMode.live.showsVideo = silentModeShowsVideo
+        silentMode.stillTimeout = SilenceDetectionSettings.clampedDuration(silenceDuration)
+        silentMode.onLipsStill = { [weak self] in
+            Task { @MainActor [weak self] in await self?.silentLipsWentStill() }
+        }
+    }
+
+    // MARK: The shortcut
+
+    /// The Silent Mode shortcut went down: start a silent recording, or end
+    /// the one a quick press started.
+    func handleSilentModePress() async {
+        if isCapturingAudio || isLoadingModelForRecording {
+            // Another press while a silent recording runs finishes it. A
+            // dictation started some other way is left alone.
+            guard isSilentSession || isLoadingModelForRecording else { return }
+            silentModePressStartedAt = nil
+            await stopRecordingAndTranscribe()
+            return
+        }
+        silentModePressStartedAt = Date()
+        isSilentSessionRequested = true
+        await startRecording()
+        // Queued behind a dictation still finishing carries the request in
+        // the queue; anything else that didn't start drops it.
+        // The press time stays: letting go then still ends a queued one.
+        if !isRecording { isSilentSessionRequested = false }
+    }
+
+    /// The Silent Mode shortcut came up. After a hold, the recording is
+    /// typed; after a quick press it carries on until the next press.
+    func handleSilentModeRelease() async {
+        guard let startedAt = silentModePressStartedAt else { return }
+        silentModePressStartedAt = nil
+        guard Date().timeIntervalSince(startedAt) >= silentModeHoldThreshold else {
+            VocaLogger.debug(.silentMode, "Silent Mode quick press — waiting for a second press")
+            cursorOverlay.setStopHint(overlayStopHint)
+            return
+        }
+        await stopRecordingAndTranscribe()
+    }
+
+    /// The overlay's hint while a silent recording started by its shortcut
+    /// runs: let go of it, or press it again.
+    var silentStopHint: OverlayStopHint? {
+        guard isSilentSession, silentSessionStartedByShortcut, let keys = silentModeShortcutText else { return nil }
+        return silentModePressStartedAt != nil ? .hold(key: keys) : .press(key: keys)
+    }
+
+    // MARK: Session
+
+    /// At the start of a recording: make it a silent one when the Silent
+    /// Mode shortcut asked, or when the dictation key records silently too.
+    /// Never for Command Mode, which edits a selection by voice.
+    func beginSilentSessionIfWanted(injectResult: Bool) {
+        let requested = isSilentSessionRequested
+        isSilentSessionRequested = false
+        let viaDictationKey = silentModeUsesDictationKey && isSilentModeOn && injectResult
+            && [.dictationKey, .mouseButton].contains(dictationTrigger)
+        guard requested || viaDictationKey, commandModeSession == nil else { return }
+        syncSilentModeSettings()
+        silentSessionStartedByShortcut = requested
+        isSilentSession = true
+        silentMode.beginDictation()
+        VocaLogger.info(.silentMode, "Silent Mode recording started (\(requested ? "shortcut" : "dictation key"))")
+    }
+
+    /// Every way a recording ends comes through here (from `isRecording`):
+    /// the camera goes off with the microphone.
+    func endSilentSession() {
+        guard isSilentSession else { return }
+        if silentMode.isDictating { _ = silentMode.finishDictation() }
+        isSilentSession = false
+        silentSessionStartedByShortcut = false
+        cursorOverlay.setSilentSession(nil)
+    }
+
+    /// The lips have been still for the silence timeout in a recording that
+    /// doesn't end on a key-up: stop it, as silence stops a toggle dictation.
+    func silentLipsWentStill() async {
+        guard isSilentSession, isRecording else { return }
+        let isToggleLike = silentSessionStartedByShortcut
+            ? silentModePressStartedAt == nil
+            : activationMode == .doubleTapToggle || isHandsFreeSession
+        guard isToggleLike else { return }
+        VocaLogger.info(.silentMode, "Lips still — stopping the silent recording")
+        await stopRecordingAndTranscribe()
+    }
+
+    // MARK: Outcome
+
+    /// Decide what a silent recording becomes, from its lip frames.
+    func silentOutcome(frames: [LipFrame], audioEnd: TimeInterval, sampleCount: Int) -> SilentOutcome {
+        let sensitivity = ArticulationSensitivity.clamped(silentModeSensitivity)
+        let timeline = ArticulationDetector.timeline(for: frames, sensitivity: sensitivity)
+        VocaLogger.info(.silentMode, String(
+            format: "Silent recording: %d frames, %.1fs with lips in view, %d stretches of movement; rest %.4f, threshold %.4f, peak %.4f",
+            frames.count, timeline.coveredSeconds, timeline.active.count, timeline.floor, timeline.threshold, timeline.peak
+        ))
+
+        if let burst = SilentSpeechGate.commandFrames(frames, timeline: timeline),
+           let command = matchSilentCommand(LipSequence.features(burst)) {
+            return .command(command)
+        }
+
+        switch SilentSpeechGate.decide(timeline: timeline, audioEnd: audioEnd, sampleCount: sampleCount) {
+        case .speech(let ranges):
+            let kept = ranges.reduce(0) { $0 + $1.count }
+            VocaLogger.info(.silentMode, "Decoding \(kept) of \(sampleCount) samples, where the lips moved or the camera couldn't see")
+            return .decode(ranges)
+        case .noArticulation:
+            VocaLogger.info(.silentMode, "No lip movement in a recording the camera watched; nothing decoded")
+            return .nothingSaid
+        case .notJudged(let reason):
+            VocaLogger.info(.silentMode, "Decoding as usual: \(reason)")
+            return .asUsual
+        }
+    }
+
+    /// The taught command `features` match, when the match is clear.
+    func matchSilentCommand(_ features: [[Double]]) -> SilentCommand? {
+        let ready = silentCommands.filter(\.isReady)
+        guard !features.isEmpty, let matcher = LipCommandMatcher(commands: ready) else { return nil }
+        let match = matcher.match(features)
+        guard let best = match.best else { return nil }
+        let name = ready.first { $0.id == best.commandID }?.action.title ?? "?"
+        VocaLogger.info(.silentMode, String(
+            format: "Silent command match: %@ at %.3f (limit %.3f), margin %.2f — %@",
+            name, best.distance, matcher.maximumDistance, match.margin, match.isAccepted ? "running it" : "not sure, dictating"
+        ))
+        guard match.isAccepted else { return nil }
+        return ready.first { $0.id == best.commandID }
+    }
+
+    // MARK: Commands
+
+    /// Show what was recognised, then do it.
+    func runSilentCommand(_ command: SilentCommand) async {
+        silentMode.live.recognizedCommand = command.action.chip
+        cursorOverlay.showDone(message: command.action.chip)
+        // Long enough to read before keys are pressed in the document.
+        try? await Task.sleep(for: .milliseconds(600))
+        await performSilentAction(command.action)
+        silentMode.live.recognizedCommand = nil
+    }
+
+    func performSilentAction(_ action: SilentCommandAction) async {
+        VocaLogger.info(.silentMode, "Silent command: \(action.title)")
+        switch action {
+        case .pressReturn: keyPresser.press(.returnKey)
+        case .newLine: keyPresser.press(.shiftReturn)
+        case .undo: keyPresser.press(.undo)
+        case .tab: keyPresser.press(.tab)
+        case .escape: keyPresser.press(.escape)
+        case .deleteWord: keyPresser.press(.optionDelete)
+        case .pasteLastDictation: pasteLastDictation()
+        case .runShortcut(let name):
+            guard let voiceActionPerformer else { return }
+            switch VoiceActionPolicy.permitted(.runShortcut(name), allowedShortcuts: allowedVoiceShortcuts) {
+            case .failure(let error):
+                showOverlayFailure(error.message)
+            case .success(let permitted):
+                if case .failure(let error) = await voiceActionPerformer.perform(permitted, input: nil) {
+                    showOverlayFailure(error.message)
+                }
+            }
+        }
+    }
+
+    // MARK: Teaching
+
+    func loadSilentCommands() {
+        hasLoadedSilentCommands = false
+        silentCommands = silentCommandStore.load()
+        hasLoadedSilentCommands = true
+    }
+
+    /// The feature take for frames recorded while teaching, or nil when the
+    /// lips didn't move in them.
+    func silentTake(from frames: [LipFrame]) -> LipTake? {
+        let sensitivity = ArticulationSensitivity.clamped(silentModeSensitivity)
+        guard let burst = SilentSpeechGate.takeFrames(frames, sensitivity: sensitivity) else { return nil }
+        let features = LipSequence.features(burst)
+        return features.count >= 4 ? LipTake(frames: features) : nil
+    }
+
+    /// Save a taught command: replace the one with `id`, or add a new one.
+    func saveSilentCommand(id: UUID?, action: SilentCommandAction, word: String, takes: [LipTake]) {
+        let kept = Array(takes.suffix(SilentCommand.maximumTakes))
+        var commands = silentCommands
+        if let id, let index = commands.firstIndex(where: { $0.id == id }) {
+            commands[index].action = action
+            commands[index].word = word
+            commands[index].takes = kept
+        } else {
+            commands.append(SilentCommand(action: action, word: word, takes: kept))
+        }
+        silentCommands = commands
+        VocaLogger.info(.silentMode, "Taught a silent command: \(action.title), \(kept.count) takes")
+    }
+
+    func deleteSilentCommand(_ id: UUID) {
+        silentCommands.removeAll { $0.id == id }
+    }
+
+    func deleteAllSilentCommands() {
+        silentCommands = []
+    }
+
+    /// Actions not yet taught, for the teach dialog.
+    var untaughtSilentActions: [SilentCommandAction] {
+        let taught = Set(silentCommands.map(\.action))
+        let shortcuts = allowedVoiceShortcuts.map(SilentCommandAction.runShortcut)
+        return (SilentCommandAction.builtIn + shortcuts).filter { !taught.contains($0) }
+    }
+}

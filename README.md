@@ -76,6 +76,7 @@ The Tiny Whisper model is built in, so you can dictate right away. VocaMac sugge
 - Writing styles per app or website: email, chat, notes, code, terminal.
 - Cleanup removes "um", false starts, and changes of mind ("let's meet tomorrow, sorry, no, let's meet Friday" → "let's meet Friday", "scratch that") with on-device rules, and a small on-device model tidies the rest.
 - Command Mode: select text and say what to change ("make this shorter", "translate to Spanish").
+- Silent Mode (alpha): hold its own shortcut and whisper or mouth your words. The camera reads your lips, so only what you said is typed in a noisy office, and a mouthed word like "send" can press Return. The camera is on only while Silent Mode records, and no picture is kept.
 
 **And more**
 - Transcribe audio and video files, or record system audio.
