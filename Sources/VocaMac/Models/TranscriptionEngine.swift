@@ -31,6 +31,9 @@ enum PreferenceKey {
     static let writingStyleEnabled = "vocamac.writingStyle.enabled"
     static let writingStyleDefault = "vocamac.writingStyle.defaultStyle"
     static let writingStyleBindings = "vocamac.writingStyle.bindings"
+    /// Bool: apps VocaMac knows get their kind's style until the user gives
+    /// them one (`WritingStyleResolver.automaticStyle`).
+    static let automaticWritingStyles = "vocamac.writingStyle.automatic"
     static let writingIntent = "vocamac.writingStyle.intent"
     static let writingRewriteEnabled = "vocamac.writingStyle.experimentalRewrite"
     static let duckOtherAudioEnabled = "vocamac.duckOtherAudio.enabled"

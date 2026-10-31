@@ -68,6 +68,22 @@ enum SettingsConsistency {
     static func normalize(defaults: UserDefaults) {
         normalizeLanguages(defaults: defaults)
         normalizeSound(defaults: defaults)
+        normalizeAutomaticStyles(defaults: defaults)
+    }
+
+    /// Automatic styles (known apps get their kind's style without a rule)
+    /// arrived after styles shipped inert. An install that already set
+    /// styles up chose how its apps without a rule come out, so it keeps
+    /// that; everyone else gets automatic styles. Decided once, on the first
+    /// launch that has the setting, and stored so a style set up later
+    /// doesn't turn it off.
+    static func normalizeAutomaticStyles(defaults: UserDefaults) {
+        guard defaults.object(forKey: PreferenceKey.automaticWritingStyles) == nil else { return }
+        let configuredStyles = [
+            PreferenceKey.writingStyleBindings, PreferenceKey.writingStyleDefault,
+            PreferenceKey.websiteStyleBindings, CalmStyleGroupStore.defaultsKey,
+        ].contains { defaults.object(forKey: $0) != nil }
+        defaults.set(!configuredStyles, forKey: PreferenceKey.automaticWritingStyles)
     }
 
     /// A recognition language pinned in Settings → Language that isn't among

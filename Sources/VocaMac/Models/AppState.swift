@@ -475,6 +475,11 @@ final class AppState: ObservableObject {
     /// whose sandbox can't read another app's processes.
     @UserDefault(PreferenceKey.codingAgentsAsProse) var codingAgentsAsProse: Bool = true
     @UserDefault(PreferenceKey.writingStyleDefault) var writingStyleDefault: WritingStyle = .plain
+    /// Apps VocaMac knows (Slack, Mail, code editors, terminals, note apps)
+    /// get their kind's style until the user gives them a rule. On for new
+    /// installs; an install that already set up styles keeps its old
+    /// behaviour (`SettingsConsistency.normalizeAutomaticStyles`).
+    @UserDefault(PreferenceKey.automaticWritingStyles) var automaticWritingStyles: Bool = true
     @UserDefault(PreferenceKey.writingIntent) var writingIntent: WritingIntent = .preserve
     @UserDefault(PreferenceKey.writingRewriteEnabled) var writingRewriteEnabled: Bool = false
     @UserDefault(PreferenceKey.transcriptCleanupEnabled) var transcriptCleanupEnabled: Bool = false
@@ -1945,7 +1950,12 @@ final class AppState: ObservableObject {
             bindings: writingStyleBindings,
             defaultStyle: writingStyleDefault,
             isEnabled: writingStyleEnabled,
-            defaultIntent: writingIntent
+            defaultIntent: writingIntent,
+            automatic: automaticWritingStyles ? { [self] app in
+                WritingStyleResolver.automaticStyle(for: app) { group in
+                    group == .everythingElse ? writingStyleDefault : calmStyleGroupStore.style(for: group)
+                }
+            } : nil
         )
         let resolved = WritingStyleResolver.applyingWebsiteRule(
             appRule, url: documentURL, bindings: websiteStyleBindings
@@ -2037,6 +2047,12 @@ final class AppState: ObservableObject {
             VocaLogger.warning(.appState, "Cannot clear writing style: no target app")
             showTemporaryError("No app to clear — switch to the app you want to reset, then try again.")
             return nil
+        }
+        // A known app without a rule follows its kind (automatic styles), so
+        // removing the rule wouldn't give it the default style: save the
+        // default style for it instead.
+        if automaticWritingStyles, WritingStyleCatalog.suggestion(matching: target) != nil {
+            return bindFrontmostApp(to: writingStyleDefault)
         }
         let bindings = writingStyleBindings
         let remaining = bindings.filter { !$0.matches(target) }

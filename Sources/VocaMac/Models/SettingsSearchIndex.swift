@@ -161,6 +161,13 @@ enum SettingsSearchIndex {
             keywords: ["default", "style", "plain", "fallback", "style everywhere else"]
         ),
         SettingsSearchEntry(
+            id: "automatic-styles",
+            page: .writingStyles,
+            title: "Match apps automatically",
+            subtitle: "Known apps get their kind's style until you pick one",
+            keywords: ["automatic", "auto", "slack", "mail", "editor", "terminal", "notes", "known apps", "plain everywhere"]
+        ),
+        SettingsSearchEntry(
             id: "coding-agents",
             page: .writingStyles,
             title: "Treat coding agents in terminals as prose",

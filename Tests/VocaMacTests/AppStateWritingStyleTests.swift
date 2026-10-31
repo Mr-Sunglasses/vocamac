@@ -24,7 +24,8 @@ final class AppStateWritingStyleTests: XCTestCase {
             PreferenceKey.appendTrailingSpace,
             PreferenceKey.autoCapitalize,
             PreferenceKey.numbersAsDigits,
-            PreferenceKey.spokenEmoji
+            PreferenceKey.spokenEmoji,
+            PreferenceKey.automaticWritingStyles
         ] {
             UserDefaults.standard.removeObject(forKey: key)
         }
@@ -126,6 +127,7 @@ final class AppStateWritingStyleTests: XCTestCase {
     func testSpokenEmojiAndDigitsAreOptInAndReachTheInjectedText() async {
         let (appState, mocks) = AppState.makeTestState()
         appState.appendTrailingSpace = false
+        appState.automaticWritingStyles = false
         mocks.frontmostAppResolver.frontmostApp = cursor
         XCTAssertFalse(appState.numbersAsDigits)
         XCTAssertFalse(appState.spokenEmoji)
@@ -145,6 +147,7 @@ final class AppStateWritingStyleTests: XCTestCase {
         let (appState, mocks) = AppState.makeTestState()
         appState.writingStyleEnabled = true
         appState.writingStyleDefault = .plain
+        appState.automaticWritingStyles = false
         appState.autoCapitalize = true
         appState.appendTrailingSpace = false
         mocks.frontmostAppResolver.frontmostApp = cursor
@@ -152,6 +155,35 @@ final class AppStateWritingStyleTests: XCTestCase {
         await dictate("readme.md was updated", on: appState, mocks: mocks)
 
         XCTAssertEqual(mocks.textInjector.lastInjectedText, "Readme.md was updated")
+    }
+
+    // MARK: - Automatic styles
+
+    /// A new install formats a known app for its kind with no rule at all.
+    func testAKnownAppWithoutARuleGetsItsKindsStyle() async {
+        let (appState, mocks) = AppState.makeTestState()
+        appState.appendTrailingSpace = false
+        XCTAssertTrue(appState.automaticWritingStyles)
+        XCTAssertTrue(appState.writingStyleBindings.isEmpty)
+        mocks.frontmostAppResolver.frontmostApp = cursor
+
+        await dictate("open config dot json", on: appState, mocks: mocks)
+
+        XCTAssertEqual(mocks.textInjector.lastInjectedText, "open config.json")
+        XCTAssertTrue(appState.activeWritingStyle.isAutomatic)
+        XCTAssertEqual(appState.activeWritingStyle.displayName, "Code · automatic")
+    }
+
+    func testUseMyDefaultStyleOnAnAutomaticAppSavesTheDefaultForIt() {
+        let (appState, mocks) = AppState.makeTestState()
+        mocks.frontmostAppResolver.frontmostApp = cursor
+        appState.writingStyleDefault = .plain
+
+        XCTAssertEqual(appState.unbindFrontmostApp(), "Cursor")
+        XCTAssertEqual(appState.writingStyleBindings.map(\.style), [.plain])
+        appState.refreshActiveWritingStyle()
+        XCTAssertEqual(appState.activeWritingStyle.style, .plain)
+        XCTAssertFalse(appState.activeWritingStyle.isAutomatic)
     }
 
     // MARK: - Resolution drives injection
@@ -483,6 +515,7 @@ final class AppStateWritingStyleTests: XCTestCase {
         // style too, and follows the user to the next app.
         let (appState, mocks) = AppState.makeTestState()
         appState.writingStyleEnabled = true
+        appState.automaticWritingStyles = false
         let discord = RunningAppSnapshot(displayName: "Discord", bundleIdentifier: "com.hnc.Discord", processName: "Discord")
         mocks.frontmostAppResolver.frontmostApp = discord
 
@@ -535,6 +568,7 @@ final class AppStateWritingStyleTests: XCTestCase {
 
     func testUnbindFrontmostAppRemovesTheRule() {
         let (appState, mocks) = AppState.makeTestState()
+        appState.automaticWritingStyles = false
         mocks.frontmostAppResolver.frontmostApp = cursor
         appState.writingStyleBindings = [AppStyleBinding.from(snapshot: cursor, style: .code)]
 
@@ -544,6 +578,7 @@ final class AppStateWritingStyleTests: XCTestCase {
 
     func testUnbindWithNoRuleIsHarmless() {
         let (appState, mocks) = AppState.makeTestState()
+        appState.automaticWritingStyles = false
         mocks.frontmostAppResolver.frontmostApp = cursor
 
         XCTAssertEqual(appState.unbindFrontmostApp(), "Cursor")
