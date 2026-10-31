@@ -486,37 +486,47 @@ struct DictationOutputPipeline {
         // own terms and snippet triggers count as real words, so a term is
         // never a fragment.
         var removedCutOffWords = 0
-        if profile.cleanup == .inherit, effectiveLevel.removesHesitations, isEnglishText {
+        // Other languages need their own spell checker, so only a known
+        // language other than English; one the Mac has no checker for counts
+        // every piece as a word, which removes nothing.
+        let cutOffLanguage = isEnglishText ? "en" : Self.knownLanguage(options.language)
+        if profile.cleanup == .inherit, effectiveLevel.removesHesitations, let cutOffLanguage {
             let terms = (options.dictionary?.vocabulary ?? []) + (options.dictionary?.contextTerms ?? [])
                 + (options.dictionary?.replacements ?? []).flatMap { [$0.heard, $0.replacement] }
                 + options.snippetList.map(\.trigger)
             let vocabulary = Set(terms.flatMap { $0.lowercased().split(whereSeparator: { !$0.isLetter }).map(String.init) })
-            let isKnownWord = options.dictionary?.isKnownWord ?? { SpellingOracle.shared.isKnownWord($0, language: "en") }
+            let isKnownWord = options.dictionary?.isKnownWord
+                ?? { SpellingOracle.shared.isKnownWord($0, language: cutOffLanguage) }
             (input, removedCutOffWords) = WritingStyleEngine.removeCutOffWords(
-                input, prose: profile.format.supportsWording,
+                input, prose: profile.format.supportsWording, fragmentsOnly: !isEnglishText,
                 isKnownWord: { vocabulary.contains($0) || isKnownWord($0) }
             )
         }
 
         // "you can see you can see", "the the": a phrase said twice in a row.
-        // Rule-based and English only, like cut-off words, because the
-        // phrases it leaves alone ("no no no", "thank you, thank you") are
-        // English ones. Prose only: in Code and Terminal a repeated word may
-        // be a command argument.
+        // Single words only in English, whose lists know which doubles are
+        // meant ("no no no", "very very"); in other languages a phrase of two
+        // or more words ("vamos a vamos a comer"). Prose only: in Code and
+        // Terminal a repeated word may be a command argument.
         var removedRepeats = 0
-        if profile.cleanup == .inherit, effectiveLevel.removesHesitations, isEnglishText,
-           profile.format.supportsWording {
-            (input, removedRepeats) = WritingStyleEngine.removeRepeatedPhrases(input)
+        if profile.cleanup == .inherit, effectiveLevel.removesHesitations, profile.format.supportsWording {
+            (input, removedRepeats) = WritingStyleEngine.removeRepeatedPhrases(
+                input, minimumLength: isEnglishText ? 1 : 2
+            )
         }
 
-        // "let's do it tomorrow, oh, no, Wednesday" → "let's do it Wednesday".
-        // Rule-based, so like hesitation removal it runs without a model, at
-        // Medium and High, and in any language the resolver knows. Prose
-        // only: a correction replaces words, and Code and Terminal text is
-        // only ever trimmed of filler.
+        // "let's do it tomorrow, oh, no, Wednesday" → "let's do it Wednesday",
+        // then the corrections proved by the sentence's shape: "let's meet
+        // tomorrow, sorry, let's meet yesterday" → "let's meet yesterday",
+        // "…, scratch that, …". Rule-based, so like hesitation removal it runs
+        // without a model, at Medium and above, and in any language the
+        // resolvers know. Prose only: a correction replaces words, and Code
+        // and Terminal text is only ever trimmed of filler.
         var resolvedCorrections = 0
         if profile.cleanup == .inherit, effectiveLevel.removesHesitations, profile.format.supportsWording {
-            (input, resolvedCorrections) = SpokenCorrectionResolver.resolveCounting(input)
+            let typed = SpokenCorrectionResolver.resolveCounting(input)
+            let shaped = ChangeOfMindResolver.resolveCounting(typed.text, matchesWordClasses: isEnglishText)
+            (input, resolvedCorrections) = (shaped.text, typed.count + shaped.count)
         }
         var protectedTerms: [Snippet] = []
         if let dictionary = options.dictionary, !dictionary.isEmpty {
