@@ -367,7 +367,7 @@ final class SherpaLiveSessionTests: XCTestCase {
         RecordingTranscription(language: "en", bufferLimit: 10_000) { chunks in
             try await TranscriptionRouter.runSherpaLiveSession(
                 chunks: chunks, windowSamples: windowSamples, language: "en", model: .canary180mFlash,
-                speechOnly: speechOnly,
+                speechOnly: { await speechOnly($0).map { SpeechOnlyAudio(samples: $0) } },
                 decode: { samples, isPreview in await decoder.decode(samples, isPreview: isPreview) },
                 onPartial: { partials.append($0) }
             )
