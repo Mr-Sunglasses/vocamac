@@ -318,7 +318,10 @@ enum CalmModelPicks {
         let codes = languages.filter { $0 != "auto" }
         let covering = models.map(\.size).filter { size in
             guard let model = models.first(where: { $0.size == size }) else { return false }
+            // Canary and Cohere decode every recording in the one language
+            // they load with, so they only suit someone who speaks one.
             return model.isSupported && !size.isRemotelyHosted && !size.isLegacy
+                && (!size.needsOneLanguage || codes.count == 1)
                 && ModelPickerCatalog.fit(of: size, for: codes, systemLanguages: systemLanguages).coversAll
         }
         let fitting = covering.filter { size in

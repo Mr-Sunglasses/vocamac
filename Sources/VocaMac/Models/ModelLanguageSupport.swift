@@ -158,9 +158,9 @@ extension ModelSize {
         case .moonshineBase:             return "A small English model, more accurate than Moonshine Tiny."
         case .senseVoiceSmall:           return "Chinese, Cantonese, English, Japanese, and Korean."
         case .gigaamV3:                  return "A Russian specialist that adds punctuation."
-        case .canary180mFlash:           return "English, Spanish, German, and French in a compact model."
+        case .canary180mFlash:           return "English, Spanish, German, or French, one at a time, in a compact model."
         case .qwen3Asr06B:               return "30 languages, including Hindi, Arabic, and Thai."
-        case .cohereTranscribe:          return "14 languages, and the most accurate model in VocaMac's tests. Large, and runs on the CPU."
+        case .cohereTranscribe:          return "14 languages, one at a time, and the most accurate model in VocaMac's tests. Large, and runs on the CPU."
         case .customEndpoint:            return "Your Whisper-compatible server — dictation goes to it over the network."
         }
     }
