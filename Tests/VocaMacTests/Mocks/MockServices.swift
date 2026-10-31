@@ -1182,9 +1182,15 @@ final class MockScreenContextReader: ScreenContextReading {
 
     /// The focused field when recording starts; nil reads as unreadable.
     var insertionContext: InsertionContext?
+    /// What later reads return (the check at delivery); nil repeats
+    /// `insertionContext`.
+    var laterInsertionContext: InsertionContext?
+    private(set) var insertionContextReads = 0
 
     func captureInsertionContext() async -> InsertionContext? {
-        insertionContext
+        insertionContextReads += 1
+        if insertionContextReads > 1, let laterInsertionContext { return laterInsertionContext }
+        return insertionContext
     }
 }
 

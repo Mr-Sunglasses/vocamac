@@ -209,7 +209,8 @@ enum AccessibilityTextReader {
         let field = InsertionContext.field(forRole: copyString(element, kAXRoleAttribute) ?? "")
         let range = selectedTextRange(of: element)
         return InsertionContext(
-            field: field, value: value(of: element), location: range?.location, length: range?.length ?? 0
+            field: field, value: value(of: element), location: range?.location, length: range?.length ?? 0,
+            frame: frame(of: element)
         )
     }
 

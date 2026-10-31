@@ -143,4 +143,54 @@ final class InsertionFitTests: XCTestCase {
         XCTAssertEqual(context.before?.count, InsertionContext.contextLength)
         XCTAssertEqual(context.after, "")
     }
+
+    // MARK: - Protected text
+
+    func testASnippetKeepsItsCapitalAfterASentenceInProgress() {
+        let context = InsertionContext(field: .multiLine, before: "I think", after: "")
+        let fit = InsertionFit.fit("That works.", into: context, capitalizes: true, mirrorsRegister: false,
+                                   protecting: ["That works."])
+        XCTAssertEqual(fit.text, "That works.")
+        XCTAssertTrue(fit.leadingSpace)
+        // Without the protection the everyday word joins the sentence.
+        XCTAssertEqual(InsertionFit.fit("That works.", into: context, capitalizes: true, mirrorsRegister: false).text,
+                       "that works.")
+    }
+
+    func testProtectedTextSurvivesARegisterAndAOneLineField() {
+        let chat = InsertionContext(field: .multiLine, before: "sure thing\nsee you there\nok", after: "")
+        let mirrored = InsertionFit.fit("Thanks. Best, Kanishk.", into: chat, capitalizes: true, mirrorsRegister: true,
+                                        protecting: ["Best, Kanishk."])
+        XCTAssertTrue(mirrored.text.hasSuffix("Best, Kanishk."), mirrored.text)
+
+        let line = InsertionContext(field: .singleLine, before: "", after: "")
+        XCTAssertEqual(InsertionFit.fit("See VocaMac.", into: line, capitalizes: true, mirrorsRegister: false,
+                                        protecting: ["VocaMac."]).text, "See VocaMac.")
+    }
+
+    // MARK: - The field at delivery
+
+    func testDeliveryUsesTheFreshReadOfTheSameField() {
+        let frame = CGRect(x: 10, y: 20, width: 300, height: 40)
+        let start = InsertionContext(field: .multiLine, before: "I think", after: "", frame: frame)
+        let now = InsertionContext(field: .multiLine, before: "I think so,", after: "", frame: frame)
+        XCTAssertEqual(InsertionFit.deliveryContext(start: start, now: now), now)
+    }
+
+    func testAnotherFieldAtDeliveryFitsNothing() {
+        let start = InsertionContext(field: .multiLine, before: "I think", after: "", frame: CGRect(x: 0, y: 0, width: 300, height: 40))
+        let moved = InsertionContext(field: .multiLine, before: "", after: "", frame: CGRect(x: 0, y: 200, width: 300, height: 40))
+        XCTAssertNil(InsertionFit.deliveryContext(start: start, now: moved))
+        let otherKind = InsertionContext(field: .singleLine, before: "", after: "", frame: start.frame)
+        XCTAssertNil(InsertionFit.deliveryContext(start: start, now: otherKind))
+        XCTAssertNil(InsertionFit.deliveryContext(start: start, now: nil), "An unreadable field fits nothing")
+        XCTAssertNil(InsertionFit.deliveryContext(start: nil, now: start))
+    }
+
+    func testWithoutFramesOnlyUnchangedTextCountsAsTheSameField() {
+        let start = InsertionContext(field: .multiLine, before: "I think", after: "")
+        XCTAssertEqual(InsertionFit.deliveryContext(start: start, now: start), start)
+        let other = InsertionContext(field: .multiLine, before: "", after: "")
+        XCTAssertNil(InsertionFit.deliveryContext(start: start, now: other))
+    }
 }

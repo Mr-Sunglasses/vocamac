@@ -196,6 +196,22 @@ final class AppStateWritingStyleTests: XCTestCase {
         XCTAssertEqual(appState.lastOutput?.text, "that we should ship", "History and Paste Last never get the space")
     }
 
+    /// The user moved to an empty field while speaking: the first reading
+    /// describes another field, so nothing is fitted to it.
+    func testAFieldChangedWhileSpeakingIsNotFitted() async {
+        let reader = MockScreenContextReader()
+        reader.insertionContext = InsertionContext(field: .multiLine, before: "I think", after: "")
+        reader.laterInsertionContext = InsertionContext(field: .multiLine, before: "", after: "")
+        let (appState, mocks) = AppState.makeTestState(screenContextReader: reader)
+        appState.automaticWritingStyles = false
+        appState.appendTrailingSpace = false
+        mocks.frontmostAppResolver.frontmostApp = RunningAppSnapshot(displayName: "Pages", bundleIdentifier: "com.apple.iWork.Pages")
+
+        await dictateFromStart("that we should ship", on: appState, mocks: mocks)
+
+        XCTAssertEqual(mocks.textInjector.lastInjectedText, "That we should ship")
+    }
+
     func testCodeIsNeverJoinedLikeProse() async {
         let reader = MockScreenContextReader()
         reader.insertionContext = InsertionContext(field: .multiLine, before: "let value", after: "")

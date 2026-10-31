@@ -3146,13 +3146,22 @@ final class AppState: ObservableObject {
                 // Fit the text to the field: one line, the sentence already
                 // there, the draft's register. Prose only; a terminal's
                 // buffer or an editor's code is not a sentence to join.
+                // The field is read again here: the user may have moved to
+                // another one while speaking, and then nothing is fitted.
                 var leadingSpace = false
                 if injectResult, writingStyleEnabled, profile.cleanup != .raw, profile.format.supportsWording,
-                   !resolved.codingAgent, let context = await insertionContextRead.value {
+                   !resolved.codingAgent, let start = await insertionContextRead.value,
+                   let reader = screenContextReader,
+                   let context = InsertionFit.deliveryContext(start: start, now: await Self.value(
+                       of: Task { @MainActor in await reader.captureInsertionContext() },
+                       within: Self.screenContextTimeout, otherwise: nil
+                   )) {
                     let fit = InsertionFit.fit(
                         output.text, into: context,
                         capitalizes: Self.capitalizes(profile.rules, autoCapitalize: autoCapitalize),
-                        mirrorsRegister: profile.format == .chat || profile.format == .slack
+                        mirrorsRegister: profile.format == .chat || profile.format == .slack,
+                        protecting: snippets.map(\.expansion) + vocabularyTerms
+                            + wordReplacements.map(\.replacement) + contextTerms
                     )
                     if fit.text != output.text {
                         output = DictationOutputResult(original: output.original, text: fit.text, summary: output.summary)

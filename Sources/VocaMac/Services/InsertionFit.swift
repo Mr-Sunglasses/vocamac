@@ -5,6 +5,7 @@
 // field, and the text already there. Pure, so every rule is testable
 // without Accessibility.
 
+import CoreGraphics
 import Foundation
 
 /// What the focused field said about itself just before the text arrives.
@@ -25,6 +26,8 @@ struct InsertionContext: Equatable, Sendable {
     var before: String?
     /// The first few characters after the caret or selection.
     var after: String?
+    /// Where the field is on screen, which tells one field from another.
+    var frame: CGRect?
 
     static let contextLength = 400
     static let afterLength = 8
@@ -42,8 +45,9 @@ struct InsertionContext: Equatable, Sendable {
 
     /// The context for a field holding `value` with the caret or selection
     /// at `location` (UTF-16) running `length` units.
-    init(field: Field, value: String?, location: Int?, length: Int = 0) {
+    init(field: Field, value: String?, location: Int?, length: Int = 0, frame: CGRect? = nil) {
         self.field = field
+        self.frame = frame
         guard let value, let location else {
             before = nil
             after = nil
@@ -63,10 +67,11 @@ struct InsertionContext: Equatable, Sendable {
         after = text.substring(with: NSRange(location: end, length: trail))
     }
 
-    init(field: Field, before: String?, after: String?) {
+    init(field: Field, before: String?, after: String?, frame: CGRect? = nil) {
         self.field = field
         self.before = before
         self.after = after
+        self.frame = frame
     }
 }
 
@@ -87,22 +92,29 @@ enum InsertionFit {
     ///     capital is only ever taken back where the style put it.
     ///   - mirrorsRegister: Chat and Slack: follow the draft's own habit of
     ///     lowercase sentence starts and no full stops.
+    ///   - protecting: Text that must arrive exactly as saved: snippet
+    ///     expansions and Dictionary terms. Masked while fitting, so a
+    ///     snippet "That works." after "I think" keeps its capital and stop.
     static func fit(
         _ text: String,
         into context: InsertionContext,
         capitalizes: Bool,
-        mirrorsRegister: Bool
+        mirrorsRegister: Bool,
+        protecting protected: [String] = []
     ) -> Result {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return Result(text: text, leadingSpace: false)
         }
-        var result = text
+        let masking = mask(text, protecting: protected)
+        var result = masking.text
         if context.field == .singleLine {
             result = fittingOneLine(result)
         }
         var leadingSpace = false
         if let before = context.before {
-            let join = joining(after: before, text: result)
+            // Spacing reads the text as it will look; case changes run on
+            // the masked text, where a protected span is never a word.
+            let join = joining(after: before, text: unmask(result, spans: masking.spans))
             leadingSpace = join.space
             if capitalizes, join.continuesSentence {
                 result = lowercasingFirstWord(result)
@@ -114,7 +126,53 @@ enum InsertionFit {
         if let after = context.after {
             result = spacing(result, before: after)
         }
-        return Result(text: result, leadingSpace: leadingSpace)
+        return Result(text: unmask(result, spans: masking.spans), leadingSpace: leadingSpace)
+    }
+
+    /// The context to fit to at delivery: the field read again just before
+    /// the text goes in, when it is the field read as recording started.
+    /// The user may have moved to another field while speaking; then the
+    /// first reading describes the wrong text, and nothing is fitted. Same
+    /// field means the same kind at the same place on screen or, when the
+    /// app reports no frame, the same text around the caret.
+    static func deliveryContext(start: InsertionContext?, now: InsertionContext?) -> InsertionContext? {
+        guard let start, let now, start.field == now.field else { return nil }
+        if let startFrame = start.frame, let nowFrame = now.frame {
+            return startFrame == nowFrame ? now : nil
+        }
+        guard start.frame == nil, now.frame == nil,
+              start.before == now.before, start.after == now.after else { return nil }
+        return now
+    }
+
+    // MARK: - Protected text
+
+    /// `text` with each protected span replaced by one private-use
+    /// character, longest first, and the spans in placeholder order.
+    static func mask(_ text: String, protecting protected: [String]) -> (text: String, spans: [String]) {
+        var result = text
+        var spans: [String] = []
+        let candidates = Set(protected.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
+            .sorted { $0.count != $1.count ? $0.count > $1.count : $0 < $1 }
+        for span in candidates where result.contains(span) {
+            guard let placeholder = TextPlaceholder.character(at: spans.count) else { break }
+            result = result.replacingOccurrences(of: span, with: String(placeholder))
+            spans.append(span)
+        }
+        return (result, spans)
+    }
+
+    static func unmask(_ text: String, spans: [String]) -> String {
+        guard !spans.isEmpty else { return text }
+        var result = ""
+        for character in text {
+            if let index = TextPlaceholder.index(of: character, base: TextPlaceholder.snippetBase), index < spans.count {
+                result += spans[index]
+            } else {
+                result.append(character)
+            }
+        }
+        return result
     }
 
     // MARK: - One-line fields
