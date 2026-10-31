@@ -3058,7 +3058,9 @@ final class AppState: ObservableObject {
                     cleanupLevel: transcriptCleanupLevel,
                     language: result.detectedLanguage, autoCapitalize: autoCapitalize,
                     trailingSpace: appendTrailingSpace, preview: !injectResult,
-                    dictionary: dictionaryContext(contextTerms: contextTerms, language: result.detectedLanguage),
+                    dictionary: dictionaryContext(
+                        contextTerms: contextTerms, language: result.detectedLanguage, segments: result.segments
+                    ),
                     numbersAsDigits: numbersAsDigits, numberSymbols: numberSymbols, spokenEmoji: spokenEmoji,
                     skipWhenClean: skipCleanDictations, laysOutParagraphs: laysOutParagraphs,
                     // Cleaning piece by piece only pays off with answers from
@@ -4940,7 +4942,9 @@ extension AppState {
                     cleanupLevel: transcriptCleanupLevel,
                     language: result.detectedLanguage, autoCapitalize: autoCapitalize,
                     trailingSpace: appendTrailingSpace,
-                    dictionary: dictionaryContext(contextTerms: [], language: result.detectedLanguage),
+                    dictionary: dictionaryContext(
+                        contextTerms: [], language: result.detectedLanguage, segments: result.segments
+                    ),
                     numbersAsDigits: numbersAsDigits, numberSymbols: numberSymbols, spokenEmoji: spokenEmoji,
                     skipWhenClean: skipCleanDictations, laysOutParagraphs: laysOutParagraphs
                 )
@@ -6116,7 +6120,12 @@ extension AppState {
         }
     }
 
-    func dictionaryContext(contextTerms: [String], language: String?) -> DictionaryContext {
+    /// - Parameter segments: The decode's timings; the words the engine was
+    ///   unsure of let the Dictionary respell real words that sound like a
+    ///   term (`RecognitionConfidence`).
+    func dictionaryContext(
+        contextTerms: [String], language: String?, segments: [TimedSegment] = []
+    ) -> DictionaryContext {
         let isKnownWord = self.isKnownWord
         // "auto" from Parakeet or Apple Speech isn't a language; passed on, it
         // made every word count as known and switched off name fixes.
@@ -6125,7 +6134,8 @@ extension AppState {
             vocabulary: vocabularyTerms,
             replacements: wordReplacements,
             contextTerms: contextTerms,
-            isKnownWord: { isKnownWord($0, language) }
+            isKnownWord: { isKnownWord($0, language) },
+            lowConfidenceWords: RecognitionConfidence.lowConfidenceWords(in: segments)
         )
     }
 

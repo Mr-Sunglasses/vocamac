@@ -103,6 +103,11 @@ struct DictionaryContext {
     var contextTerms: [String]
     /// Whether a word is ordinary vocabulary in the dictation's language.
     var isKnownWord: (String) -> Bool
+    /// Words (normalized, see `DictionaryCorrector.normalized`) the engine
+    /// decoded with low confidence, or nil when it reports no confidence.
+    /// Only real words that may have been misheard need it; see
+    /// `RecognitionConfidence`.
+    var lowConfidenceWords: Set<String>?
 
     var isEmpty: Bool {
         vocabulary.isEmpty && replacements.isEmpty && contextTerms.isEmpty
