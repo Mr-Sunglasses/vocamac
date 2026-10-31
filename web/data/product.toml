@@ -205,13 +205,6 @@ engine = "sherpa-onnx"
 size = "1 GB"
 note = "CPU-only. 30 languages, including Hindi, Arabic, and Thai."
 
-[[releaseModels]]
-id = "cohere-transcribe-14-lang"
-name = "Cohere Transcribe"
-engine = "sherpa-onnx"
-size = "2.9 GB"
-note = "CPU-only. 14 languages, one at a time; the most accurate model in VocaMac's tests. Needs about 4.5 GB of memory."
-
 [links]
 repo = "https://github.com/VocaHQ/vocamac"
 issues = "https://github.com/VocaHQ/vocamac/issues"
